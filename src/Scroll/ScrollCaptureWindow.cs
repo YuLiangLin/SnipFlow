@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media.Effects;
 using SnipFlow.Capture;
+using SnipFlow.Services;
 using DrawingRectangle = System.Drawing.Rectangle;
 
 namespace SnipFlow.Scroll;
@@ -34,12 +35,12 @@ public sealed class ScrollCaptureWindow : Window
     public ScrollCaptureWindow(DrawingRectangle targetPhysicalBounds)
     {
         if (targetPhysicalBounds.Width < 32 || targetPhysicalBounds.Height < 48)
-            throw new ArgumentException("請選取至少 32 × 48 像素的捲動內容範圍。", nameof(targetPhysicalBounds));
+            throw new ArgumentException(I18n.T("請選取至少 32 × 48 像素的捲動內容範圍。"), nameof(targetPhysicalBounds));
         if ((long)targetPhysicalBounds.Width * targetPhysicalBounds.Height > ImageStitcher.MaxOutputPixels)
-            throw new ArgumentException("選取範圍太大，請縮小範圍後重試。", nameof(targetPhysicalBounds));
+            throw new ArgumentException(I18n.T("選取範圍太大，請縮小範圍後重試。"), nameof(targetPhysicalBounds));
 
         _targetBounds = targetPhysicalBounds;
-        Title = "SnipFlow · 手動長截圖";
+        Title = I18n.T("SnipFlow · 手動長截圖");
         Width = 510;
         SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.None;
@@ -70,13 +71,13 @@ public sealed class ScrollCaptureWindow : Window
         var header = new Grid { Margin = new Thickness(0, 0, 0, 10) };
         header.ColumnDefinitions.Add(new ColumnDefinition());
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var title = new TextBlock { Text = "手動長截圖", FontWeight = FontWeights.SemiBold, FontSize = 22 };
+        var title = new TextBlock { Text = I18n.T("手動長截圖"), FontWeight = FontWeights.SemiBold, FontSize = 22 };
         header.Children.Add(title);
         header.MouseLeftButtonDown += (_, args) => { if (args.ButtonState == MouseButtonState.Pressed) DragMove(); };
         layout.Children.Add(header);
         layout.Children.Add(new TextBlock
         {
-            Text = "回到目標頁面向下捲動約半頁，再按「加入畫面」。保留重疊內容，並避開固定標頭、頁尾及動畫。",
+            Text = I18n.T("回到目標頁面向下捲動約半頁，再按「加入畫面」。保留重疊內容，並避開固定標頭、頁尾及動畫。"),
             Foreground = Brush("#B6C2D1"), TextWrapping = TextWrapping.Wrap,
             LineHeight = 20, Margin = new Thickness(0, 0, 0, 14)
         });
@@ -91,13 +92,13 @@ public sealed class ScrollCaptureWindow : Window
         });
         _dimensions = new TextBlock
         {
-            Text = $"範圍 {_targetBounds.Width:N0} × {_targetBounds.Height:N0} px",
+            Text = I18n.F("範圍 {0:N0} × {1:N0} px", _targetBounds.Width, _targetBounds.Height),
             Foreground = Brush("#B6C2D1"), FontSize = 11, Margin = new Thickness(0, 8, 0, 8)
         };
         layout.Children.Add(_dimensions);
         _status = new TextBlock
         {
-            Text = "正在取得第一個畫面…", Foreground = Brush("#76E9CF"),
+            Text = I18n.T("正在取得第一個畫面…"), Foreground = Brush("#76E9CF"),
             TextWrapping = TextWrapping.Wrap, LineHeight = 19, Margin = new Thickness(0, 0, 0, 12)
         };
         layout.Children.Add(_status);
@@ -105,7 +106,7 @@ public sealed class ScrollCaptureWindow : Window
         _manualPanel = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, 14) };
         _manualPanel.Children.Add(new TextBlock
         {
-            Text = "檢查上方接縫預覽，調整下一張要略過的頂部高度：",
+            Text = I18n.T("檢查上方接縫預覽，調整下一張要略過的頂部高度："),
             Foreground = Brush("#EAC88D"), TextWrapping = TextWrapping.Wrap
         });
         _overlapLabel = new TextBlock { Margin = new Thickness(0, 7, 0, 0), Foreground = Brush("#B6C2D1") };
@@ -191,7 +192,7 @@ public sealed class ScrollCaptureWindow : Window
             {
                 if (TryAcceptFrame(frame, match.OverlapPixels))
                 {
-                    SetStatus($"已加入第 {_frames.Count} 張 · 自動對齊 {match.OverlapPixels:N0} px（信心 {match.Confidence:P0}）。");
+                    SetStatus(I18n.F("已加入第 {0} 張 · 自動對齊 {1:N0} px（信心 {2:P0}）。", _frames.Count, match.OverlapPixels, match.Confidence));
                     return;
                 }
             }
@@ -209,7 +210,7 @@ public sealed class ScrollCaptureWindow : Window
         catch (Exception exception)
         {
             if (!_closed)
-                SetStatus($"擷取失敗：{exception.Message}", warning: true);
+                SetStatus(I18n.F("擷取失敗：{0}", exception.Message), warning: true);
         }
         finally
         {
@@ -266,7 +267,7 @@ public sealed class ScrollCaptureWindow : Window
             return;
         _pendingFrame = null;
         _manualPanel.Visibility = Visibility.Collapsed;
-        SetStatus($"已加入第 {_frames.Count} 張 · 使用手動確認的接縫。");
+        SetStatus(I18n.F("已加入第 {0} 張 · 使用手動確認的接縫。", _frames.Count));
         UpdateButtons();
     }
 
@@ -296,7 +297,7 @@ public sealed class ScrollCaptureWindow : Window
         if (_pendingFrame is null || _frames.Count == 0)
             return;
         var overlap = Math.Clamp((int)_overlapSlider.Value, 0, _pendingFrame.PixelHeight - 1);
-        _overlapLabel.Text = $"重疊 {overlap:N0} px · 新增 {_pendingFrame.PixelHeight - overlap:N0} px";
+        _overlapLabel.Text = I18n.F("重疊 {0:N0} px · 新增 {1:N0} px", overlap, _pendingFrame.PixelHeight - overlap);
         _preview.Source = ImageStitcher.CreateJoinPreview(_frames[^1], _pendingFrame, overlap);
     }
 
@@ -321,7 +322,7 @@ public sealed class ScrollCaptureWindow : Window
         catch (Exception exception)
         {
             if (!_closed)
-                SetStatus($"合成失敗：{exception.Message}", warning: true);
+                SetStatus(I18n.F("合成失敗：{0}", exception.Message), warning: true);
         }
         finally
         {
@@ -335,7 +336,7 @@ public sealed class ScrollCaptureWindow : Window
         if (_frames.Count == 0)
             return;
         var pixels = ImageStitcher.CalculateOutputPixels(_frames, _overlaps);
-        _dimensions.Text = $"{_frames.Count} 張 · {_frames[0].PixelWidth:N0} × {pixels / _frames[0].PixelWidth:N0} px · 接縫預覽";
+        _dimensions.Text = I18n.F("{0} 張 · {1:N0} × {2:N0} px · 接縫預覽", _frames.Count, _frames[0].PixelWidth, pixels / _frames[0].PixelWidth);
     }
 
     private void SetBusy(bool busy)
@@ -354,7 +355,7 @@ public sealed class ScrollCaptureWindow : Window
 
     private void SetStatus(string text, bool warning = false)
     {
-        _status.Text = text;
+        _status.Text = I18n.T(text);
         _status.Foreground = Brush(warning ? "#EAC88D" : "#76E9CF");
     }
 
@@ -374,7 +375,7 @@ public sealed class ScrollCaptureWindow : Window
     {
         var button = new Button
         {
-            Content = new TextBlock { Text = label, Foreground = Brush(accent ? "#092820" : "#F4F7FC") }, Padding = new Thickness(13, 9, 13, 9),
+            Content = new TextBlock { Text = I18n.T(label), Foreground = Brush(accent ? "#092820" : "#F4F7FC") }, Padding = new Thickness(13, 9, 13, 9),
             Margin = new Thickness(0, 0, 7, 0), FontSize = 12,
             Background = Brush(accent ? "#6FE7C8" : "#29344A"),
             Foreground = Brush(accent ? "#092820" : "#DDE8F7"),

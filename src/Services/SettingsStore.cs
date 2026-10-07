@@ -3,6 +3,7 @@ namespace SnipFlow.Services;
 
 public sealed class UserSettings
 {
+    public string Language { get; set; } = "zh-TW";
     public bool AutoCheckUpdates { get; set; } = true;
     public bool AutoDownloadUpdates { get; set; } = true;
     public bool CopyAfterCapture { get; set; } = true;

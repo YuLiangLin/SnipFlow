@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using SnipFlow.Services;
 using DrawingRectangle = System.Drawing.Rectangle;
 using WpfPoint = System.Windows.Point;
 
@@ -188,14 +189,14 @@ internal sealed class SelectionOverlayWindow : Window
         var panel = new Rect(Math.Max(12, (ActualWidth - width) / 2), Math.Min(38, ActualHeight / 8),
             Math.Min(width, Math.Max(1, ActualWidth - 24)), height);
         drawing.DrawRoundedRectangle(PanelBrush, PanelPen, panel, 13, 13);
-        drawing.DrawText(Text("拖曳框選畫面", 16, Brushes.White), new WpfPoint(panel.Left + 20, panel.Top + 13));
-        drawing.DrawText(Text("Esc 取消   ·   右鍵取消", 12, MutedBrush), new WpfPoint(panel.Left + 20, panel.Top + 39));
+        drawing.DrawText(Text(I18n.T("拖曳框選畫面"), 16, Brushes.White), new WpfPoint(panel.Left + 20, panel.Top + 13));
+        drawing.DrawText(Text(I18n.T("Esc 取消   ·   右鍵取消"), 12, MutedBrush), new WpfPoint(panel.Left + 20, panel.Top + 39));
     }
 
     private void DrawDimensions(DrawingContext drawing)
     {
         var selection = _session.Selection;
-        var label = selection is DrawingRectangle bounds ? $"{bounds.Width:N0} × {bounds.Height:N0} px" : "拖曳選取範圍";
+        var label = selection is DrawingRectangle bounds ? I18n.F("{0:N0} × {1:N0} px", bounds.Width, bounds.Height) : I18n.T("拖曳選取範圍");
         var text = Text(label, 13, Brushes.White);
         var width = Math.Max(146, text.Width + 28);
         const double height = 36;

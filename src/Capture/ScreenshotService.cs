@@ -1,4 +1,5 @@
 using System.Windows.Interop;
+using SnipFlow.Services;
 using GdiBitmap = System.Drawing.Bitmap;
 using GdiGraphics = System.Drawing.Graphics;
 using GdiRectangle = System.Drawing.Rectangle;
@@ -22,7 +23,7 @@ public static class ScreenshotService
         try
         {
             var dispatcher = Application.Current?.Dispatcher
-                ?? throw new InvalidOperationException("螢幕框選需要在 WPF 應用程式中執行。");
+                ?? throw new InvalidOperationException(I18n.T("螢幕框選需要在 WPF 應用程式中執行。"));
 
             if (dispatcher.CheckAccess())
                 return await CaptureRegionCoreAsync();
@@ -40,7 +41,7 @@ public static class ScreenshotService
     public static BitmapSource CaptureRectangle(GdiRectangle bounds)
     {
         if (bounds.Width <= 0 || bounds.Height <= 0)
-            throw new ArgumentOutOfRangeException(nameof(bounds), "擷取範圍必須有正數的寬度與高度。");
+            throw new ArgumentOutOfRangeException(nameof(bounds), I18n.T("擷取範圍必須有正數的寬度與高度。"));
 
         using var bitmap = new GdiBitmap(bounds.Width, bounds.Height, GdiPixelFormat.Format32bppRgb);
         using (var graphics = GdiGraphics.FromImage(bitmap))

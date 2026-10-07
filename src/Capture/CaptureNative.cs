@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using SnipFlow.Services;
 using DrawingPoint = System.Drawing.Point;
 using DrawingRectangle = System.Drawing.Rectangle;
 
@@ -41,7 +42,7 @@ internal static class CaptureNative
         if (!succeeded)
             throw new Win32Exception(Marshal.GetLastWin32Error());
         if (monitors.Count == 0)
-            throw new InvalidOperationException("目前找不到可擷取的螢幕。");
+            throw new InvalidOperationException(I18n.T("目前找不到可擷取的螢幕。"));
 
         return monitors;
     }
@@ -50,7 +51,7 @@ internal static class CaptureNative
     {
         var desktop = GetDC(IntPtr.Zero);
         if (desktop == IntPtr.Zero)
-            throw new Win32Exception("無法取得桌面的繪圖內容。");
+            throw new Win32Exception(I18n.T("無法取得桌面的繪圖內容。"));
         try
         {
             const uint sourceCopyWithLayeredWindows = 0x40CC0020;

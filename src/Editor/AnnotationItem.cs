@@ -11,11 +11,13 @@ internal sealed class AnnotationItem
     internal AnnotationTool Tool { get; init; }
     internal WpfPoint Start { get; set; }
     internal WpfPoint End { get; set; }
-    internal WpfColor Color { get; init; }
-    internal double Width { get; init; }
+    internal WpfColor Color { get; set; }
+    internal double Width { get; set; }
     internal List<WpfPoint> Points { get; init; } = new();
     internal string Text { get; set; } = string.Empty;
     internal double FontSize { get; set; } = 26;
+    internal double TextWidth { get; set; }
+    internal double TextBoxHeight { get; set; }
     internal BitmapSource? Mosaic { get; set; }
 
     internal AnnotationItem Clone() => new()
@@ -28,6 +30,8 @@ internal sealed class AnnotationItem
         Points = new List<WpfPoint>(Points),
         Text = Text,
         FontSize = FontSize,
+        TextWidth = TextWidth,
+        TextBoxHeight = TextBoxHeight,
         // BitmapSource instances are frozen before they are stored.
         Mosaic = Mosaic
     };
@@ -39,7 +43,7 @@ internal sealed class AnnotationItem
             if (Tool == AnnotationTool.Text)
             {
                 FormattedText text = FormatText();
-                return new WpfRect(Start, new Size(Math.Max(1, text.WidthIncludingTrailingWhitespace), Math.Max(1, text.Height)));
+                return new WpfRect(Start, new Size(TextWidth > 0 ? TextWidth : Math.Max(1, text.WidthIncludingTrailingWhitespace), Math.Max(TextBoxHeight, Math.Max(1, text.Height))));
             }
 
             if (Points.Count != 0)
@@ -68,6 +72,34 @@ internal sealed class AnnotationItem
         End += offset;
         for (int i = 0; i < Points.Count; i++)
             Points[i] += offset;
+    }
+
+    internal void CopyFrom(AnnotationItem source)
+    {
+        if (ReferenceEquals(source, this))
+            return;
+        Start = source.Start;
+        End = source.End;
+        Color = source.Color;
+        Width = source.Width;
+        Text = source.Text;
+        FontSize = source.FontSize;
+        TextWidth = source.TextWidth;
+        TextBoxHeight = source.TextBoxHeight;
+        Mosaic = source.Mosaic;
+        Points.Clear();
+        Points.AddRange(source.Points);
+    }
+
+    internal bool ContentEquals(AnnotationItem other)
+    {
+        static bool Near(double first, double second) => Math.Abs(first - second) < 0.00001;
+        static bool SamePoint(WpfPoint first, WpfPoint second) => (first - second).LengthSquared < 0.0000000001;
+        return Tool == other.Tool && SamePoint(Start, other.Start) && SamePoint(End, other.End)
+            && Color == other.Color && Near(Width, other.Width) && Near(FontSize, other.FontSize)
+            && Near(TextWidth, other.TextWidth) && Near(TextBoxHeight, other.TextBoxHeight)
+            && Text.Replace("\r\n", "\n", StringComparison.Ordinal) == other.Text.Replace("\r\n", "\n", StringComparison.Ordinal)
+            && Points.Count == other.Points.Count && Points.Zip(other.Points).All(pair => SamePoint(pair.First, pair.Second));
     }
 
     internal void Draw(DrawingContext context)
@@ -173,14 +205,24 @@ internal sealed class AnnotationItem
         return false;
     }
 
-    private FormattedText FormatText() => new(
-        Text,
-        CultureInfo.CurrentUICulture,
-        FlowDirection.LeftToRight,
-        new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal),
-        FontSize,
-        new SolidColorBrush(Color),
-        1.0);
+    internal FormattedText FormatText()
+    {
+        var formatted = new FormattedText(
+            Text,
+            CultureInfo.CurrentUICulture,
+            FlowDirection.LeftToRight,
+            new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal),
+            FontSize,
+            new SolidColorBrush(Color),
+            1.0)
+        {
+            Trimming = TextTrimming.None
+        };
+        if (TextWidth > 0)
+            formatted.MaxTextWidth = Math.Max(1, TextWidth);
+        // Do not set MaxTextHeight: narrowing a box must wrap and grow, never trim text.
+        return formatted;
+    }
 
     private void DrawArrow(DrawingContext context, Pen pen, Brush brush)
     {

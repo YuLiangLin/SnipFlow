@@ -1,3 +1,5 @@
+using SnipFlow.Services;
+
 namespace SnipFlow.Scroll;
 
 public sealed record OverlapMatch(
@@ -20,15 +22,15 @@ public static class ImageStitcher
         ArgumentNullException.ThrowIfNull(previous);
         ArgumentNullException.ThrowIfNull(current);
         if (previous.PixelWidth != current.PixelWidth || previous.PixelHeight != current.PixelHeight)
-            throw new ArgumentException("拼接畫面必須來自同一個截圖範圍，且大小一致。");
+            throw new ArgumentException(I18n.T("拼接畫面必須來自同一個截圖範圍，且大小一致。"));
         if (previous.PixelHeight < 48 || previous.PixelWidth < 32)
-            return new OverlapMatch(0, 0, 1, false, false, "範圍太小，請手動指定重疊位置。");
+            return new OverlapMatch(0, 0, 1, false, false, I18n.T("範圍太小，請手動指定重疊位置。"));
 
         var first = SampleImage.Read(previous);
         var second = SampleImage.Read(current);
         var unchanged = Compare(first, second, 0, dense: true);
         if (unchanged.Error <= 0.0015)
-            return new OverlapMatch(previous.PixelHeight, 1, unchanged.Error, true, true, "畫面尚未捲動，或已到達頁面底部。");
+            return new OverlapMatch(previous.PixelHeight, 1, unchanged.Error, true, true, I18n.T("畫面尚未捲動，或已到達頁面底部。"));
 
         var height = previous.PixelHeight;
         var minimumOverlap = Math.Max(24, height / 8);
@@ -80,7 +82,7 @@ public static class ImageStitcher
 
         return new OverlapMatch(
             height - bestAdvance, confidence, bestScore.Error, false, reliable,
-            reliable ? "已找到穩定的垂直重疊。" : "無法可靠對齊，請調整重疊高度並確認接縫。");
+            I18n.T(reliable ? "已找到穩定的垂直重疊。" : "無法可靠對齊，請調整重疊高度並確認接縫。"));
     }
 
     public static BitmapSource Stitch(
@@ -90,7 +92,7 @@ public static class ImageStitcher
     {
         var outputPixels = CalculateOutputPixels(frames, overlaps);
         if (outputPixels > maxPixels)
-            throw new InvalidOperationException($"長截圖超過 {maxPixels / 1_000_000:N0} 百萬像素上限，請分段截取。");
+            throw new InvalidOperationException(I18n.F("長截圖超過 {0:N0} 百萬像素上限，請分段截取。", maxPixels / 1_000_000));
 
         var width = frames[0].PixelWidth;
         var height = checked((int)(outputPixels / width));
@@ -116,9 +118,9 @@ public static class ImageStitcher
         ArgumentNullException.ThrowIfNull(frames);
         ArgumentNullException.ThrowIfNull(overlaps);
         if (frames.Count == 0)
-            throw new ArgumentException("請先加入至少一個畫面。", nameof(frames));
+            throw new ArgumentException(I18n.T("請先加入至少一個畫面。"), nameof(frames));
         if (overlaps.Count != frames.Count - 1)
-            throw new ArgumentException("每兩個連續畫面都必須指定一個重疊高度。", nameof(overlaps));
+            throw new ArgumentException(I18n.T("每兩個連續畫面都必須指定一個重疊高度。"), nameof(overlaps));
 
         var width = frames[0].PixelWidth;
         long totalHeight = 0;
@@ -126,11 +128,11 @@ public static class ImageStitcher
         {
             var frame = frames[index];
             if (frame.PixelWidth != width)
-                throw new ArgumentException("每個畫面的寬度必須一致。", nameof(frames));
+                throw new ArgumentException(I18n.T("每個畫面的寬度必須一致。"), nameof(frames));
             var overlap = index == 0 ? 0 : overlaps[index - 1];
             if (overlap < 0 || overlap >= frame.PixelHeight
                 || (index > 0 && overlap > frames[index - 1].PixelHeight))
-                throw new ArgumentOutOfRangeException(nameof(overlaps), "重疊高度必須小於畫面高度。");
+                throw new ArgumentOutOfRangeException(nameof(overlaps), I18n.T("重疊高度必須小於畫面高度。"));
             totalHeight = checked(totalHeight + frame.PixelHeight - overlap);
         }
         return checked(width * totalHeight);

@@ -26,7 +26,7 @@ public static class OcrService
         var engine = CreateEngine(languageTag);
         var maximumDimension = checked((int)OcrEngine.MaxImageDimension);
         if (maximumDimension <= 0)
-            throw new InvalidOperationException("Windows OCR 無法取得可處理的影像大小。");
+            throw new InvalidOperationException(I18n.T("Windows OCR 無法取得可處理的影像大小。"));
 
         BitmapSource source = image;
         var scale = Math.Min(1d, (double)maximumDimension / Math.Max(image.PixelWidth, image.PixelHeight));
@@ -67,7 +67,7 @@ public static class OcrService
             var requestedLanguage = new Language(languageTag);
             return OcrEngine.TryCreateFromLanguage(requestedLanguage)
                 ?? throw new InvalidOperationException(
-                    $"Windows 尚未安裝 {languageTag} 的 OCR 語言套件。請到 Windows「設定 → 時間與語言 → 語言與地區」新增該語言並安裝光學字元辨識 (OCR) 功能，再重新開啟 SnipFlow。");
+                    I18n.F("Windows 尚未安裝 {0} 的 OCR 語言套件。請到 Windows「設定 → 時間與語言 → 語言與地區」新增該語言並安裝光學字元辨識 (OCR) 功能，再重新開啟 SnipFlow。", languageTag));
         }
 
         var engine = OcrEngine.TryCreateFromUserProfileLanguages();
@@ -85,6 +85,6 @@ public static class OcrService
             return fallbackEngine;
 
         throw new InvalidOperationException(
-            "Windows 尚未安裝可用的 OCR 語言套件。請到「設定 → 時間與語言 → 語言與地區」新增繁體中文或英文，安裝光學字元辨識 (OCR) 功能後再試一次。文字辨識使用本機 Windows OCR，不會上傳截圖。");
+            I18n.T("Windows 尚未安裝可用的 OCR 語言套件。請到「設定 → 時間與語言 → 語言與地區」新增繁體中文或英文，安裝光學字元辨識 (OCR) 功能後再試一次。文字辨識使用本機 Windows OCR，不會上傳截圖。"));
     }
 }
