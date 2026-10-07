@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <StartupObject>SnipFlow.App</StartupObject>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/SnipFlow.ico</ApplicationIcon>
+    <Version>0.2.0</Version>
+    <AssemblyName>SnipFlow</AssemblyName>
+    <Product>SnipFlow</Product>
+    <Description>SnipFlow 快剪 · 截圖與標註</Description>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- WPF owns the UI and DPI manifest. WinForms is used only for NotifyIcon. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Velopack" Version="1.2.161" />
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Include="App.xaml" />
+    <Content Include="update-source.json" CopyToOutputDirectory="PreserveNewest" />
+    <Resource Include="Assets/SnipFlow.png" />
+    <Content Include="Assets/SnipFlow.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+app/
+release/
+artifacts/
+*.user
+*.suo
+*.log
+.vs/
+verification/
