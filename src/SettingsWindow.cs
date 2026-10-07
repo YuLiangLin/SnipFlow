@@ -20,7 +20,7 @@ public sealed class SettingsWindow : Window
     readonly TextBox captureFolder = new() { IsReadOnly = true, MinHeight = 34, VerticalContentAlignment = VerticalAlignment.Center };
     readonly HotkeyInputBox shortcut = new(SettingsStore.Current.Hotkey);
     readonly TextBlock hotkeyStatus = new(), updateStatus = new(), updateDetail = new(), currentVersion = new(), latestVersion = new(), feedback = new();
-    readonly Button check = new(), download = new(), restart = new(), installer = new(), releaseNotes = new();
+    readonly Button check = new(), download = new(), restart = new(), releaseNotes = new();
     readonly ProgressBar updateProgress = new() { Minimum = 0, Maximum = 100, Height = 4, BorderThickness = new Thickness(0) };
     readonly Border updateCard = new();
     bool synchronizingLanguage, synchronizingOptions, updateActionRunning, hotkeyFailure, isClosed, feedbackIsError;
@@ -210,23 +210,12 @@ public sealed class SettingsWindow : Window
         updateProgress.Foreground = Resource<Brush>("Accent"); updateProgress.Background = Resource<Brush>("Line"); updateProgress.Margin = new Thickness(0, 12, 0, 0); statusBody.Children.Add(updateProgress);
         var actions = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) };
         ConfigureUpdateButton(check, "檢查更新", "QuietButton");
-        ConfigureUpdateButton(download, "下載更新", "Primary");
+        ConfigureUpdateButton(download, "立即更新", "Primary");
         ConfigureUpdateButton(restart, "重新啟動並更新", "Primary");
-        ConfigureUpdateButton(installer, "下載安裝程式", "Primary");
-        check.Click += async (_, _) => await PerformUpdateAsync(() => shell.Updates.CheckAsync(autoDownload.IsChecked == true));
-        download.Click += async (_, _) => await PerformUpdateAsync(shell.Updates.DownloadAsync);
-        restart.Click += (_, _) =>
-        {
-            if (!shell.PrepareToDiscard()) return;
-            try { shell.Updates.ApplyAndRestart(); }
-            catch (Exception ex) { SettingsStore.Log(ex); RefreshUpdates(); SetFeedback("更新未完成，請再試一次。"); }
-        };
-        installer.Click += (_, _) =>
-        {
-            try { shell.Updates.OpenInstallerPage(); }
-            catch (Exception ex) { SettingsStore.Log(ex); SetFeedback("無法開啟連結，請稍後重試。"); }
-        };
-        actions.Children.Add(check); actions.Children.Add(download); actions.Children.Add(restart); actions.Children.Add(installer); statusBody.Children.Add(actions);
+        check.Click += async (_, _) => await PerformUpdateAsync(() => shell.Updates.CheckAsync(false));
+        download.Click += async (_, _) => await PerformUpdateAsync(shell.UpdateNowAsync);
+        restart.Click += async (_, _) => await PerformUpdateAsync(shell.UpdateNowAsync);
+        actions.Children.Add(check); actions.Children.Add(download); actions.Children.Add(restart); statusBody.Children.Add(actions);
         updateCard.Background = Resource<Brush>("Panel"); updateCard.BorderBrush = Resource<Brush>("Line"); updateCard.BorderThickness = new Thickness(1); updateCard.CornerRadius = new CornerRadius(9); updateCard.Padding = new Thickness(16, 13, 16, 13); updateCard.Child = statusBody;
         pane.Children.Add(updateCard); AddDivider(pane);
         AddToggleRow(pane, "自動檢查更新", "啟動時與每 4 小時檢查。", autoCheck, SettingsStore.Current.AutoCheckUpdates);
@@ -552,7 +541,7 @@ public sealed class SettingsWindow : Window
         updateStatus.Foreground = updates.State == UpdateState.Error ? ErrorBrush : Resource<Brush>("Ink");
         updateCard.BorderBrush = updates.State == UpdateState.Error ? ErrorBrush : Resource<Brush>("Line");
         updateDetail.Text = updates.State == UpdateState.Error ? updates.ErrorMessage ?? ""
-            : !updates.IsInstalled ? I18n.T("此版本需透過安裝程式更新。")
+            : updates.State == UpdateState.Available && updates.CanUpdateNow ? I18n.T("按一下即可下載並重啟更新。")
             : updates.LastCheckedAt is { } checkedAt ? I18n.F("上次檢查：{0:t}", checkedAt.LocalDateTime) : "";
         if (updateDetail.Text == updateStatus.Text) updateDetail.Text = "";
         updateDetail.Visibility = updateDetail.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -561,11 +550,10 @@ public sealed class SettingsWindow : Window
         updateProgress.Value = updates.DownloadProgress ?? 0;
         check.Content = I18n.T(updates.State == UpdateState.Error ? "重試" : updates.State == UpdateState.Checking ? "檢查中…" : "檢查更新");
         check.IsEnabled = !busy;
-        download.Visibility = updates.CanDownload ? Visibility.Visible : Visibility.Collapsed; download.IsEnabled = !busy;
-        restart.Visibility = updates.ReadyToRestart && updates.IsInstalled ? Visibility.Visible : Visibility.Collapsed; restart.IsEnabled = !busy;
-        bool useInstaller = !updates.IsInstalled || (!updates.CanDownload && !updates.ReadyToRestart && (updates.State is UpdateState.Available or UpdateState.Error));
-        installer.Visibility = useInstaller && updates.CanOpenInstaller ? Visibility.Visible : Visibility.Collapsed; installer.IsEnabled = !busy;
-        releaseNotes.IsEnabled = !string.IsNullOrWhiteSpace(updates.ReleaseUrl);
+        bool showUpdateNow = !updates.ReadyToRestart && (updates.CanUpdateNow || updates.State == UpdateState.Downloading || (busy && download.Visibility == Visibility.Visible));
+        download.Visibility = showUpdateNow ? Visibility.Visible : Visibility.Collapsed; download.IsEnabled = !busy;
+        restart.Visibility = updates.ReadyToRestart ? Visibility.Visible : Visibility.Collapsed; restart.IsEnabled = !busy;
+        releaseNotes.IsEnabled = !busy && !string.IsNullOrWhiteSpace(updates.ReleaseUrl);
     }
 
     void SetFeedback(string? key, bool isError = true)

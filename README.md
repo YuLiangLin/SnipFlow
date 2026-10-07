@@ -4,7 +4,7 @@ Windows 截圖、標註與錄影工具，以 C# / WPF 開發。預覽版支援�
 
 ## 使用
 
-從 [GitHub Releases](https://github.com/YuLiangLin/SnipFlow/releases) 下載 `SnipFlow-win-Setup.exe`。安裝版支援自動更新；直接從 ZIP、build 資料夾或開發預覽程式執行時，仍可檢查新版並開啟官方安裝程式下載連結。
+首次取得程式可從 [GitHub Releases](https://github.com/YuLiangLin/SnipFlow/releases) 下載 `SnipFlow-win-Setup.exe`，或解壓縮 `SnipFlow-win-Portable.zip`。0.4.2 起兩者都支援程式內一鍵更新。
 
 - `Ctrl + Alt + S`：預設全域框選截圖。焦點在瀏覽器或其他程式、SnipFlow 最小化或隱藏至系統匣時都可使用；程式須保持執行。
 - 設定的「全域截圖快捷鍵」欄位可直接按下自訂組合：字母／數字搭配 Ctrl、Alt、Shift 中至少兩個鍵，或 F1–F11。輸入完整組合後立即套用並儲存；被其他程式占用時會提示並保留原有綁定。「預設」按鈕可重新註冊預設組合。
@@ -56,15 +56,17 @@ OCR 使用本機 `Windows.Media.Ocr` 與 Windows 已安裝的語言套件。沒�
 
 「設定 → 更新」顯示目前版本、最新版本、檢查狀態與下載進度。檢查失敗時會在頁面內顯示原因與重試按鈕。GitHub 更新來源固定內建，不依賴程式旁的 JSON 設定檔。
 
-安裝版由 Velopack 從本專案的公開 GitHub Releases 取得套件。預設在啟動時與每 4 小時檢查，找到新版後背景下載；結束程式後下次啟動會套用，也能在介面按「重新啟動並更新」。已有視窗時再次啟動會喚起工作區。手動套用更新前若有未儲存的標註會提醒先存檔。離線或下載失敗不會阻止使用目前版本。設定頁可關閉自動檢查／下載。
+安裝版與正式可攜版由 Velopack 從本專案的公開 GitHub Releases 取得套件。按「立即更新」會下載、保存目前工作、套用並重新啟動，無須開啟瀏覽器或操作安裝精靈。已背景下載完成時，按「重新啟動並更新」即可。預設在啟動時與每 4 小時檢查，找到新版後背景下載；結束程式後下次啟動也會套用。已有視窗時再次啟動會喚起工作區。離線或下載失敗不會阻止使用目前版本。設定頁可關閉自動檢查／下載。
 
-可攜版與開發預覽程式會查詢最新公開版本，並在有新版時提供「下載安裝程式」。首次安裝新版後，從安裝的 SnipFlow 啟動即可使用自動更新。舊版 `UiPreview.exe` 沒有初始化 Velopack，曾誤報「更新來源尚未設定」；0.4.0 修正此狀態判斷。
+直接從 `dotnet publish` 資料夾執行 `SnipFlow.exe` 時，同一按鈕會在背景取得官方 Setup，核對 GitHub 提供的 SHA-256 與檔案大小，等待目前程式結束後靜默安裝至 `%LocalAppData%\SnipFlow`，再啟動新版。安裝目錄仍有其他執行中的程式、截圖資料夾位於該目錄或下載驗證失敗時會停止更新並保留現有檔案。開發預覽 host 不提供套用更新。
+
+更新前會把原圖與可編輯標註保存到 `%LocalAppData%\SnipFlowData\UpdateSessions`，重新啟動後恢復目前圖片、文字、箭頭、框線等物件；更新前的復原／重做紀錄不保留。即使關閉 PNG 自動儲存，也會先完成此工作保存；保存失敗時不會開始套用更新。工作保存檔留在本機，無法恢復時可從該資料夾找回原圖。
 
 0.4.0 採中性石墨灰、柔白文字與細邊框，搭配使用者選定的「Flow S」Logo。設定分為「一般／快捷鍵／更新」；主視窗、錄影操作條、OCR 與程式提示視窗使用相同色系。
 
 設定、最多 80 張截圖歷史與錯誤紀錄放在 `%LocalAppData%\SnipFlowData`，與會被更新取代的程式目錄分開。停用歷史只會停止記錄新的截圖。截圖、OCR 內容與紀錄都不會由發布腳本上傳。
 
-預覽版尚未使用程式碼簽章；正式公開散布前應配置受信任的 Windows 簽章憑證。更新下載由 Velopack 檢查套件雜湊，更新來源固定為本專案的 HTTPS GitHub URL。
+預覽版尚未使用程式碼簽章；正式公開散布前應配置受信任的 Windows 簽章憑證。Velopack 檢查更新套件雜湊；首次自動安裝另核對 GitHub Release 資產的 SHA-256，更新來源固定為本專案的 HTTPS GitHub URL。
 
 ## 開發
 
@@ -78,7 +80,7 @@ dotnet run --project src/SnipFlow.csproj
 `build-release.ps1` 建立自含執行環境的 Windows x64 發布目錄與 Velopack 安裝包。它只打包本專案程式檔案，不打包使用者資料。`-Version` 決定應用程式與套件版本。產物在 `release/`；發布到 GitHub 後，已安裝的舊版才能取得更新。
 
 ```powershell
-./build-release.ps1 -Version 0.4.1
+./build-release.ps1 -Version 0.4.2
 ```
 
 ## 驗證範圍

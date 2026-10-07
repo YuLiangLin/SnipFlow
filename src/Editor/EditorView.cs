@@ -49,6 +49,7 @@ public sealed class EditorView : WpfUserControl
     private bool _syncTextUi;
     private bool _outsideTextClick;
     private bool _languageSubscribed;
+    private bool _suppressEvents;
     private AnnotationTool _tool = AnnotationTool.Arrow;
     private WpfColor _color = WpfColor.FromRgb(99, 213, 197);
     private double _strokeWidth = 4;
@@ -290,6 +291,42 @@ public sealed class EditorView : WpfUserControl
         _imageLabel.Text = $"{image.PixelWidth:N0} × {image.PixelHeight:N0} px";
         _fitMode = true;
         FitToView();
+        RaiseSelectionChanged();
+        RaiseChanged();
+    }
+
+    internal (BitmapSource Image, List<AnnotationItem> Annotations, bool HasEdits) CaptureSession()
+    {
+        VerifyAccess();
+        if (_image is null)
+            throw new InvalidOperationException(I18n.T("請先開啟或擷取影像。"));
+        CompleteGesture();
+        CommitTextEdit();
+        EndPropertyEdit();
+        return (_image, _annotations.Select(item => item.Clone()).ToList(), HasEdits);
+    }
+
+    internal void RestoreSession(BitmapSource image, IReadOnlyList<AnnotationItem> annotations, bool hasEdits)
+    {
+        VerifyAccess();
+        ArgumentNullException.ThrowIfNull(image);
+        ArgumentNullException.ThrowIfNull(annotations);
+        var restored = annotations.Select(item => item.Clone()).ToList();
+        var suppressed = _suppressEvents;
+        _suppressEvents = true;
+        try
+        {
+            LoadImage(image);
+            _annotations.AddRange(restored);
+            _revision = _nextRevision = restored.Count > 0 || hasEdits ? 1 : 0;
+            _savedRevision = hasEdits ? -1 : _revision;
+            _surface.InvalidateVisual();
+        }
+        finally
+        {
+            _suppressEvents = suppressed;
+        }
+        // Subscribers see the complete document, never the raw-image intermediate state.
         RaiseSelectionChanged();
         RaiseChanged();
     }
@@ -1308,8 +1345,14 @@ public sealed class EditorView : WpfUserControl
         _surface.InvalidateVisual();
     }
 
-    private void RaiseChanged() => Changed?.Invoke(this, EventArgs.Empty);
-    private void RaiseSelectionChanged() => SelectionChanged?.Invoke(this, EventArgs.Empty);
+    private void RaiseChanged()
+    {
+        if (!_suppressEvents) Changed?.Invoke(this, EventArgs.Empty);
+    }
+    private void RaiseSelectionChanged()
+    {
+        if (!_suppressEvents) SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     private void OnLanguageChanged(object? sender, EventArgs e)
     {

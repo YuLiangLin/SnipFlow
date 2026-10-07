@@ -1,7 +1,7 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Velopack;
 using Velopack.Locators;
@@ -19,9 +19,13 @@ public sealed class UpdateService
     readonly SemaphoreSlim gate = new(1, 1);
     readonly UpdateManager? manager;
     readonly SemanticVersion currentVersion;
+    readonly bool canBootstrap = string.Equals(Path.GetFileName(Environment.ProcessPath), "SnipFlow.exe", StringComparison.OrdinalIgnoreCase);
     UpdateInfo? available;
+    LatestRelease? latestRelease;
+    string? bootstrapInstallerPath;
     sealed record StatusMessage(string Key, object?[] Values);
-    sealed record LatestRelease(SemanticVersion Version, string Tag, string? InstallerUrl);
+    sealed record InstallerAsset(string Url, long Size, string Sha256);
+    sealed record LatestRelease(SemanticVersion Version, string Tag, InstallerAsset? Installer);
     StatusMessage status = new("尚未檢查更新", Array.Empty<object?>());
     StatusMessage? error;
 
@@ -37,10 +41,10 @@ public sealed class UpdateService
     public string CurrentVersion => currentVersion.ToString().Split('+')[0];
     public string? LatestVersion { get; private set; }
     public string ReleaseUrl { get; private set; } = DefaultRepositoryUrl + "/releases/latest";
-    public string? InstallerUrl { get; private set; }
     public DateTimeOffset? LastCheckedAt { get; private set; }
-    public bool CanDownload => !IsBusy && IsInstalled && available != null && !ReadyToRestart;
-    public bool CanOpenInstaller => !IsBusy && InstallerUrl != null;
+    public bool CanDownload => !IsBusy && !ReadyToRestart && (IsInstalled ? available != null
+        : canBootstrap && latestRelease?.Installer != null && latestRelease.Version >= currentVersion);
+    public bool CanUpdateNow => !IsBusy && (ReadyToRestart || CanDownload);
 
     public UpdateService()
     {
@@ -54,7 +58,8 @@ public sealed class UpdateService
             {
                 manager = new UpdateManager(new GithubSource(RepositoryUrl, null, false),
                     new UpdateOptions { ExplicitChannel = DefaultChannel });
-                IsInstalled = manager.IsInstalled && !manager.IsPortable;
+                // Proper Velopack portable builds have their own updater and support in-place updates.
+                IsInstalled = manager.IsInstalled;
                 if (IsInstalled && manager.CurrentVersion is { } installedVersion) currentVersion = installedVersion;
                 if (IsInstalled && manager.UpdatePendingRestart is { } pending && pending.Version > currentVersion)
                 {
@@ -69,7 +74,7 @@ public sealed class UpdateService
                 manager = null;
                 IsInstalled = false;
                 SettingsStore.Log(ex);
-                SetStatus("自動更新暫不可用，可下載安裝程式");
+                SetStatus("尚未檢查更新");
             }
         }
     }
@@ -84,12 +89,12 @@ public sealed class UpdateService
             State = UpdateState.Checking;
             SetStatus("正在檢查 GitHub Releases…");
             var release = await ReadLatestReleaseAsync();
+            latestRelease = release;
             LastCheckedAt = DateTimeOffset.Now;
             LatestVersion = release.Version.ToString();
             ReleaseUrl = RepositoryUrl + "/releases/tag/" + Uri.EscapeDataString(release.Tag);
-            InstallerUrl = release.InstallerUrl;
             available = null;
-            if (release.Version <= currentVersion)
+            if (release.Version < currentVersion || release.Version == currentVersion && IsInstalled)
             {
                 State = UpdateState.UpToDate;
                 SetStatus("目前已是最新版本");
@@ -97,8 +102,11 @@ public sealed class UpdateService
             }
             if (!IsInstalled)
             {
+                if (!canBootstrap) { State = UpdateState.Available; SetStatus("此預覽程式無法套用更新。"); return; }
+                if (release.Installer == null) throw new InvalidDataException("The release has no verified installer for automatic setup.");
                 State = UpdateState.Available;
-                SetStatus("發現新版本 {0}，請下載安裝程式", LatestVersion);
+                SetStatus(release.Version > currentVersion ? "發現新版本 {0}" : "更新已可套用", LatestVersion);
+                if (download) await DownloadCoreAsync();
                 return;
             }
             var candidate = await manager!.CheckForUpdatesAsync();
@@ -107,7 +115,7 @@ public sealed class UpdateService
             if (candidate == null || candidate.TargetFullRelease.Version != release.Version)
             {
                 State = UpdateState.Available;
-                SetStatus("新版本 {0} 的更新套件尚未就緒，可下載安裝程式", LatestVersion);
+                SetStatus("更新套件尚未就緒，請稍後重試。");
                 return;
             }
             available = candidate;
@@ -127,7 +135,7 @@ public sealed class UpdateService
         if (!await gate.WaitAsync(0)) return;
         try
         {
-            if (!IsInstalled || available == null || ReadyToRestart) return;
+            if (!CanDownload) return;
             IsBusy = true; error = null;
             await DownloadCoreAsync();
         }
@@ -139,31 +147,97 @@ public sealed class UpdateService
     {
         State = UpdateState.Downloading; DownloadProgress = 0;
         SetStatus("正在下載 {0}…", LatestVersion);
-        await manager!.DownloadUpdatesAsync(available!, progress =>
+        void Progress(int progress)
         {
             DownloadProgress = Math.Clamp(progress, 0, 100);
             SetStatus("正在下載更新 · {0}%", DownloadProgress);
-        });
+        }
+        if (IsInstalled) await manager!.DownloadUpdatesAsync(available!, Progress);
+        else await DownloadBootstrapAsync(Progress);
         DownloadProgress = 100; ReadyToRestart = true; State = UpdateState.ReadyToRestart;
         SetStatus("{0} 已下載 · 重新啟動以更新", LatestVersion);
     }
 
-    public void OpenInstallerPage()
+    async Task DownloadBootstrapAsync(Action<int> progress)
     {
-        if (!CanOpenInstaller) return;
-        try { Process.Start(new ProcessStartInfo(InstallerUrl!) { UseShellExecute = true }); }
-        catch (Exception ex) { SetError(ex, "無法開啟下載連結，請稍後重試。"); }
-    }
-
-    public void ApplyAndRestart()
-    {
-        if (!IsInstalled || IsBusy || !ReadyToRestart) return;
+        var release = latestRelease ?? throw new InvalidOperationException("No release is available.");
+        var asset = release.Installer ?? throw new InvalidDataException("No verified installer is available.");
+        UpdateBootstrapper.ValidateInstallLocation();
+        var directory = Path.Combine(SettingsStore.DataRoot, "Updates", release.Version.ToString().Split('+')[0]);
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "SnipFlow-win-Setup.exe");
+        if (File.Exists(path) && new FileInfo(path).Length == asset.Size && await Task.Run(() => UpdateBootstrapper.VerifyInstaller(path, asset.Sha256)))
+        { bootstrapInstallerPath = path; progress(100); return; }
+        var temporaryPath = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".download");
         try
         {
-            if (available != null) manager!.ApplyUpdatesAndRestart(available);
-            else if (manager!.UpdatePendingRestart is { } pending) manager.ApplyUpdatesAndRestart(pending);
+            using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("SnipFlow-Desktop/1.0");
+            using var response = await client.GetAsync(asset.Url, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+            var finalUri = response.RequestMessage?.RequestUri;
+            if (finalUri == null || finalUri.Scheme != Uri.UriSchemeHttps || !finalUri.IsDefaultPort || !string.IsNullOrEmpty(finalUri.UserInfo)
+                || !(finalUri.Host == "github.com" || finalUri.Host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidDataException("The update download was redirected outside GitHub.");
+            if (response.Content.Headers.ContentLength is { } length && length != asset.Size)
+                throw new InvalidDataException("The update download has an unexpected length.");
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+            await using var input = await response.Content.ReadAsStreamAsync(timeout.Token);
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            long received = 0;
+            await using (var output = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous))
+            {
+                var buffer = new byte[64 * 1024];
+                int count;
+                while ((count = await input.ReadAsync(buffer, timeout.Token)) != 0)
+                {
+                    received += count;
+                    if (received > asset.Size) throw new InvalidDataException("The update exceeded its declared size.");
+                    hash.AppendData(buffer.AsSpan(0, count));
+                    await output.WriteAsync(buffer.AsMemory(0, count), timeout.Token);
+                    var percentage = (int)(received * 100 / asset.Size);
+                    if (percentage != DownloadProgress) progress(percentage);
+                }
+                await output.FlushAsync(timeout.Token);
+            }
+            if (received != asset.Size || !Convert.ToHexString(hash.GetHashAndReset()).Equals(asset.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The update did not match the release SHA-256.");
+            File.Move(temporaryPath, path, true);
+            bootstrapInstallerPath = path;
+        }
+        finally
+        {
+            try { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    public void ApplyAndRestart(string[]? restartArgs = null)
+    {
+        if (IsBusy || !ReadyToRestart) return;
+        restartArgs ??= Array.Empty<string>();
+        try
+        {
+            if (IsInstalled)
+                manager!.WaitExitThenApplyUpdates(available?.TargetFullRelease ?? manager.UpdatePendingRestart,
+                    silent: true, restart: true, restartArgs: restartArgs);
+            else
+            {
+                var asset = latestRelease?.Installer ?? throw new InvalidOperationException("No verified update is ready.");
+                UpdateBootstrapper.Start(bootstrapInstallerPath ?? throw new InvalidOperationException("The update has not been downloaded."),
+                    asset.Sha256, restartArgs);
+            }
+            Application.Current?.Shutdown();
         }
         catch (Exception ex) { SetError(ex, "更新尚未套用"); throw; }
+    }
+
+    internal void ReportRestartFailure()
+    {
+        State = UpdateState.Error;
+        error = new("更新未完成，已保留目前版本與編輯。", Array.Empty<object?>());
+        SetStatus(error.Key);
     }
 
     static string ReadRepositoryUrl()
@@ -211,7 +285,7 @@ public sealed class UpdateService
         if (root.GetProperty("draft").GetBoolean() || root.GetProperty("prerelease").GetBoolean() ||
             !SemanticVersion.TryParse(tag.TrimStart('v', 'V'), out var version) || version.IsPrerelease)
             throw new InvalidDataException("GitHub returned an invalid stable SnipFlow release.");
-        string? installerUrl = null;
+        InstallerAsset? installer = null;
         foreach (var asset in root.GetProperty("assets").EnumerateArray())
         {
             if (asset.GetProperty("name").GetString() != "SnipFlow-win-Setup.exe") continue;
@@ -220,10 +294,15 @@ public sealed class UpdateService
                 url.Host != "github.com" || !url.IsDefaultPort || !string.IsNullOrEmpty(url.UserInfo) ||
                 !url.AbsolutePath.StartsWith("/YuLiangLin/SnipFlow/releases/download/", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("The installer URL is outside the official SnipFlow releases.");
-            installerUrl = url.AbsoluteUri;
+            var size = asset.GetProperty("size").GetInt64();
+            var digest = asset.TryGetProperty("digest", out var digestValue) ? digestValue.GetString() ?? "" : "";
+            if (size <= 0 || size > 512L * 1024 * 1024 || !digest.StartsWith("sha256:", StringComparison.Ordinal)
+                || digest.Length != 71 || digest[7..].Any(character => !Uri.IsHexDigit(character)))
+                throw new InvalidDataException("The release installer is missing valid size/SHA-256 metadata.");
+            installer = new(url.AbsoluteUri, size, digest[7..]);
             break;
         }
-        return new(version, tag, installerUrl);
+        return new(version, tag, installer);
     }
 
     void SetError(Exception ex, string fallbackKey)

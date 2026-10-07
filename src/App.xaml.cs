@@ -15,6 +15,10 @@ public partial class App : Application
     [STAThread]
     public static void Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--apply-bootstrap")
+        {
+            Environment.ExitCode = UpdateBootstrapper.Run(args[1]); return;
+        }
         VelopackApp.Build().SetAutoApplyOnStartup(false).Run();
         instance = new Mutex(true, "Local\\SnipFlow.Desktop", out var first);
         if (!first)
@@ -35,7 +39,7 @@ public partial class App : Application
             try
             {
                 var updates = new UpdateService();
-                if (updates.ReadyToRestart) { updates.ApplyAndRestart(); return; }
+                if (updates.ReadyToRestart && !args.Contains("--update-failed")) { updates.ApplyAndRestart(args); return; }
             }
             catch (Exception ex) { SettingsStore.Log(ex); }
             var app = new App(); app.InitializeComponent(); app.Run();
@@ -64,6 +68,9 @@ public partial class App : Application
         if (e.Args.Contains("--background")) shell.Hide();
         var fileIndex = Array.IndexOf(e.Args, "--open");
         if (fileIndex >= 0 && e.Args.Length > fileIndex + 1 && File.Exists(e.Args[fileIndex + 1])) shell.OpenImage(e.Args[fileIndex + 1]);
+        var sessionIndex = Array.IndexOf(e.Args, "--restore-update-session");
+        if (sessionIndex >= 0 && e.Args.Length > sessionIndex + 1) shell.RestoreAfterUpdate(e.Args[sessionIndex + 1]);
+        if (e.Args.Contains("--update-failed")) shell.Updates.ReportRestartFailure();
         _ = ListenAsync(shutdown.Token);
         updateTimer.Tick += async (_, _) => await CheckUpdatesAsync(); updateTimer.Start();
         shell.ContentRendered += async (_, _) => { await Task.Delay(1500); await CheckUpdatesAsync(); };

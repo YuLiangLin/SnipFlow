@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     public string? ActiveHotkey => hotkeys?.ActiveGesture?.ToString();
     public string HotkeyError { get; private set; } = "";
     bool busy;
+    bool updating;
     bool selectingHistory;
     bool refreshingProperties;
     bool compact = true;
@@ -154,6 +155,17 @@ public partial class MainWindow : Window
     {
         autoSaveTimer.Stop(); documentGeneration++; autoSavePath = null; autoSavedRevision = -1;
         Editor.LoadImage(image);
+    }
+    internal void RestoreAfterUpdate(string directory)
+    {
+        autoSaveTimer.Stop(); documentGeneration++; autoSavePath = null; autoSavedRevision = -1;
+        try
+        {
+            EditorSessionStore.Restore(Editor, directory);
+            ApplyWindowMode(false); ImageInfo.Text = "";
+            SetStatus("已恢復更新前的編輯。"); RefreshDocumentState(); QueueAutoSave();
+        }
+        catch (Exception ex) { ReportError(ex, "無法恢復編輯，更新前的工作仍保存在本機。"); }
     }
     void QueueAutoSave()
     {
@@ -450,10 +462,32 @@ public partial class MainWindow : Window
     {
         new SettingsWindow(this) { Owner = this }.ShowDialog(); RefreshHotkeyHint(); RefreshHistory();
     }
-    void ApplyUpdateClick(object sender, RoutedEventArgs e)
+    public async Task UpdateNowAsync()
     {
-        if (!PrepareToDiscard()) return;
-        try { Updates.ApplyAndRestart(); } catch (Exception ex) { ReportError(ex, "更新尚未套用"); }
+        if (updating || busy || capturePending || Updates.IsBusy) return;
+        updating = busy = true; RefreshDocumentState();
+        try
+        {
+            if (!Updates.ReadyToRestart) await Updates.CheckAsync(true);
+            if (!Updates.ReadyToRestart) return;
+            FinishAutoSaveWrite();
+            string[] restartArgs = Array.Empty<string>();
+            if (Editor.HasImage)
+            {
+                if (SettingsStore.Current.AutoSaveCaptures && Editor.Revision != autoSavedRevision)
+                    SaveAutomaticallyBeforeDiscard();
+                var checkpoint = EditorSessionStore.Save(Editor);
+                restartArgs = new[] { "--restore-update-session", checkpoint };
+            }
+            // Committing edits while saving the checkpoint can queue another autosave.
+            autoSaveTimer.Stop();
+            Updates.ApplyAndRestart(restartArgs);
+        }
+        finally { updating = busy = false; RefreshDocumentState(); QueueAutoSave(); }
+    }
+    async void ApplyUpdateClick(object sender, RoutedEventArgs e)
+    {
+        try { await UpdateNowAsync(); } catch (Exception ex) { ReportError(ex, "更新尚未套用"); }
     }
     void WindowKeyDown(object sender, KeyEventArgs e)
     {
