@@ -24,7 +24,7 @@ public static class ImageStitcher
 {
     public const long MaxOutputPixels = 40_000_000;
     public const long MaxStoredPixels = 60_000_000;
-    public const int MaxFrames = 20;
+    public const int MaxFrames = 64;
     private static readonly ConditionalWeakTable<BitmapSource, SampleImage> Samples = new();
 
     public static OverlapMatch FindOverlap(BitmapSource previous, BitmapSource current)
@@ -168,6 +168,42 @@ public static class ImageStitcher
             totalHeight = checked(totalHeight + frame.PixelHeight - overlap);
         }
         return checked(width * totalHeight);
+    }
+
+    /// <summary>Copies only the selected document rows, so a short result does not retain a full long image.</summary>
+    internal static BitmapSource StitchRange(IReadOnlyList<BitmapSource> frames, IReadOnlyList<int> overlaps,
+        int firstRow, int endRow)
+    {
+        var totalPixels = CalculateOutputPixels(frames, overlaps);
+        var width = frames[0].PixelWidth;
+        var totalHeight = totalPixels / width;
+        if (firstRow < 0 || endRow <= firstRow || endRow > totalHeight)
+            throw new ArgumentOutOfRangeException(nameof(endRow), I18n.T("起點與終點必須在已擷取範圍內。"));
+        var height = endRow - firstRow;
+        if ((long)width * height > MaxOutputPixels)
+            throw new InvalidOperationException(I18n.F("長截圖超過 {0:N0} 百萬像素上限，請分段截取。", MaxOutputPixels / 1_000_000));
+        var stride = checked(width * 4);
+        var pixels = new byte[checked(stride * height)];
+        long documentRow = 0;
+        for (var index = 0; index < frames.Count; index++)
+        {
+            var skipped = index == 0 ? 0 : overlaps[index - 1];
+            var available = frames[index].PixelHeight - skipped;
+            var from = Math.Max(documentRow, firstRow);
+            var to = Math.Min(documentRow + available, endRow);
+            if (to > from)
+            {
+                var source = AsBgra32(frames[index]);
+                var sourceRow = checked(skipped + (int)(from - documentRow));
+                var destinationOffset = checked((int)(from - firstRow) * stride);
+                source.CopyPixels(new Int32Rect(0, sourceRow, width, checked((int)(to - from))), pixels, stride, destinationOffset);
+            }
+            documentRow += available;
+            if (documentRow >= endRow) break;
+        }
+        var result = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
+        result.Freeze();
+        return result;
     }
 
     internal static BitmapSource CreateJoinPreview(BitmapSource previous, BitmapSource current, int overlap)

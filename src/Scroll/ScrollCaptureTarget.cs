@@ -23,7 +23,7 @@ internal sealed class ScrollCaptureTarget
         }
     }
 
-    internal bool CanObserve(IntPtr toolbar, bool toolbarExcluded, out string reason)
+    internal bool CanObserve(IntPtr toolbar, bool toolbarExcluded, out string reason, bool allowToolbarForeground = false)
     {
         reason = "";
         if (window == IntPtr.Zero || processId == 0 || processId == Environment.ProcessId
@@ -33,7 +33,8 @@ internal sealed class ScrollCaptureTarget
         if (currentProcess != processId || !GetWindowRect(window, out var rectangle)
             || rectangle.ToRectangle() != originalBounds || !originalBounds.Contains(region))
         { reason = "目標視窗位置或大小已改變，請完成後重新選取範圍。"; return false; }
-        if (GetAncestor(GetForegroundWindow(), 2) != window)
+        var foreground = GetAncestor(GetForegroundWindow(), 2);
+        if (foreground != window && !(allowToolbarForeground && foreground == toolbar))
         { reason = "切回目標視窗即可繼續；已擷取內容會保留。"; return false; }
         if (IsPointerDown())
         { reason = "等待拖曳或選取結束…"; return false; }

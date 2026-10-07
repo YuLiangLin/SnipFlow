@@ -11,11 +11,11 @@ using DrawingRectangle = System.Drawing.Rectangle;
 namespace SnipFlow.Scroll;
 
 /// <summary>Observes user scrolling without sending input or taking focus from the target.</summary>
-public sealed class ScrollCaptureWindow : Window
+public sealed partial class ScrollCaptureWindow : Window
 {
     private readonly DrawingRectangle _targetBounds;
     private readonly ScrollCaptureTarget _target;
-    // Frames stay in document order. Positions describe the top of each cropped body.
+    // Frames stay in document order. Positions are offsets of the raw viewport in document pixels.
     private readonly List<BitmapSource> _frames = new();
     private readonly List<int> _positions = new();
     private readonly Stack<bool> _addedAtTop = new();
@@ -25,6 +25,7 @@ public sealed class ScrollCaptureWindow : Window
     private readonly System.Windows.Controls.Image _joinPreview;
     private readonly TextBlock _status;
     private readonly TextBlock _dimensions;
+    private readonly TextBlock _instruction;
     private readonly Button _pauseButton;
     private readonly Button _undoButton;
     private readonly Button _finishButton;
@@ -40,13 +41,11 @@ public sealed class ScrollCaptureWindow : Window
     private readonly Expander _trimExpander;
     private BitmapSource? _anchorRaw;
     private int _anchorPosition;
-    private BitmapSource? _candidateRaw;
     private BitmapSource? _lastProcessedRaw;
     private BitmapSource? _unmatchedRaw;
-    private long _candidateSince;
     private int _topTrim;
     private int _bottomTrim;
-    private bool _userPaused;
+    private bool _userPaused = true;
     private bool _busy;
     private bool _finishing;
     private bool _closed;
@@ -67,7 +66,7 @@ public sealed class ScrollCaptureWindow : Window
 
         _targetBounds = targetPhysicalBounds;
         _target = new ScrollCaptureTarget(_targetBounds);
-        Title = I18n.T("SnipFlow · 捲動截圖");
+        Title = I18n.T("SnipFlow · 對話長截圖");
         Width = 430;
         SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.None;
@@ -96,7 +95,7 @@ public sealed class ScrollCaptureWindow : Window
         var header = new Grid { Margin = new Thickness(0, 0, 0, 8) };
         header.ColumnDefinitions.Add(new ColumnDefinition());
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var title = new TextBlock { Text = I18n.T("捲動截圖"), FontWeight = FontWeights.SemiBold, FontSize = 15 };
+        var title = new TextBlock { Text = I18n.T("對話長截圖"), FontWeight = FontWeights.SemiBold, FontSize = 15 };
         header.Children.Add(title);
         title.MouseLeftButtonDown += (_, args) =>
         {
@@ -109,12 +108,13 @@ public sealed class ScrollCaptureWindow : Window
         Grid.SetColumn(cancel, 1);
         header.Children.Add(cancel);
         layout.Children.Add(header);
-        layout.Children.Add(new TextBlock
+        _instruction = new TextBlock
         {
-            Text = I18n.T("在目標視窗上下捲動；停下時自動擷取。"),
+            Text = I18n.T("先捲到第一則訊息，再選起點。"),
             Foreground = Brush("#A3A3A3"), TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 8)
-        });
+        };
+        layout.Children.Add(_instruction);
 
         var previewRow = new Grid { Margin = new Thickness(0, 0, 0, 8) };
         previewRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(76) });
@@ -132,7 +132,7 @@ public sealed class ScrollCaptureWindow : Window
         _dimensions = new TextBlock { Foreground = Brush("#A3A3A3"), FontSize = 11 };
         _status = new TextBlock
         {
-            Text = I18n.T("切回目標視窗即可開始。"), TextWrapping = TextWrapping.Wrap,
+            Text = I18n.T("請選起點，再捲動到要保留的最後一則訊息。"), TextWrapping = TextWrapping.Wrap,
             Foreground = Brush("#ECECEC"), LineHeight = 17, Margin = new Thickness(0, 5, 0, 0)
         };
         information.Children.Add(_dimensions);
@@ -140,10 +140,12 @@ public sealed class ScrollCaptureWindow : Window
         previewRow.Children.Add(information);
         layout.Children.Add(previewRow);
 
+        layout.Children.Add(CreateRangeControls());
+
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
         _pauseButton = MakeButton("暫停");
         _pauseButton.Click += (_, _) => TogglePause();
-        _finishButton = MakeButton("完成", accent: true);
+        _finishButton = MakeButton("產生長圖", accent: true);
         _finishButton.Click += async (_, _) => await FinishAsync();
         _undoButton = MakeButton("上一步");
         _undoButton.Click += (_, _) => UndoFrame();
@@ -244,7 +246,7 @@ public sealed class ScrollCaptureWindow : Window
                 if (!first.IsFrozen) first.Freeze();
                 AddFirstFrame(first);
             }
-            _timer.Start();
+            SetStatus("請選起點，再捲動到要保留的最後一則訊息。");
         };
         LocationChanged += (_, _) => LimitWindowHeight();
         Closed += (_, _) =>
@@ -252,6 +254,7 @@ public sealed class ScrollCaptureWindow : Window
             _closed = true;
             _timer.Stop();
             _lifetime.Cancel();
+            _activePicker?.Close();
         };
         PreviewKeyDown += (_, args) =>
         {
@@ -262,10 +265,10 @@ public sealed class ScrollCaptureWindow : Window
 
     private async Task ObserveAsync()
     {
-        if (_closed || _finishing || _busy || _userPaused || _manualPanel.Visibility == Visibility.Visible) return;
+        if (_closed || _finishing || _busy || _pickingBoundary || _userPaused || _rangeStart is null || _rangeEnd is not null || _manualPanel.Visibility == Visibility.Visible) return;
         if (!_target.CanObserve(_handle, _toolbarExcluded, out var reason))
         {
-            ResetObservation();
+            ResetObservation(discardPending: false);
             SetStatus(reason, warning: true);
             return;
         }
@@ -289,32 +292,9 @@ public sealed class ScrollCaptureWindow : Window
                 if (same)
                 {
                     if (!ReferenceEquals(_unmatchedRaw, _lastProcessedRaw)) _unmatchedRaw = null;
-                    _candidateRaw = null;
-                    _candidateSince = 0;
                     return;
                 }
             }
-            if (_candidateRaw is null)
-            {
-                _candidateRaw = raw;
-                _unmatchedRaw = raw;
-                _candidateSince = Stopwatch.GetTimestamp();
-                SetStatus("等待捲動停止…");
-                return;
-            }
-            var candidate = _candidateRaw;
-            var stable = await Task.Run(() => ImageStitcher.AreSameImages(Crop(candidate), Crop(raw)), _lifetime.Token);
-            if (!CanCommitObservation()) return;
-            if (!stable)
-            {
-                _candidateRaw = raw;
-                _unmatchedRaw = raw;
-                _candidateSince = Stopwatch.GetTimestamp();
-                SetStatus("等待捲動停止…");
-                return;
-            }
-            if (Stopwatch.GetElapsedTime(_candidateSince).TotalMilliseconds < 550) return;
-
             var bodies = _frames.Select(Crop).ToArray();
             var positions = _positions.ToArray();
             var anchor = Crop(_anchorRaw ?? _frames[^1]);
@@ -322,18 +302,45 @@ public sealed class ScrollCaptureWindow : Window
             var body = Crop(raw);
             var analysis = await Task.Run(() => AnalyzeFrame(anchor, anchorPosition, body, bodies, positions, _lifetime.Token), _lifetime.Token);
             if (!CanCommitObservation()) return;
+            // A faster scroll may skip the overlap with the last stored frame. Commit the
+            // last reliable intermediate viewport, then retry against that new frontier.
+            if (analysis.Kind == FrameKind.Unreliable && _pendingAlignedRaw is not null)
+            {
+                var intermediate = _pendingAlignedRaw;
+                var intermediatePosition = _pendingAlignedPosition;
+                if (TryAcceptFrame(intermediate, intermediatePosition, intermediatePosition < _positions[0]))
+                {
+                    bodies = _frames.Select(Crop).ToArray();
+                    positions = _positions.ToArray();
+                    anchor = Crop(_anchorRaw!);
+                    anchorPosition = _anchorPosition;
+                    analysis = await Task.Run(() => AnalyzeFrame(anchor, anchorPosition, body, bodies, positions, _lifetime.Token), _lifetime.Token);
+                    if (!CanCommitObservation()) return;
+                }
+                else return;
+            }
             _lastProcessedRaw = raw;
-            _candidateRaw = null;
             if (analysis.Kind == FrameKind.Known)
             {
                 _anchorRaw = raw;
                 _anchorPosition = analysis.Position;
                 _unmatchedRaw = null;
-                SetStatus("這段已擷取；捲過最上端或最下端即可延伸。");
+                _pendingAlignedRaw = null;
+                SetStatus("目前內容已收集，可繼續捲動或選終點。");
             }
             else if (analysis.Kind == FrameKind.New)
             {
-                TryAcceptFrame(raw, analysis.Position, analysis.AtTop);
+                var frontierPosition = analysis.AtTop ? _positions[0] : _positions[^1];
+                var distance = Math.Abs((long)analysis.Position - frontierPosition);
+                if (distance >= Math.Max(24, BodyHeight * 0.45))
+                    TryAcceptFrame(raw, analysis.Position, analysis.AtTop);
+                else
+                {
+                    _pendingAlignedRaw = raw;
+                    _pendingAlignedPosition = analysis.Position;
+                    _unmatchedRaw = null;
+                    SetStatus("目前畫面已對齊，可繼續捲動或選終點。");
+                }
             }
             else
             {
@@ -363,9 +370,9 @@ public sealed class ScrollCaptureWindow : Window
 
     private bool CanCommitObservation()
     {
-        if (_closed || _finishing || _userPaused || _manualPanel.Visibility == Visibility.Visible) return false;
+        if (_closed || _finishing || _pickingBoundary || _userPaused || _manualPanel.Visibility == Visibility.Visible) return false;
         if (_target.CanObserve(_handle, _toolbarExcluded, out var reason)) return true;
-        ResetObservation();
+        ResetObservation(discardPending: false);
         SetStatus(reason, warning: true);
         return false;
     }
@@ -374,7 +381,8 @@ public sealed class ScrollCaptureWindow : Window
         IReadOnlyList<BitmapSource> frames, IReadOnlyList<int> positions, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        if (ImageStitcher.AreSameImages(anchor, current)) return new FrameAnalysis(FrameKind.Known, anchorPosition);
+        if (anchorPosition >= positions[0] && anchorPosition <= positions[^1]
+            && ImageStitcher.AreSameImages(anchor, current)) return new FrameAnalysis(FrameKind.Known, anchorPosition);
         var match = ImageStitcher.FindScroll(anchor, current);
         int? position = match.IsReliable ? checked(anchorPosition + match.AdvancePixels) : null;
         if (position is null)
@@ -426,13 +434,13 @@ public sealed class ScrollCaptureWindow : Window
     {
         if (_frames.Count >= ImageStitcher.MaxFrames)
         {
-            PauseAtLimit("已達 20 張上限，請按「完成」並分段截取。");
+            PauseAtLimit(I18n.F("已達 {0} 張上限，請在已收集內容中選終點並產生長圖。", ImageStitcher.MaxFrames));
             return false;
         }
         var storedPixels = (long)(_frames.Count + 1) * _targetBounds.Width * _targetBounds.Height;
         if (storedPixels > ImageStitcher.MaxStoredPixels)
         {
-            PauseAtLimit("已達畫面記憶體上限，請按「完成」並分段截取。");
+            PauseAtLimit("已達畫面記憶體上限，請在已收集內容中選終點並產生長圖。");
             return false;
         }
         var frontier = atTop ? _positions[0] : _positions[^1];
@@ -446,7 +454,7 @@ public sealed class ScrollCaptureWindow : Window
         var last = atTop ? _positions[^1] : position;
         if ((last - (long)first + BodyHeight) * _targetBounds.Width > ImageStitcher.MaxOutputPixels)
         {
-            PauseAtLimit("已達長截圖像素上限，請按「完成」並分段截取。");
+            PauseAtLimit("已達長截圖像素上限，請在已收集內容中選終點並產生長圖。");
             return false;
         }
         if (atTop)
@@ -463,6 +471,7 @@ public sealed class ScrollCaptureWindow : Window
         _anchorRaw = raw;
         _anchorPosition = position;
         _unmatchedRaw = null;
+        _pendingAlignedRaw = null;
         RefreshPreview();
         UpdateDimensions();
         SetStatus(atTop ? "已補上較早內容，繼續向上捲動。" : "已加入新內容，繼續向下捲動。");
@@ -491,10 +500,10 @@ public sealed class ScrollCaptureWindow : Window
 
     private void TogglePause()
     {
-        if (_closed || _finishing || _manualPanel.Visibility == Visibility.Visible) return;
+        if (_closed || _finishing || _pickingBoundary || _rangeStart is null || _manualPanel.Visibility == Visibility.Visible) return;
         _userPaused = !_userPaused;
-        ResetObservation();
-        if (!_userPaused) _timer.Start();
+        ResetObservation(discardPending: false);
+        if (!_userPaused) { _rangeEnd = null; _timer.Start(); }
         SetStatus(_userPaused ? "已暫停，擷取內容會保留。" : "切回目標視窗繼續捲動。");
         UpdateButtons();
     }
@@ -509,7 +518,7 @@ public sealed class ScrollCaptureWindow : Window
 
     private void UndoFrame()
     {
-        if (_busy || _finishing || _frames.Count <= 1 || _addedAtTop.Count == 0) return;
+        if (_busy || _finishing || _pickingBoundary || _frames.Count <= 1 || _addedAtTop.Count == 0) return;
         var index = _addedAtTop.Pop() ? 0 : _frames.Count - 1;
         _frames.RemoveAt(index);
         _positions.RemoveAt(index);
@@ -518,6 +527,7 @@ public sealed class ScrollCaptureWindow : Window
         _userPaused = true;
         _unmatchedRaw = null;
         _manualPanel.Visibility = Visibility.Collapsed;
+        InvalidateRangeAfterUndo();
         ResetObservation();
         RefreshPreview();
         UpdateDimensions();
@@ -527,7 +537,7 @@ public sealed class ScrollCaptureWindow : Window
 
     private void ApplyTrim()
     {
-        if (_busy || _finishing || _manualPanel.Visibility == Visibility.Visible) return;
+        if (_busy || _finishing || _pickingBoundary || _manualPanel.Visibility == Visibility.Visible) return;
         if (!int.TryParse(_topTrimBox.Text, NumberStyles.None, CultureInfo.InvariantCulture, out var top)
             || !int.TryParse(_bottomTrimBox.Text, NumberStyles.None, CultureInfo.InvariantCulture, out var bottom)
             || top < 0 || bottom < 0 || (long)top + bottom > _targetBounds.Height - 48)
@@ -536,10 +546,11 @@ public sealed class ScrollCaptureWindow : Window
             return;
         }
         var height = _targetBounds.Height - top - bottom;
+        if (!CanTrimRange(top, bottom)) return;
         if (_frames.Count > 0 && ((long)_positions[^1] - _positions[0] + height)
             * _targetBounds.Width > ImageStitcher.MaxOutputPixels)
         {
-            PauseAtLimit("已達長截圖像素上限，請按「完成」並分段截取。");
+            PauseAtLimit("已達長截圖像素上限，請在已收集內容中選終點並產生長圖。");
             return;
         }
         for (var index = 1; index < _positions.Count; index++)
@@ -564,7 +575,7 @@ public sealed class ScrollCaptureWindow : Window
 
     private void BeginManualJoin()
     {
-        if (_busy || _finishing || _unmatchedRaw is null || _frames.Count == 0) return;
+        if (_busy || _finishing || _pickingBoundary || _unmatchedRaw is null || _frames.Count == 0) return;
         _userPaused = true;
         ResetObservation();
         _manualPanel.Visibility = Visibility.Visible;
@@ -590,7 +601,7 @@ public sealed class ScrollCaptureWindow : Window
 
     private void ConfirmManualJoin()
     {
-        if (_busy || _finishing || _unmatchedRaw is null || _frames.Count == 0) return;
+        if (_busy || _finishing || _pickingBoundary || _unmatchedRaw is null || _frames.Count == 0) return;
         var atTop = _direction.SelectedIndex == 0;
         var overlap = (int)Math.Clamp(Math.Round(_overlapSlider.Value), 0, BodyHeight - 1);
         var advance = BodyHeight - overlap;
@@ -605,7 +616,7 @@ public sealed class ScrollCaptureWindow : Window
 
     private async Task FinishAsync()
     {
-        if (_busy || _finishing || _closed || _frames.Count == 0) return;
+        if (_busy || _finishing || _pickingBoundary || _closed || _frames.Count == 0 || _rangeStart is null || _rangeEnd is null) return;
         _finishing = true;
         _timer.Stop();
         _busy = true;
@@ -615,7 +626,9 @@ public sealed class ScrollCaptureWindow : Window
         {
             var frames = _frames.Select(Crop).ToArray();
             var overlaps = GetOverlaps(BodyHeight);
-            var result = await Task.Run(() => ImageStitcher.Stitch(frames, overlaps));
+            var firstRow = checked(_rangeStart.Value - (_positions[0] + _topTrim));
+            var endRow = checked(_rangeEnd.Value - (_positions[0] + _topTrim));
+            var result = await Task.Run(() => ImageStitcher.StitchRange(frames, overlaps, firstRow, endRow));
             if (_closed) return;
             Result = result;
             DialogResult = true;
@@ -638,11 +651,10 @@ public sealed class ScrollCaptureWindow : Window
         }
     }
 
-    private void ResetObservation()
+    private void ResetObservation(bool discardPending = true)
     {
-        _candidateRaw = null;
         _lastProcessedRaw = null;
-        _candidateSince = 0;
+        if (discardPending) _pendingAlignedRaw = null;
     }
 
     private void LimitWindowHeight()
@@ -667,20 +679,25 @@ public sealed class ScrollCaptureWindow : Window
             _dimensions.Text = I18n.F("範圍 {0:N0} × {1:N0} px", _targetBounds.Width, BodyHeight);
             return;
         }
-        var height = (long)_positions[^1] - _positions[0] + BodyHeight;
+        var height = _rangeStart is not null && _rangeEnd is not null
+            ? (long)_rangeEnd.Value - _rangeStart.Value
+            : (long)_positions[^1] - _positions[0] + BodyHeight;
         _dimensions.Text = I18n.F("{0} 張 · {1:N0} × {2:N0} px", _frames.Count, _targetBounds.Width, height);
     }
 
     private void UpdateButtons()
     {
         _pauseButton.Content = new TextBlock { Text = I18n.T(_userPaused ? "繼續" : "暫停") };
-        _pauseButton.IsEnabled = !_finishing && _manualPanel.Visibility != Visibility.Visible;
-        _finishButton.IsEnabled = !_busy && !_finishing && _frames.Count > 0;
-        _undoButton.IsEnabled = !_busy && !_finishing && _frames.Count > 1 && _manualPanel.Visibility != Visibility.Visible;
-        _manualButton.IsEnabled = !_busy && !_finishing && _unmatchedRaw is not null && _manualPanel.Visibility != Visibility.Visible;
-        _confirmJoinButton.IsEnabled = !_busy && !_finishing;
-        _applyTrimButton.IsEnabled = !_busy && !_finishing && _manualPanel.Visibility != Visibility.Visible;
+        _pauseButton.IsEnabled = !_finishing && !_pickingBoundary && _rangeStart is not null && _manualPanel.Visibility != Visibility.Visible;
+        bool canEdit = !_busy && !_finishing && !_pickingBoundary;
+        _finishButton.IsEnabled = canEdit && _frames.Count > 0 && _rangeStart is not null && _rangeEnd is not null;
+        _undoButton.IsEnabled = canEdit && _frames.Count > 1 && _manualPanel.Visibility != Visibility.Visible;
+        _manualButton.IsEnabled = canEdit && _unmatchedRaw is not null && _manualPanel.Visibility != Visibility.Visible;
+        _manualPanel.IsEnabled = canEdit;
+        _confirmJoinButton.IsEnabled = canEdit;
+        _applyTrimButton.IsEnabled = canEdit && _manualPanel.Visibility != Visibility.Visible;
         _topTrimBox.IsEnabled = _bottomTrimBox.IsEnabled = _applyTrimButton.IsEnabled;
+        UpdateRangeControls();
     }
 
     private void SetStatus(string text, bool warning = false)
