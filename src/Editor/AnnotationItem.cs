@@ -22,6 +22,7 @@ internal sealed class AnnotationItem
     internal double TextWidth { get; set; }
     internal double TextBoxHeight { get; set; }
     internal BitmapSource? Mosaic { get; set; }
+    internal BitmapSource? Image { get; set; }
 
     internal AnnotationItem Clone() => new()
     {
@@ -36,7 +37,8 @@ internal sealed class AnnotationItem
         TextWidth = TextWidth,
         TextBoxHeight = TextBoxHeight,
         // BitmapSource instances are frozen before they are stored.
-        Mosaic = Mosaic
+        Mosaic = Mosaic,
+        Image = Image
     };
 
     internal WpfRect Bounds
@@ -90,6 +92,7 @@ internal sealed class AnnotationItem
         TextWidth = source.TextWidth;
         TextBoxHeight = source.TextBoxHeight;
         Mosaic = source.Mosaic;
+        Image = source.Image;
         Points.Clear();
         Points.AddRange(source.Points);
     }
@@ -101,6 +104,7 @@ internal sealed class AnnotationItem
         return Tool == other.Tool && SamePoint(Start, other.Start) && SamePoint(End, other.End)
             && Color == other.Color && Near(Width, other.Width) && Near(FontSize, other.FontSize)
             && Near(TextWidth, other.TextWidth) && Near(TextBoxHeight, other.TextBoxHeight)
+            && ReferenceEquals(Image, other.Image)
             && Text.Replace("\r\n", "\n", StringComparison.Ordinal) == other.Text.Replace("\r\n", "\n", StringComparison.Ordinal)
             && Points.Count == other.Points.Count && Points.Zip(other.Points).All(pair => SamePoint(pair.First, pair.Second));
     }
@@ -119,6 +123,10 @@ internal sealed class AnnotationItem
 
         switch (Tool)
         {
+            case AnnotationTool.Image:
+                if (Image is not null)
+                    context.DrawImage(Image, Bounds);
+                break;
             case AnnotationTool.Arrow:
                 DrawArrow(context, pen, brush);
                 break;
@@ -150,7 +158,7 @@ internal sealed class AnnotationItem
 
     internal bool HitTest(WpfPoint point, double tolerance)
     {
-        if (Tool is AnnotationTool.Text or AnnotationTool.Mosaic)
+        if (Tool is AnnotationTool.Text or AnnotationTool.Mosaic or AnnotationTool.Image)
         {
             WpfRect bounds = Bounds;
             bounds.Inflate(tolerance, tolerance);

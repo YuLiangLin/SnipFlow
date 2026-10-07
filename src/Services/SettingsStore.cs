@@ -40,9 +40,18 @@ public static class SettingsStore
             try { settings.CaptureSaveDirectory = NormalizeCaptureSaveDirectory(settings.CaptureSaveDirectory); }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
             { settings.CaptureSaveDirectory = DefaultCaptureSaveDirectory; }
+            RefreshStartupPreference(settings);
             return settings;
         }
-        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { return new(); }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            var settings = new UserSettings(); RefreshStartupPreference(settings); return settings;
+        }
+    }
+    static void RefreshStartupPreference(UserSettings settings)
+    {
+        try { settings.StartWithWindows = StartupService.ReadRegistration().IsEnabled; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException) { }
     }
     public static string NormalizeCaptureSaveDirectory(string directory)
     {
@@ -53,6 +62,7 @@ public static class SettingsStore
     }
     public static void Save()
     {
+        RefreshStartupPreference(Current);
         Directory.CreateDirectory(DataRoot);
         var path = Path.Combine(DataRoot, "settings.json");
         File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(Current, JsonOptions));

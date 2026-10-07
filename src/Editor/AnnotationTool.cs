@@ -9,5 +9,6 @@ public enum AnnotationTool
     Pen,
     Highlight,
     Text,
-    Mosaic
+    Mosaic,
+    Image
 }

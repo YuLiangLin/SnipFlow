@@ -101,8 +101,16 @@ public partial class MainWindow : Window
         capturePending = true;
         try
         {
-            if (!PrepareToDiscard()) return;
+            bool appendToCollage = Editor.IsCollage;
+            if (appendToCollage)
+            {
+                if (Editor.ImageCount >= 24) { SetStatus("每份合圖最多可放入 24 張圖片。"); return; }
+                Editor.CaptureSession();
+            }
+            else if (!PrepareToDiscard()) return;
+            int expectedGeneration = documentGeneration;
             busy = true; var wasVisible = IsVisible;
+            RefreshDocumentState();
             Hide(); await Task.Delay(220);
             var result = await ScreenshotService.CaptureRegionAsync();
             if (result == null) { if (wasVisible) { Show(); Activate(); } return; }
@@ -113,11 +121,19 @@ public partial class MainWindow : Window
                 if (window.ShowDialog() != true || window.Result == null) { if (wasVisible) { Show(); Activate(); } return; }
                 image = window.Result;
             }
+            if (expectedGeneration != documentGeneration || appendToCollage != Editor.IsCollage)
+                throw new InvalidOperationException(I18n.T("目前文件已變更，請重新截圖。"));
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
-            LoadDocument(image); ApplyWindowMode(false); Show(); Activate();
+            if (appendToCollage)
+            {
+                Editor.AddImages(new[] { image });
+                ToolClick(new Button { Tag = "Select" }, new());
+            }
+            else LoadDocument(image);
+            ApplyWindowMode(false); Show(); Activate();
             await AddHistoryAsync(image);
             if (SettingsStore.Current.CopyAfterCapture) await CopyImageAsync(image);
-            SetStatus(SettingsStore.Current.CopyAfterCapture ? "截圖完成，已複製到剪貼簿。" : "截圖完成，可以開始標註。");
+            SetStatus(Editor.IsCollage ? "截圖已加入合圖。" : SettingsStore.Current.CopyAfterCapture ? "截圖完成，已複製到剪貼簿。" : "截圖完成，可以開始標註。");
         }
         catch (Exception ex) { Show(); Activate(); ReportError(ex, "截圖未完成"); }
         finally { busy = false; capturePending = false; RefreshDocumentState(); QueueAutoSave(); }
@@ -147,18 +163,19 @@ public partial class MainWindow : Window
     }
     public void OpenImage(string path)
     {
+        if (Path.GetExtension(path).Equals(".snipflow", StringComparison.OrdinalIgnoreCase)) { OpenProject(path); return; }
         if (busy || !PrepareToDiscard()) return;
         try { var image = HistoryStore.Read(path); LoadDocument(image); ApplyWindowMode(false); ImageInfo.Text = $"{image.PixelWidth:N0} × {image.PixelHeight:N0} px"; SetStatus("已開啟 {0}", Path.GetFileName(path)); RefreshDocumentState(); }
         catch (Exception ex) { ReportError(ex, "圖片無法開啟"); }
     }
     void LoadDocument(BitmapSource image)
     {
-        autoSaveTimer.Stop(); documentGeneration++; autoSavePath = null; autoSavedRevision = -1;
+        ResetDocumentStorage();
         Editor.LoadImage(image);
     }
     internal void RestoreAfterUpdate(string directory)
     {
-        autoSaveTimer.Stop(); documentGeneration++; autoSavePath = null; autoSavedRevision = -1;
+        ResetDocumentStorage();
         try
         {
             EditorSessionStore.Restore(Editor, directory);
@@ -206,19 +223,24 @@ public partial class MainWindow : Window
         try
         {
             var image = Editor.ExportImage();
+            var project = Editor.IsCollage ? Editor.CaptureSession() : null;
             revision = Editor.Revision;
             var path = autoSavePath ??= CaptureFileStore.CreatePath(autoSaveDirectory);
             // The last saved revision becomes uncertain as soon as a replacement starts.
             // Undoing back to it must still wait for, and replace, the pending write.
             autoSavedRevision = -1; Editor.MarkUnsaved();
-            autoSaveWrite = Task.Run(() => CaptureFileStore.Save(image, path));
+            autoSaveWrite = Task.Run(() =>
+            {
+                CaptureFileStore.Save(image, path);
+                if (project is not null) EditorSessionStore.SaveProject(project, Path.ChangeExtension(path, ".snipflow"));
+            });
             await autoSaveWrite;
             if (!isClosed && SettingsStore.Current.AutoSaveCaptures && generation == documentGeneration && sequence == autoSaveSequence && path == autoSavePath)
             {
                 autoSavedRevision = revision;
                 if (Editor.Revision == revision && !Editor.IsInteracting)
                 {
-                    Editor.MarkSaved(); SetStatus("已自動儲存：{0}", path);
+                    Editor.MarkSaved(); SetStatus(project is null ? "已自動儲存：{0}" : "已自動儲存 PNG 與可編輯專案：{0}", project is null ? path : Path.ChangeExtension(path, ".snipflow"));
                 }
             }
         }
@@ -247,8 +269,9 @@ public partial class MainWindow : Window
             var image = Editor.ExportImage();
             var path = autoSavePath ??= CaptureFileStore.CreatePath(autoSaveDirectory);
             CaptureFileStore.Save(image, path);
+            if (Editor.IsCollage) EditorSessionStore.SaveProject(Editor, Path.ChangeExtension(path, ".snipflow"));
             autoSavedRevision = Editor.Revision; Editor.MarkSaved();
-            SetStatus("已自動儲存：{0}", path);
+            SetStatus(Editor.IsCollage ? "已自動儲存 PNG 與可編輯專案：{0}" : "已自動儲存：{0}", Editor.IsCollage ? Path.ChangeExtension(path, ".snipflow") : path);
             return true;
         }
         catch (Exception ex)
@@ -267,7 +290,13 @@ public partial class MainWindow : Window
         if (Editor == null) return;
         EmptyState.Visibility = Editor.HasImage ? Visibility.Collapsed : Visibility.Visible;
         CopyButton.IsEnabled = SaveButton.IsEnabled = OcrButton.IsEnabled = Editor.HasImage && !busy;
-        UndoButton.IsEnabled = Editor.CanUndo; RedoButton.IsEnabled = Editor.CanRedo;
+        Editor.IsEnabled = !busy;
+        CollageBar.Visibility = Editor.IsCollage ? Visibility.Visible : Visibility.Collapsed;
+        AddImagesButton.IsEnabled = ProjectButton.IsEnabled = !busy;
+        ImageInfo.Text = Editor.HasImage ? $"{Editor.PixelWidth:N0} × {Editor.PixelHeight:N0} px" : "";
+        UndoButton.IsEnabled = Editor.CanUndo && !busy && !capturePending;
+        RedoButton.IsEnabled = Editor.CanRedo && !busy && !capturePending;
+        Workspace.IsEnabled = CompactPanel.IsEnabled = HeaderCapture.IsEnabled = !busy && !capturePending;
         Title = Editor.HasEdits ? "SnipFlow *" : "SnipFlow";
         if (Editor.HasImage && !hadImage) ApplyWindowMode(false);
         hadImage = Editor.HasImage;
@@ -331,7 +360,8 @@ public partial class MainWindow : Window
             var shownTool = Editor.SelectedTool ?? activeTool;
             ToolLabel.Text = ToolName(shownTool);
             TextProperties.Visibility = shownTool == AnnotationTool.Text ? Visibility.Visible : Visibility.Collapsed;
-            WidthProperties.Visibility = shownTool == AnnotationTool.Text ? Visibility.Collapsed : Visibility.Visible;
+            WidthProperties.Visibility = shownTool is AnnotationTool.Text or AnnotationTool.Image ? Visibility.Collapsed : Visibility.Visible;
+            ColorButtons.Visibility = shownTool is AnnotationTool.Image or AnnotationTool.Mosaic ? Visibility.Collapsed : Visibility.Visible;
             WidthSlider.Value = Editor.SelectedStrokeWidth ?? Editor.StrokeWidth;
             if (!TextSizeBox.IsKeyboardFocusWithin) TextSizeBox.Text = (Editor.SelectedTextSize ?? Editor.TextSize).ToString("0.#", CultureInfo.CurrentCulture);
             var color = Editor.SelectedColor ?? activeColor;
@@ -344,7 +374,7 @@ public partial class MainWindow : Window
         }
         finally { refreshingProperties = false; }
     }
-    static string ToolKey(AnnotationTool tool) => tool switch { AnnotationTool.Select => "選取／移動", AnnotationTool.Arrow => "箭頭", AnnotationTool.Rectangle => "矩形", AnnotationTool.Ellipse => "橢圓", AnnotationTool.Pen => "畫筆", AnnotationTool.Highlight => "螢光筆", AnnotationTool.Text => "文字", _ => "馬賽克" };
+    static string ToolKey(AnnotationTool tool) => tool switch { AnnotationTool.Select => "選取／移動", AnnotationTool.Arrow => "箭頭", AnnotationTool.Rectangle => "矩形", AnnotationTool.Ellipse => "橢圓", AnnotationTool.Pen => "畫筆", AnnotationTool.Highlight => "螢光筆", AnnotationTool.Text => "文字", AnnotationTool.Image => "圖片", _ => "馬賽克" };
     static string ToolName(AnnotationTool tool) => I18n.T(ToolKey(tool));
     void RefreshHistory()
     {
@@ -355,7 +385,7 @@ public partial class MainWindow : Window
     }
     async Task AddHistoryAsync(BitmapSource image)
     {
-        try { await Task.Run(() => HistoryStore.Add(image)); RefreshHistory(); ImageInfo.Text = $"{image.PixelWidth:N0} × {image.PixelHeight:N0} px"; }
+        try { await Task.Run(() => HistoryStore.Add(image)); RefreshHistory(); RefreshDocumentState(); }
         catch (Exception ex) { ReportError(ex, "截圖已完成，但歷史儲存失敗"); }
     }
     async Task CopyImageAsync(BitmapSource image)
@@ -386,10 +416,14 @@ public partial class MainWindow : Window
         {
             FinishAutoSaveWrite();
             var isAutoSaveFile = string.Equals(Path.GetFullPath(dialog.FileName), autoSavePath, StringComparison.OrdinalIgnoreCase);
-            if (isAutoSaveFile) autoSaveSequence++;
+            if (isAutoSaveFile) { autoSaveSequence++; autoSavedRevision = -1; }
             var image = Editor.ExportImage(); CaptureFileStore.Save(image, dialog.FileName);
-            if (isAutoSaveFile) autoSavedRevision = Editor.Revision;
-            Editor.MarkSaved(); HistoryStore.Add(image); RefreshHistory(); SetStatus("已儲存 {0}", Path.GetFileName(dialog.FileName));
+            if (!Editor.IsCollage)
+            {
+                if (isAutoSaveFile) autoSavedRevision = Editor.Revision;
+                Editor.MarkSaved();
+            }
+            HistoryStore.Add(image); RefreshHistory(); SetStatus("已儲存 {0}", Path.GetFileName(dialog.FileName));
             return true;
         }
         catch (Exception ex) { ReportError(ex, "儲存失敗"); return false; }
@@ -404,17 +438,22 @@ public partial class MainWindow : Window
         if (!hasUnsavedEdits && !needsAutoSave) return true;
         if (SaveAutomaticallyBeforeDiscard()) return true;
         Show(); if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal; Activate();
-        var result = MessageBox.Show(this, I18n.T(hasUnsavedEdits ? "目前的標註尚未儲存，要先存成 PNG 嗎？" : "自動儲存未完成，要改為手動儲存嗎？"), I18n.T("保留標註"), MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
-        return result == MessageBoxResult.No || result == MessageBoxResult.Yes && SaveCurrent();
+        var result = MessageBox.Show(this, I18n.T(Editor.IsCollage ? "合圖尚未儲存，要先儲存可編輯專案嗎？" : hasUnsavedEdits ? "目前的標註尚未儲存，要先存成 PNG 嗎？" : "自動儲存未完成，要改為手動儲存嗎？"), I18n.T("保留標註"), MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+        return result == MessageBoxResult.No || result == MessageBoxResult.Yes && SaveDocument();
     }
     void OpenClick(object sender, RoutedEventArgs e)
     {
-        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = I18n.T("圖片|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff|所有檔案|*.*") };
+        if (busy || capturePending) return;
+        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = I18n.T("圖片與 SnipFlow 專案|*.snipflow;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff|所有檔案|*.*") };
         if (dialog.ShowDialog(this) == true) OpenImage(dialog.FileName);
     }
     void ImageDropped(object sender, DragEventArgs e)
     {
-        if (e.Data.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0) OpenImage(files[0]);
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] files || files.Length == 0) return;
+        if (files.Length == 1 && Path.GetExtension(files[0]).Equals(".snipflow", StringComparison.OrdinalIgnoreCase)) OpenProject(files[0]);
+        else if (Editor.IsCollage || files.Length > 1) AddImageFiles(files);
+        else OpenImage(files[0]);
+        e.Handled = true;
     }
     void ToolClick(object sender, RoutedEventArgs e)
     {
@@ -440,11 +479,15 @@ public partial class MainWindow : Window
         if (double.TryParse(TextSizeBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var size) && double.IsFinite(size)) Editor.TextSize = Math.Clamp(size, 12, 240);
         TextSizeBox.Text = (Editor.SelectedTextSize ?? Editor.TextSize).ToString("0.#", CultureInfo.CurrentCulture);
     }
-    void UndoClick(object sender, RoutedEventArgs e) => Editor.Undo();
-    void RedoClick(object sender, RoutedEventArgs e) => Editor.Redo();
+    void UndoClick(object sender, RoutedEventArgs e) { if (!busy && !capturePending) Editor.Undo(); }
+    void RedoClick(object sender, RoutedEventArgs e) { if (!busy && !capturePending) Editor.Redo(); }
     void HistorySelected(object sender, SelectionChangedEventArgs e)
     {
-        if (!selectingHistory && HistoryList.SelectedItem is HistoryItem item) OpenImage(item.Path);
+        if (!selectingHistory && HistoryList.SelectedItem is HistoryItem item)
+        {
+            if (Editor.IsCollage) AddImageFiles(new[] { item.Path });
+            else OpenImage(item.Path);
+        }
     }
     async void OcrClick(object sender, RoutedEventArgs e)
     {
@@ -491,10 +534,11 @@ public partial class MainWindow : Window
     }
     void WindowKeyDown(object sender, KeyEventArgs e)
     {
+        if (busy || capturePending) return;
         var modifiers = Keyboard.Modifiers;
         if (Editor.IsTextEditing)
         {
-            if (modifiers == ModifierKeys.Control && e.Key == Key.S) { Editor.CommitTextEdit(); SaveCurrent(); e.Handled = true; }
+            if (modifiers == ModifierKeys.Control && e.Key == Key.S) { Editor.CommitTextEdit(); SaveDocument(); e.Handled = true; }
             return;
         }
         if (Keyboard.FocusedElement is TextBox)
@@ -502,22 +546,41 @@ public partial class MainWindow : Window
             if (modifiers == ModifierKeys.Control && e.Key == Key.S)
             {
                 if (TextSizeBox.IsKeyboardFocusWithin) ApplyTextSize();
-                SaveCurrent(); e.Handled = true;
+                SaveDocument(); e.Handled = true;
             }
             return;
         }
         if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Z)
         { Editor.Redo(); e.Handled = true; return; }
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.S)
+        { SaveProjectCurrent(saveAs: true); e.Handled = true; return; }
         if (modifiers == ModifierKeys.Control)
         {
-            if (e.Key == Key.S) SaveCurrent();
+            if (e.Key == Key.S) SaveDocument();
             else if (e.Key == Key.O) OpenClick(this, new());
             else if (e.Key == Key.C) CopyClick(this, new());
             else if (e.Key == Key.Z) Editor.Undo();
             else if (e.Key == Key.Y) Editor.Redo();
+            else if (e.Key == Key.A) Editor.SelectAll();
+            else if (e.Key == Key.D) RunObjectCommand(Editor.DuplicateSelection);
             else if (e.Key == Key.V)
             {
-                if (PrepareToDiscard()) try { if (Clipboard.ContainsImage()) { var image = Clipboard.GetImage(); if (image != null) { image.Freeze(); LoadDocument(image); ApplyWindowMode(false); ImageInfo.Text = $"{image.PixelWidth} × {image.PixelHeight} px"; } } } catch (Exception ex) { ReportError(ex, "貼上失敗"); }
+                try
+                {
+                    if (Clipboard.ContainsImage())
+                    {
+                        var image = Clipboard.GetImage();
+                        if (image != null)
+                        {
+                            image.Freeze();
+                            if (Editor.IsCollage) Editor.AddImages(new[] { image });
+                            else if (PrepareToDiscard()) LoadDocument(image);
+                            ApplyWindowMode(false);
+                            RefreshDocumentState();
+                        }
+                    }
+                }
+                catch (Exception ex) { ReportError(ex, "貼上失敗"); }
             }
             else return;
             e.Handled = true; return;

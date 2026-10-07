@@ -36,6 +36,7 @@
               <Button Click="ScrollClick" ToolTip="{ui:Tr '長頁捲動截圖'}" AutomationProperties.Name="{ui:Tr '長頁捲動截圖'}"><TextBlock Text="&#xE8CB;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="RecordClick" ToolTip="{ui:Tr '螢幕錄影'}" AutomationProperties.Name="{ui:Tr '螢幕錄影'}"><TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="OpenClick" ToolTip="{ui:Tr '開啟圖片'}" AutomationProperties.Name="{ui:Tr '開啟圖片'}"><TextBlock Text="&#xE8E5;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
+              <Button Click="CollageClick" ToolTip="{ui:Tr '多張合圖'}" AutomationProperties.Name="{ui:Tr '多張合圖'}"><TextBlock Text="&#xE8A9;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               </StackPanel>
             </ScrollViewer>
             <StackPanel Grid.Row="1">
@@ -44,14 +45,14 @@
             </StackPanel>
           </Grid>
         </Border>
-        <Grid Grid.Column="1"><Grid.RowDefinitions><RowDefinition Height="48" /><RowDefinition Height="40" /><RowDefinition /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+        <Grid Grid.Column="1"><Grid.RowDefinitions><RowDefinition Height="48" /><RowDefinition Height="40" /><RowDefinition Height="Auto" /><RowDefinition /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
           <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
             <DockPanel Margin="12,8">
               <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                 <Button x:Name="CopyButton" Content="{ui:Tr '複製含標註圖片'}" Click="CopyClick" Style="{StaticResource QuietButton}" AutomationProperties.Name="{ui:Tr '複製含標註圖片'}" Margin="0,0,6,0">
                   <Button.ToolTip><StackPanel><TextBlock Text="{ui:Tr '複製含標註圖片'}" /><TextBlock Text="Ctrl + C" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,4,0,0" /></StackPanel></Button.ToolTip>
                 </Button>
-                <Button x:Name="SaveButton" Content="{ui:Tr '儲存'}" Click="SaveClick" Style="{StaticResource QuietButton}" Background="{StaticResource Raised}" ToolTip="Ctrl + S" />
+                <Button x:Name="SaveButton" Content="{ui:Tr '儲存 PNG'}" Click="SaveClick" Style="{StaticResource QuietButton}" Background="{StaticResource Raised}" ToolTip="{ui:Tr '匯出含標註圖片'}" />
               </StackPanel>
               <StackPanel Orientation="Horizontal" x:Name="ToolButtons">
                 <StackPanel.Resources><Style TargetType="Button" BasedOn="{StaticResource QuietButton}"><Setter Property="Padding" Value="7,3" /><Setter Property="MinWidth" Value="32" /></Style></StackPanel.Resources>
@@ -85,8 +86,19 @@
               </StackPanel>
             </DockPanel>
           </Border>
-          <editor:EditorView Grid.Row="2" x:Name="Editor" />
-          <Grid Grid.Row="2" x:Name="EmptyState" Background="{StaticResource Bg}">
+          <Border Grid.Row="2" x:Name="CollageBar" Visibility="Collapsed" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+            <WrapPanel Margin="12,6">
+              <WrapPanel.Resources><Style TargetType="Button" BasedOn="{StaticResource QuietButton}"><Setter Property="Padding" Value="10,5" /><Setter Property="Margin" Value="0,0,4,0" /></Style></WrapPanel.Resources>
+              <Button x:Name="AddImagesButton" Content="{ui:Tr '加入圖片'}" Click="AddImagesClick" ToolTip="{ui:Tr '多選檔案、拖入圖片或 Ctrl + V'}" />
+              <Button Content="{ui:Tr '排列 ▾'}" Click="ArrangeMenuClick" />
+              <Button Content="{ui:Tr '對齊 ▾'}" Click="AlignmentMenuClick" />
+              <Button Content="{ui:Tr '圖層 ▾'}" Click="OrderMenuClick" />
+              <Button Content="{ui:Tr '畫布 ▾'}" Click="CanvasMenuClick" />
+              <Button x:Name="ProjectButton" Content="{ui:Tr '儲存專案'}" Click="SaveProjectClick" Background="{StaticResource Raised}" ToolTip="{ui:Tr '保留圖片與可編輯標註 · Ctrl + S'}" />
+            </WrapPanel>
+          </Border>
+          <editor:EditorView Grid.Row="3" x:Name="Editor" />
+          <Grid Grid.Row="3" x:Name="EmptyState" Background="{StaticResource Bg}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="420" Margin="35">
               <Image Source="Assets/SnipFlow-v3.png" Width="96" Height="96" HorizontalAlignment="Center" Margin="0,0,0,20" />
               <Button Style="{StaticResource Primary}" Content="{ui:Tr '框選截圖'}" Click="CaptureClick" Width="180" Padding="16,13" HorizontalAlignment="Center" />
@@ -95,7 +107,7 @@
               <TextBlock Text="Ctrl + O ／ Ctrl + V" Foreground="{StaticResource Muted}" FontSize="12" HorizontalAlignment="Center" Margin="0,12,0,0" />
             </StackPanel>
           </Grid>
-          <Border Grid.Row="3" x:Name="UpdateBanner" Visibility="Collapsed" Background="{StaticResource Raised}" Padding="14,9"><DockPanel><Button Content="{ui:Tr '重新啟動更新'}" DockPanel.Dock="Right" Click="ApplyUpdateClick" Padding="10,4" Style="{StaticResource Primary}" /><TextBlock Text="{ui:Tr '新版本已下載。完成編輯後即可更新。'}" VerticalAlignment="Center" Foreground="{StaticResource Ink}" /></DockPanel></Border>
+          <Border Grid.Row="4" x:Name="UpdateBanner" Visibility="Collapsed" Background="{StaticResource Raised}" Padding="14,9"><DockPanel><Button Content="{ui:Tr '重新啟動更新'}" DockPanel.Dock="Right" Click="ApplyUpdateClick" Padding="10,4" Style="{StaticResource Primary}" /><TextBlock Text="{ui:Tr '新版本已下載。完成編輯後即可更新。'}" VerticalAlignment="Center" Foreground="{StaticResource Ink}" /></DockPanel></Border>
         </Grid>
         <Border Grid.Column="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1,0,0,0">
           <Grid><Grid.RowDefinitions><RowDefinition Height="48" /><RowDefinition /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
@@ -117,6 +129,7 @@
         <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Center">
           <Button Content="{ui:Tr '長截圖'}" Click="ScrollClick" Padding="9,8" Margin="0,0,3,0" />
           <Button Content="{ui:Tr '開啟圖片'}" Click="OpenClick" Padding="9,8" Margin="0,0,3,0" />
+          <Button Content="{ui:Tr '合圖'}" Click="CollageClick" Padding="9,8" Margin="0,0,3,0" />
           <Button x:Name="ExpandButton" Content="{ui:Tr '編輯器'}" Click="ExpandClick" Padding="9,8" Margin="0,0,3,0" />
           <Button Click="SettingsClick" ToolTip="{ui:Tr '設定'}" Padding="10,8"><TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons" FontSize="16" /></Button>
         </StackPanel>

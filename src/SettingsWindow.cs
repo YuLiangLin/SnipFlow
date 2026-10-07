@@ -90,7 +90,7 @@ public sealed class SettingsWindow : Window
             I18n.Changed -= OnLanguageChanged;
             SettingsStore.Changed -= OnSettingsChanged;
         };
-        SelectPane(showUpdates ? 2 : 0); ApplyLanguage();
+        SelectPane(showUpdates ? 2 : 0); ApplyLanguage(); SynchronizeOptions();
     }
 
     FrameworkElement BuildCaption()
@@ -297,23 +297,15 @@ public sealed class SettingsWindow : Window
         bool value = startup.IsChecked == true;
         if (SettingsStore.Current.StartWithWindows == value) return;
         var previous = SnapshotSettings();
-        object? previousRunValue = null; RegistryValueKind previousRunKind = RegistryValueKind.String;
+        StartupRegistration? previousRun = null;
         bool runChanged = false;
         try
         {
-            using var run = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-            previousRunValue = run.GetValue("SnipFlow", null, RegistryValueOptions.DoNotExpandEnvironmentNames);
-            if (previousRunValue != null) previousRunKind = run.GetValueKind("SnipFlow");
+            // Complete path validation before touching the existing Run value.
+            var command = value ? StartupService.CreateCommand() : null;
+            previousRun = StartupService.ReadRegistration();
             runChanged = true;
-            if (value)
-            {
-                var executable = Environment.ProcessPath ?? throw new InvalidOperationException(I18n.T("無法取得程式路徑。"));
-                var parent = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar));
-                var stable = parent == null ? "" : Path.Combine(parent.FullName, "SnipFlow.exe");
-                if (Path.GetFileName(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar)) == "current" && File.Exists(stable)) executable = stable;
-                run.SetValue("SnipFlow", $"\"{executable}\" --background");
-            }
-            else run.DeleteValue("SnipFlow", false);
+            StartupService.WriteCommand(command);
             SettingsStore.Current.StartWithWindows = value; SettingsStore.Save();
             SetFeedback("設定已自動儲存。", false);
         }
@@ -321,18 +313,15 @@ public sealed class SettingsWindow : Window
         {
             RestoreSettings(previous); SettingsStore.Log(ex);
             bool rollbackFailed = false;
-            if (runChanged)
+            if (runChanged && previousRun != null)
             {
-                try
-                {
-                    using var run = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-                    if (previousRunValue == null) run.DeleteValue("SnipFlow", false);
-                    else run.SetValue("SnipFlow", previousRunValue, previousRunKind);
-                }
+                try { StartupService.Restore(previousRun); }
                 catch (Exception rollbackError) { SettingsStore.Log(rollbackError); rollbackFailed = true; }
             }
             SynchronizeOptions();
-            SetFeedback(rollbackFailed ? "登入啟動未完整還原，請重新設定。" : "設定未儲存，請再試一次。");
+            SetFeedback(rollbackFailed ? "登入啟動未完整還原，請重新設定。"
+                : ex is FileNotFoundException ? "找不到可啟動的 SnipFlow 程式，登入啟動未變更。"
+                : ex is InvalidOperationException ? "目前執行的是預覽程式，無法設定登入啟動。" : "登入啟動未儲存，原設定已保留。");
         }
     }
 
@@ -445,7 +434,17 @@ public sealed class SettingsWindow : Window
         {
             var settings = SettingsStore.Current;
             copy.IsChecked = settings.CopyAfterCapture; history.IsChecked = settings.KeepHistory;
-            autoSave.IsChecked = settings.AutoSaveCaptures; startup.IsChecked = settings.StartWithWindows;
+            autoSave.IsChecked = settings.AutoSaveCaptures;
+            try
+            {
+                settings.StartWithWindows = StartupService.ReadRegistration().IsEnabled;
+                startup.IsChecked = settings.StartWithWindows; startup.IsEnabled = true;
+            }
+            catch (Exception ex)
+            {
+                SettingsStore.Log(ex); startup.IsChecked = settings.StartWithWindows; startup.IsEnabled = false;
+                SetFeedback("無法讀取登入啟動狀態，請稍後重試。");
+            }
             autoCheck.IsChecked = settings.AutoCheckUpdates; autoDownload.IsChecked = settings.AutoDownloadUpdates;
             captureFolder.Text = settings.CaptureSaveDirectory; captureFolder.ToolTip = captureFolder.Text;
             shortcut.Text = settings.Hotkey;

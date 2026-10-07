@@ -15,6 +15,38 @@
     <SolidColorBrush x:Key="Selected" Color="#333333" />
     <SolidColorBrush x:Key="Soft" Color="#242424" />
 
+    <Style TargetType="ContextMenu">
+      <Setter Property="Background" Value="{StaticResource Panel}" />
+      <Setter Property="Foreground" Value="{StaticResource Ink}" />
+      <Setter Property="FontFamily" Value="Segoe UI, Microsoft JhengHei UI" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Template"><Setter.Value>
+        <ControlTemplate TargetType="ContextMenu">
+          <Border Background="{TemplateBinding Background}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="8" Padding="5">
+            <ScrollViewer MaxHeight="600" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><ItemsPresenter /></ScrollViewer>
+          </Border>
+        </ControlTemplate>
+      </Setter.Value></Setter>
+    </Style>
+    <Style TargetType="MenuItem">
+      <Setter Property="Foreground" Value="{StaticResource Ink}" />
+      <Setter Property="Padding" Value="12,8" />
+      <Setter Property="Template"><Setter.Value>
+        <ControlTemplate TargetType="MenuItem">
+          <Border x:Name="MenuRow" Background="Transparent" CornerRadius="5" Padding="{TemplateBinding Padding}">
+            <ContentPresenter ContentSource="Header" RecognizesAccessKey="True" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="MenuRow" Property="Background" Value="{StaticResource Hover}" /></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.4" /></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value></Setter>
+    </Style>
+    <Style TargetType="Separator">
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Separator"><Border Height="1" Background="{StaticResource Line}" Margin="8,4" /></ControlTemplate></Setter.Value></Setter>
+    </Style>
+
     <Style x:Key="AppWindow" TargetType="Window">
       <Setter Property="Background" Value="{StaticResource Bg}" />
       <Setter Property="Foreground" Value="{StaticResource Ink}" />

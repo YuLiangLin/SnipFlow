@@ -13,7 +13,7 @@ namespace SnipFlow.Editor;
 /// <summary>
 /// A pixel-coordinate annotation canvas. Display zoom never changes exported dimensions.
 /// </summary>
-public sealed class EditorView : WpfUserControl
+public sealed partial class EditorView : WpfUserControl
 {
     private const string CanvasHint = "滾輪縮放 · 空白鍵拖曳 · Delete 刪除標註";
     private const string TextHint = "Ctrl + Enter 完成 · Esc 取消 · 點選外部完成";
@@ -78,7 +78,7 @@ public sealed class EditorView : WpfUserControl
     public double ZoomFactor => _zoom;
     public bool IsTextEditing => _textDraft is not null;
     public long Revision => _revision;
-    public bool IsInteracting => _textDraft is not null || _pending is not null || _transformSource is not null || _propertySource is not null;
+    public bool IsInteracting => _textDraft is not null || _pending is not null || _transformSource is not null || _propertySource is not null || _marqueeStart is not null;
     public AnnotationTool? SelectedTool => SelectedItem?.Tool;
     public WpfColor? SelectedColor => SelectedItem?.Color;
     public double? SelectedStrokeWidth => SelectedItem?.Width;
@@ -86,8 +86,8 @@ public sealed class EditorView : WpfUserControl
 
     private AnnotationItem? SelectedItem => _textDraft ?? _selected;
     private bool TextHasChanges => _textDraft is not null && (_textTarget is null ? !string.IsNullOrWhiteSpace(_textDraft.Text) : !_textDraft.ContentEquals(_textTarget));
-    private bool TransformHasChanges => _transformSource is not null && _selected is not null && !_selected.ContentEquals(_transformSource);
-    private bool PropertyHasChanges => _propertySource is not null && _propertyTarget is not null && !_propertyTarget.ContentEquals(_propertySource);
+    private bool TransformHasChanges => _transformSources.Any(pair => !pair.Key.ContentEquals(pair.Value));
+    private bool PropertyHasChanges => _propertySources.Any(pair => !pair.Key.ContentEquals(pair.Value));
 
     public double StrokeWidth
     {
@@ -100,7 +100,7 @@ public sealed class EditorView : WpfUserControl
             _strokeWidth = Math.Clamp(value, 1, 32);
             ChangeSelectedStyle(item =>
             {
-                if (item.Tool != AnnotationTool.Text)
+                if (item.Tool is not (AnnotationTool.Text or AnnotationTool.Image))
                     item.Width = _strokeWidth;
             });
         }
@@ -277,6 +277,8 @@ public sealed class EditorView : WpfUserControl
         _image.Freeze();
         _pixelSource = null;
         _annotations.Clear();
+        _selection.Clear();
+        IsCollage = false;
         _undo.Clear();
         _redo.Clear();
         _selected = null;
@@ -295,7 +297,7 @@ public sealed class EditorView : WpfUserControl
         RaiseChanged();
     }
 
-    internal (BitmapSource Image, List<AnnotationItem> Annotations, bool HasEdits) CaptureSession()
+    internal EditorSessionSnapshot CaptureSession()
     {
         VerifyAccess();
         if (_image is null)
@@ -303,10 +305,10 @@ public sealed class EditorView : WpfUserControl
         CompleteGesture();
         CommitTextEdit();
         EndPropertyEdit();
-        return (_image, _annotations.Select(item => item.Clone()).ToList(), HasEdits);
+        return new(_image, _annotations.Select(item => item.Clone()).ToList(), HasEdits, IsCollage);
     }
 
-    internal void RestoreSession(BitmapSource image, IReadOnlyList<AnnotationItem> annotations, bool hasEdits)
+    internal void RestoreSession(BitmapSource image, IReadOnlyList<AnnotationItem> annotations, bool hasEdits, bool isCollage = false)
     {
         VerifyAccess();
         ArgumentNullException.ThrowIfNull(image);
@@ -317,6 +319,7 @@ public sealed class EditorView : WpfUserControl
         try
         {
             LoadImage(image);
+            IsCollage = isCollage;
             _annotations.AddRange(restored);
             _revision = _nextRevision = restored.Count > 0 || hasEdits ? 1 : 0;
             _savedRevision = hasEdits ? -1 : _revision;
@@ -418,7 +421,7 @@ public sealed class EditorView : WpfUserControl
         _color = color;
         ChangeSelectedStyle(item =>
         {
-            if (item.Tool != AnnotationTool.Mosaic)
+            if (item.Tool is not (AnnotationTool.Mosaic or AnnotationTool.Image))
                 item.Color = color;
         });
     }
@@ -429,11 +432,12 @@ public sealed class EditorView : WpfUserControl
         CommitTextEdit();
         EndPropertyEdit();
         CancelGesture();
-        if (_selected is null)
+        if (_selection.Count == 0)
             return;
         RememberMutation();
-        _annotations.Remove(_selected);
+        _annotations.RemoveAll(_selection.Contains);
         SelectItem(null);
+        RefreshMosaics();
         FinishMutation();
     }
 
@@ -465,9 +469,14 @@ public sealed class EditorView : WpfUserControl
     {
         if (!HasImage)
             return;
-        if (e.ChangedButton == MouseButton.Left && IsTextEditing && IsWithin(_textEditor, e.OriginalSource as DependencyObject))
+        if (IsTextEditing && IsWithin(_textEditor, e.OriginalSource as DependencyObject))
             return;
-
+        if (e.ChangedButton == MouseButton.Right)
+        {
+            ShowObjectMenu(ViewportToImage(e.GetPosition(_viewport)));
+            e.Handled = true;
+            return;
+        }
         if (e.ChangedButton == MouseButton.Middle || (e.ChangedButton == MouseButton.Left && _spaceDown))
         {
             CompleteGesture();
@@ -512,14 +521,31 @@ public sealed class EditorView : WpfUserControl
             AnnotationItem? item = _annotations.LastOrDefault(candidate => candidate.HitTest(point, 6 / _zoom));
             if (item is null && _selected is { Tool: AnnotationTool.Rectangle or AnnotationTool.Ellipse or AnnotationTool.Text or AnnotationTool.Mosaic } && _selected.Bounds.Contains(point))
                 item = _selected;
-            SelectItem(item);
-            if (_selected?.Tool == AnnotationTool.Text && e.ClickCount == 2)
+            bool extend = (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
+            if (item is null)
             {
-                BeginTextEdit(_selected, null, point);
+                _marqueeOriginal = extend ? new HashSet<AnnotationItem>(_selection) : new();
+                if (!extend) SelectItem(null);
+                _marqueeStart = point;
+                _marquee = new WpfRect(point, point);
+                _viewport.CaptureMouse();
+            }
+            else if (extend)
+            {
+                var selected = new HashSet<AnnotationItem>(_selection);
+                if (!selected.Add(item)) selected.Remove(item);
+                SetSelection(_annotations.Where(selected.Contains));
+            }
+            else if (!_selection.Contains(item))
+                SelectItem(item);
+            if (item?.Tool == AnnotationTool.Text && e.ClickCount == 2 && !extend)
+            {
+                SelectItem(item);
+                BeginTextEdit(item, null, point);
                 e.Handled = true;
                 return;
             }
-            if (_selected is not null)
+            if (item is not null && _selection.Contains(item) && !extend)
             {
                 BeginTransform(SelectionHandle.Move, point);
                 _viewport.CaptureMouse();
@@ -567,7 +593,13 @@ public sealed class EditorView : WpfUserControl
             return;
 
         WpfPoint point = ClampPoint(ViewportToImage(e.GetPosition(_viewport)));
-        if (_pending is not null)
+        if (_marqueeStart is not null)
+        {
+            _marquee = new WpfRect(_marqueeStart.Value, point);
+            _surface.InvalidateVisual();
+            e.Handled = true;
+        }
+        else if (_pending is not null)
         {
             UpdatePending(point);
             _surface.InvalidateVisual();
@@ -596,7 +628,7 @@ public sealed class EditorView : WpfUserControl
         }
         else if (_beforeTransform is not null)
             UpdateTransform(ClampPoint(ViewportToImage(e.GetPosition(_viewport))));
-        if (_panning || _pending is not null || _beforeTransform is not null)
+        if (_panning || _pending is not null || _beforeTransform is not null || _marqueeStart is not null)
         {
             CompleteGesture();
             e.Handled = true;
@@ -640,6 +672,23 @@ public sealed class EditorView : WpfUserControl
             || (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Z))
         {
             Redo();
+            e.Handled = true;
+        }
+        else if (modifiers == ModifierKeys.Control && e.Key == Key.A)
+        {
+            SelectAll();
+            e.Handled = true;
+        }
+        else if (modifiers == ModifierKeys.Control && e.Key == Key.D)
+        {
+            try { DuplicateSelection(); }
+            catch (Exception error) { AppDialog.Show(error.Message, I18n.T("無法複製物件"), MessageBoxButton.OK, MessageBoxImage.Warning); }
+            e.Handled = true;
+        }
+        else if ((modifiers is ModifierKeys.None or ModifierKeys.Shift) && e.Key is Key.Left or Key.Right or Key.Up or Key.Down)
+        {
+            double step = modifiers == ModifierKeys.Shift ? 10 : 1;
+            NudgeSelection(e.Key == Key.Left ? -step : e.Key == Key.Right ? step : 0, e.Key == Key.Up ? -step : e.Key == Key.Down ? step : 0);
             e.Handled = true;
         }
         else if (modifiers == ModifierKeys.None && (e.Key is Key.Delete or Key.Back))
@@ -704,7 +753,7 @@ public sealed class EditorView : WpfUserControl
                 TextBoxHeight = placement?.Height ?? 0
             };
         }
-        _selected = annotation;
+        SelectItem(annotation);
         UpdateTextEditor();
         _syncTextUi = true;
         _textEditor.IsUndoEnabled = false;
@@ -752,17 +801,18 @@ public sealed class EditorView : WpfUserControl
                     _annotations.Remove(target);
                 else
                     target.CopyFrom(draft);
-                _selected = empty ? null : target;
+                SelectItem(empty ? null : target);
             }
             else
             {
                 _annotations.Add(draft);
-                _selected = draft;
+                SelectItem(draft);
             }
+            RefreshMosaics();
             FinishMutation();
         }
         else
-            _selected = target;
+            SelectItem(target);
         _surface.InvalidateVisual();
         RaiseSelectionChanged();
         RaiseChanged();
@@ -775,7 +825,7 @@ public sealed class EditorView : WpfUserControl
             return;
         AnnotationItem? target = _textTarget;
         EndTextUi();
-        _selected = target;
+        SelectItem(target);
         _surface.InvalidateVisual();
         RaiseSelectionChanged();
         RaiseChanged();
@@ -788,7 +838,7 @@ public sealed class EditorView : WpfUserControl
         _textTarget = null;
         _beforeText = null;
         _textEditBorder.Visibility = Visibility.Collapsed;
-        _hintLabel.Text = I18n.T(CanvasHint);
+        RefreshLanguage();
         if (hadFocus)
             Focus();
         UpdateCursor();
@@ -870,18 +920,31 @@ public sealed class EditorView : WpfUserControl
 
     private void CompleteGesture()
     {
+        WpfRect? marquee = _marquee;
+        HashSet<AnnotationItem>? marqueeOriginal = _marqueeOriginal;
+        _marquee = null;
+        _marqueeStart = null;
+        _marqueeOriginal = null;
         AnnotationItem? pending = _pending;
         EditorState? before = _beforeTransform;
-        AnnotationItem? source = _transformSource;
+        bool transformed = TransformHasChanges;
         _pending = null;
         _beforeTransform = null;
         _transformSource = null;
+        _transformSources.Clear();
         _transformHandle = SelectionHandle.None;
         _panning = false;
         if (_viewport.IsMouseCaptured)
             _viewport.ReleaseMouseCapture();
 
-        if (pending?.Tool == AnnotationTool.Text)
+        if (marquee is not null)
+        {
+            var selected = marqueeOriginal ?? new HashSet<AnnotationItem>();
+            if (marquee.Value.Width * _zoom >= 3 || marquee.Value.Height * _zoom >= 3)
+                selected.UnionWith(_annotations.Where(item => marquee.Value.Contains(item.Bounds)));
+            SetSelection(_annotations.Where(selected.Contains));
+        }
+        else if (pending?.Tool == AnnotationTool.Text)
         {
             WpfRect? placement = pending.TextWidth > 0 ? pending.Bounds : null;
             BeginTextEdit(null, placement, pending.Start);
@@ -895,17 +958,13 @@ public sealed class EditorView : WpfUserControl
             SelectItem(pending);
             FinishMutation();
         }
-        else if (before is not null && source is not null && _selected is not null && !_selected.ContentEquals(source))
+        else if (before is not null && transformed)
         {
-            if (_selected.Tool == AnnotationTool.Mosaic)
-                PrepareMosaic(_selected);
-            if (!_selected.ContentEquals(source))
-            {
-                _undo.Push(before);
-                _redo.Clear();
-                FinishMutation();
-                RaiseSelectionChanged();
-            }
+            RefreshMosaics();
+            _undo.Push(before);
+            _redo.Clear();
+            FinishMutation();
+            RaiseSelectionChanged();
         }
 
         UpdateCursor();
@@ -918,6 +977,11 @@ public sealed class EditorView : WpfUserControl
         _pending = null;
         _beforeTransform = null;
         _transformSource = null;
+        _transformSources.Clear();
+        _marquee = null;
+        _marqueeStart = null;
+        if (_marqueeOriginal is not null) SetSelection(_annotations.Where(_marqueeOriginal.Contains));
+        _marqueeOriginal = null;
         _transformHandle = SelectionHandle.None;
         _panning = false;
         if (before is not null)
@@ -963,6 +1027,8 @@ public sealed class EditorView : WpfUserControl
         EndPropertyEdit();
         _beforeTransform = Snapshot();
         _transformSource = _selected.Clone();
+        _transformSources.Clear();
+        foreach (AnnotationItem item in _selection) _transformSources.Add(item, item.Clone());
         _transformHandle = handle;
         _transformAnchor = point;
         _hoverHandle = handle;
@@ -974,7 +1040,7 @@ public sealed class EditorView : WpfUserControl
         if (_selected is null || _transformSource is null || _image is null)
             return;
         AnnotationItem source = _transformSource;
-        _selected.CopyFrom(source);
+        foreach (var pair in _transformSources) pair.Key.CopyFrom(pair.Value);
         WpfVector delta = point - _transformAnchor;
         if (delta.LengthSquared < 0.0000000001)
         {
@@ -983,10 +1049,12 @@ public sealed class EditorView : WpfUserControl
         }
         if (_transformHandle == SelectionHandle.Move)
         {
-            WpfRect bounds = source.Bounds;
-            double x = Math.Clamp(bounds.X + delta.X, 0, Math.Max(0, _image.PixelWidth - bounds.Width));
-            double y = Math.Clamp(bounds.Y + delta.Y, 0, Math.Max(0, _image.PixelHeight - bounds.Height));
-            _selected.Offset(new WpfVector(x - bounds.X, y - bounds.Y));
+            delta = ClampOffset(BoundsOf(_transformSources.Values), delta);
+            foreach (var pair in _transformSources)
+            {
+                pair.Key.CopyFrom(pair.Value);
+                pair.Key.Offset(delta);
+            }
         }
         else if (_transformHandle is SelectionHandle.StartPoint or SelectionHandle.EndPoint)
         {
@@ -997,8 +1065,10 @@ public sealed class EditorView : WpfUserControl
         }
         else
         {
-            WpfRect original = EditableBounds(source);
-            WpfRect resized = ResizeBox(original, _transformHandle, delta, _selected.Tool == AnnotationTool.Text ? 12 : 2);
+            WpfRect original = source.Tool == AnnotationTool.Image ? source.Bounds : EditableBounds(source);
+            WpfRect resized = _selected.Tool == AnnotationTool.Image
+                ? ResizeImage(original, _transformHandle, delta)
+                : ResizeBox(original, _transformHandle, delta, _selected.Tool == AnnotationTool.Text ? 12 : 2);
             ApplyResize(_selected, source, original, resized);
         }
         _surface.InvalidateVisual();
@@ -1015,7 +1085,7 @@ public sealed class EditorView : WpfUserControl
         if (handle is SelectionHandle.TopLeft or SelectionHandle.Top or SelectionHandle.TopRight)
             top = ClampRange(top + delta.Y, 0, bottom - minimum);
         if (handle is SelectionHandle.BottomLeft or SelectionHandle.Bottom or SelectionHandle.BottomRight)
-            bottom = ClampRange(bottom + delta.Y, top + 2, _image!.PixelHeight);
+            bottom = ClampRange(bottom + delta.Y, top + minimum, _image!.PixelHeight);
         return new WpfRect(new WpfPoint(left, top), new WpfPoint(right, bottom));
     }
 
@@ -1061,6 +1131,15 @@ public sealed class EditorView : WpfUserControl
             yield return (SelectionHandle.EndPoint, item.End);
             yield break;
         }
+        if (item.Tool == AnnotationTool.Image)
+        {
+            WpfRect imageBounds = item.Bounds;
+            yield return (SelectionHandle.TopLeft, imageBounds.TopLeft);
+            yield return (SelectionHandle.TopRight, imageBounds.TopRight);
+            yield return (SelectionHandle.BottomRight, imageBounds.BottomRight);
+            yield return (SelectionHandle.BottomLeft, imageBounds.BottomLeft);
+            yield break;
+        }
         WpfRect bounds = EditableBounds(item);
         double middleX = bounds.X + bounds.Width / 2;
         double middleY = bounds.Y + bounds.Height / 2;
@@ -1076,7 +1155,7 @@ public sealed class EditorView : WpfUserControl
 
     private SelectionHandle HitSelectionHandle(WpfPoint point)
     {
-        if (_selected is null || IsTextEditing)
+        if (_selected is null || IsTextEditing || _selection.Count != 1)
             return SelectionHandle.None;
         var nearest = HandlePoints(_selected).OrderBy(handle => (handle.Position - point).LengthSquared).First();
         return (nearest.Position - point).Length <= 8 / _zoom ? nearest.Handle : SelectionHandle.None;
@@ -1093,6 +1172,8 @@ public sealed class EditorView : WpfUserControl
         _beforeProperty = Snapshot();
         _propertySource = _selected.Clone();
         _propertyTarget = _selected;
+        _propertySources.Clear();
+        foreach (AnnotationItem item in _selection) _propertySources.Add(item, item.Clone());
     }
 
     public void EndPropertyEdit()
@@ -1103,6 +1184,7 @@ public sealed class EditorView : WpfUserControl
         _beforeProperty = null;
         _propertySource = null;
         _propertyTarget = null;
+        _propertySources.Clear();
         if (before is not null && changed)
         {
             _undo.Push(before);
@@ -1113,6 +1195,24 @@ public sealed class EditorView : WpfUserControl
 
     private void ChangeSelectedStyle(Action<AnnotationItem> change)
     {
+        if (!IsTextEditing && _selection.Count > 1)
+        {
+            EditorState before = Snapshot();
+            var previousSelection = _selection.ToDictionary(item => item, item => item.Clone());
+            foreach (AnnotationItem selected in _selection) change(selected);
+            if (!previousSelection.Any(pair => !pair.Key.ContentEquals(pair.Value))) return;
+            RefreshMosaics();
+            if (_beforeProperty is null)
+            {
+                _undo.Push(before);
+                _redo.Clear();
+                FinishMutation();
+            }
+            _surface.InvalidateVisual();
+            RaiseSelectionChanged();
+            RaiseChanged();
+            return;
+        }
         AnnotationItem? item = SelectedItem;
         if (item is null)
             return;
@@ -1120,8 +1220,6 @@ public sealed class EditorView : WpfUserControl
         change(item);
         if (item.ContentEquals(previous))
             return;
-        if (item.Tool == AnnotationTool.Mosaic)
-            PrepareMosaic(item);
         if (IsTextEditing)
             UpdateTextEditor();
         else if (_beforeProperty is null)
@@ -1131,8 +1229,11 @@ public sealed class EditorView : WpfUserControl
             item.CopyFrom(previous);
             RememberMutation();
             item.CopyFrom(next);
+            RefreshMosaics();
             FinishMutation();
         }
+        else
+            RefreshMosaics();
         _surface.InvalidateVisual();
         RaiseSelectionChanged();
         RaiseChanged();
@@ -1160,16 +1261,19 @@ public sealed class EditorView : WpfUserControl
         _surface.InvalidateVisual();
     }
 
-    private EditorState Snapshot() => new(_revision, _annotations.Select(item => item.Clone()).ToList(), _selected is null ? -1 : _annotations.IndexOf(_selected));
+    private EditorState Snapshot() => new(_revision, _annotations.Select(item => item.Clone()).ToList(), _annotations.Select((item, index) => (item, index)).Where(pair => _selection.Contains(pair.item)).Select(pair => pair.index).ToArray(), _image, IsCollage);
 
     private void Restore(EditorState state)
     {
         _annotations.Clear();
         _annotations.AddRange(state.Items.Select(item => item.Clone()));
+        IsCollage = state.IsCollage;
+        if (state.Image is not null) SetBoard(state.Image);
         _revision = state.Revision;
-        _selected = state.SelectedIndex >= 0 && state.SelectedIndex < _annotations.Count ? _annotations[state.SelectedIndex] : null;
-        _surface.InvalidateVisual();
-        RaiseSelectionChanged();
+        SetSelection(state.SelectedIndices.Where(index => index >= 0 && index < _annotations.Count).Select(index => _annotations[index]));
+        if (_fitMode) FitToView();
+        else { ClampPan(); RefreshView(); }
+        RefreshLanguage();
     }
 
     private void PrepareMosaic(AnnotationItem item)
@@ -1186,15 +1290,42 @@ public sealed class EditorView : WpfUserControl
         item.Start = new WpfPoint(left, top);
         item.End = new WpfPoint(right, bottom);
 
-        if (_pixelSource is null)
+        BitmapSource pixelSource;
+        bool composite = _annotations.Any(annotation => annotation.Tool == AnnotationTool.Image);
+        if (composite)
         {
-            var source = new FormatConvertedBitmap(_image, PixelFormats.Pbgra32, null, 0);
+            var visual = new DrawingVisual();
+            using (DrawingContext context = visual.RenderOpen())
+            {
+                context.PushTransform(new TranslateTransform(-left, -top));
+                context.PushClip(new RectangleGeometry(new WpfRect(left, top, width, height)));
+                context.DrawImage(_image, new WpfRect(0, 0, PixelWidth, PixelHeight));
+                foreach (AnnotationItem annotation in _annotations)
+                {
+                    if (ReferenceEquals(annotation, item)) break;
+                    annotation.Draw(context);
+                }
+                context.Pop();
+                context.Pop();
+            }
+            var source = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+            source.Render(visual);
             source.Freeze();
-            _pixelSource = source;
+            pixelSource = source;
+        }
+        else
+        {
+            if (_pixelSource is null)
+            {
+                var source = new FormatConvertedBitmap(_image, PixelFormats.Pbgra32, null, 0);
+                source.Freeze();
+                _pixelSource = source;
+            }
+            pixelSource = _pixelSource;
         }
         int stride = checked(width * 4);
         var pixels = new byte[checked(stride * height)];
-        _pixelSource.CopyPixels(new Int32Rect(left, top, width, height), pixels, stride, 0);
+        pixelSource.CopyPixels(new Int32Rect(composite ? 0 : left, composite ? 0 : top, width, height), pixels, stride, 0);
         int blockSize = Math.Clamp((int)Math.Round(item.Width * 6), 16, 192);
         for (int blockY = 0; blockY < height; blockY += blockSize)
         {
@@ -1255,8 +1386,10 @@ public sealed class EditorView : WpfUserControl
             }
             else
                 _pending?.Draw(context, pixelsPerDip);
-            if (_selected is not null && !IsTextEditing)
-                DrawSelection(context, _selected);
+            if (!IsTextEditing)
+                foreach (AnnotationItem item in _selection) DrawSelection(context, item);
+            if (_marquee is not null)
+                context.DrawRectangle(BrushFor("#204AA5FF"), new Pen(BrushFor("#4AA5FF"), 1 / _zoom), _marquee.Value);
         }
     }
 
@@ -1266,8 +1399,9 @@ public sealed class EditorView : WpfUserControl
         if (item.Tool != AnnotationTool.Arrow)
             context.DrawRectangle(null, outline, EditableBounds(item));
         var handlePen = new Pen(BrushFor("#B8B8B8"), 1.5 / _zoom);
-        foreach (var handle in HandlePoints(item))
-            context.DrawEllipse(BrushFor("#ECECEC"), handlePen, handle.Position, 4 / _zoom, 4 / _zoom);
+        if (_selection.Count == 1)
+            foreach (var handle in HandlePoints(item))
+                context.DrawEllipse(BrushFor("#ECECEC"), handlePen, handle.Position, 4 / _zoom, 4 / _zoom);
     }
 
     private void ZoomFromCenter(double factor)
@@ -1336,13 +1470,7 @@ public sealed class EditorView : WpfUserControl
 
     private void SelectItem(AnnotationItem? item)
     {
-        if (!ReferenceEquals(_selected, item))
-        {
-            _selected = item;
-            _hoverHandle = SelectionHandle.None;
-            RaiseSelectionChanged();
-        }
-        _surface.InvalidateVisual();
+        SetSelection(item is null ? Array.Empty<AnnotationItem>() : new[] { item });
     }
 
     private void RaiseChanged()
@@ -1362,7 +1490,7 @@ public sealed class EditorView : WpfUserControl
             Dispatcher.BeginInvoke(new Action(RefreshLanguage));
     }
 
-    private void RefreshLanguage() => _hintLabel.Text = I18n.T(IsTextEditing ? TextHint : CanvasHint);
+    private void RefreshLanguage() => _hintLabel.Text = I18n.T(IsTextEditing ? TextHint : IsCollage ? "Ctrl / Shift 多選 · 拖曳空白處框選 · 方向鍵微調 · 右鍵排列" : CanvasHint);
 
     private static double RelativeLuminance(WpfColor color)
     {
@@ -1398,7 +1526,7 @@ public sealed class EditorView : WpfUserControl
 
     private static FrameworkElement CreateEmptyState() => new Grid { IsHitTestVisible = false };
 
-    private sealed record EditorState(long Revision, List<AnnotationItem> Items, int SelectedIndex);
+    private sealed record EditorState(long Revision, List<AnnotationItem> Items, int[] SelectedIndices, BitmapSource? Image, bool IsCollage);
 
     private sealed class ImageSurface(EditorView editor) : FrameworkElement
     {
