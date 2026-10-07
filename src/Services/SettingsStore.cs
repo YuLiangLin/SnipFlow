@@ -9,7 +9,7 @@ public sealed class UserSettings
     public bool CopyAfterCapture { get; set; } = true;
     public bool KeepHistory { get; set; } = true;
     public bool StartWithWindows { get; set; }
-    public string Hotkey { get; set; } = "Ctrl + Alt + S";
+    public string Hotkey { get; set; } = HotkeyGesture.DefaultShortcut;
     public int HistoryLimit { get; set; } = 80;
 }
 

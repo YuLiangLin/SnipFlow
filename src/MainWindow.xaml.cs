@@ -14,9 +14,10 @@ namespace SnipFlow;
 public partial class MainWindow : Window
 {
     public UpdateService Updates { get; } = new();
-    HwndSource? hotkeySource;
-    int hotkeyId = 1;
-    bool hotkeyActive;
+    GlobalHotkeyService? hotkeys;
+    bool capturePending;
+    public string? ActiveHotkey => hotkeys?.ActiveGesture?.ToString();
+    public string HotkeyError { get; private set; } = "";
     bool busy;
     bool selectingHistory;
     bool refreshingProperties;
@@ -29,8 +30,10 @@ public partial class MainWindow : Window
     bool showingUpdateStatus;
     AnnotationTool activeTool = AnnotationTool.Pen;
     Color activeColor = Color.FromRgb(99, 213, 197);
-    [DllImport("user32.dll", SetLastError = true)] static extern bool RegisterHotKey(IntPtr hwnd, int id, uint mods, uint key);
-    [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr hwnd, int id);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool IsWindowEnabled(IntPtr hwnd);
+    bool CanStartCapture => IsEnabled && IsWindowEnabled(new WindowInteropHelper(this).Handle);
     public MainWindow()
     {
         InitializeComponent(); ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
@@ -38,40 +41,52 @@ public partial class MainWindow : Window
         Editor.SelectionChanged += (_, _) => RefreshProperties();
         Updates.Changed += (_, _) => Dispatcher.BeginInvoke(() => { showingUpdateStatus = true; StatusText.Text = Updates.Status; UpdateBanner.Visibility = Updates.ReadyToRestart ? Visibility.Visible : Visibility.Collapsed; });
         I18n.Changed += LanguageChanged;
-        Closed += (_, _) => I18n.Changed -= LanguageChanged;
+        Closed += (_, _) => { I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
         ApplyWindowMode(true);
-        SourceInitialized += (_, _) =>
-        {
-            hotkeySource = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle); hotkeySource?.AddHook(HotkeyHook);
-            SetHotkey(SettingsStore.Current.Hotkey);
-        };
+        SourceInitialized += (_, _) => SetHotkey(SettingsStore.Current.Hotkey);
         Loaded += (_, _) => { RefreshHistory(); RefreshDocumentState(); };
     }
-    IntPtr HotkeyHook(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    void GlobalHotkeyPressed(object? sender, EventArgs e)
     {
-        if (message == 0x312 && wParam.ToInt32() == hotkeyId) { handled = true; _ = StartCaptureAsync(false); }
-        return IntPtr.Zero;
+        if (Keyboard.FocusedElement is HotkeyInputBox input && Window.GetWindow(input)?.IsActive == true && hotkeys?.ActiveGesture is { } gesture)
+        { input.SetGesture(gesture); return; }
+        if (CanStartCapture) _ = StartCaptureAsync(false);
     }
     public bool SetHotkey(string shortcut)
     {
-        var hwnd = new WindowInteropHelper(this).Handle;
-        uint modifiers = shortcut switch { "Ctrl + Shift + S" => 0x4006, "Alt + Shift + S" => 0x4005, _ => 0x4003 };
-        int next = hotkeyId + 1;
-        if (!RegisterHotKey(hwnd, next, modifiers, 0x53)) { SetStatus("{0} 已被其他程式使用；可透過按鈕或系統匣截圖。", shortcut); return false; }
-        if (hotkeyActive) UnregisterHotKey(hwnd, hotkeyId);
-        hotkeyId = next; hotkeyActive = true; HotkeyHint.Text = CompactHotkeyHint.Text = shortcut; return true;
+        if (!HotkeyGesture.TryParse(shortcut, out var gesture))
+        { HotkeyError = I18n.T("請使用至少兩個修飾鍵加字母／數字，或 F1–F11。"); RefreshHotkeyHint(); return false; }
+        try
+        {
+            if (hotkeys == null) { hotkeys = new GlobalHotkeyService(); hotkeys.Pressed += GlobalHotkeyPressed; }
+            if (!hotkeys.TryRegister(gesture, out var error))
+            {
+                HotkeyError = error == 1409 ? I18n.F("{0} 已被其他程式使用；可透過按鈕或系統匣截圖。", gesture.ToString())
+                    : I18n.F("{0} 無法啟用（Windows 錯誤 {1}）。", gesture.ToString(), error);
+                SetStatus(error == 1409 ? "{0} 已被其他程式使用；可透過按鈕或系統匣截圖。" : "{0} 無法啟用（Windows 錯誤 {1}）。", gesture.ToString(), error);
+                RefreshHotkeyHint(); return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            SettingsStore.Log(ex); HotkeyError = I18n.T("全域快捷鍵無法啟用。");
+            SetStatus("全域快捷鍵無法啟用。"); RefreshHotkeyHint(); return false;
+        }
+        HotkeyError = ""; RefreshHotkeyHint(); SetStatus("全域截圖快捷鍵：{0}", gesture.ToString()); return true;
     }
+    void RefreshHotkeyHint() => HotkeyHint.Text = CompactHotkeyHint.Text = ActiveHotkey ?? I18n.T("全域快捷鍵未啟用");
     public void ReleaseHotkey()
     {
-        if (hotkeyActive) UnregisterHotKey(new WindowInteropHelper(this).Handle, hotkeyId);
-        hotkeySource?.RemoveHook(HotkeyHook); hotkeyActive = false;
+        hotkeys?.Dispose(); hotkeys = null; RefreshHotkeyHint();
     }
     public async Task StartCaptureAsync(bool scrolling)
     {
-        if (busy || !PrepareToDiscard()) return;
-        busy = true; var wasVisible = IsVisible;
+        if (busy || capturePending || !CanStartCapture) return;
+        capturePending = true;
         try
         {
+            if (!PrepareToDiscard()) return;
+            busy = true; var wasVisible = IsVisible;
             Hide(); await Task.Delay(220);
             var result = await ScreenshotService.CaptureRegionAsync();
             if (result == null) { if (wasVisible) { Show(); Activate(); } return; }
@@ -82,17 +97,18 @@ public partial class MainWindow : Window
                 if (window.ShowDialog() != true || window.Result == null) { if (wasVisible) { Show(); Activate(); } return; }
                 image = window.Result;
             }
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             Editor.LoadImage(image); ApplyWindowMode(false); Show(); Activate();
             await AddHistoryAsync(image);
             if (SettingsStore.Current.CopyAfterCapture) await CopyImageAsync(image);
             SetStatus(SettingsStore.Current.CopyAfterCapture ? "截圖完成，已複製到剪貼簿。" : "截圖完成，可以開始標註。");
         }
         catch (Exception ex) { Show(); Activate(); ReportError(ex, "截圖未完成"); }
-        finally { busy = false; RefreshDocumentState(); }
+        finally { busy = false; capturePending = false; RefreshDocumentState(); }
     }
     public async Task StartRecordingAsync()
     {
-        if (busy) return;
+        if (busy || capturePending || !CanStartCapture) return;
         Editor.CommitTextEdit();
         busy = true; var wasVisible = IsVisible;
         RefreshDocumentState();
@@ -160,6 +176,7 @@ public partial class MainWindow : Window
     void LanguageChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(() =>
     {
         RefreshDocumentState();
+        RefreshHotkeyHint();
         StatusText.Text = showingUpdateStatus ? Updates.Status : I18n.F(statusKey, statusValues);
     });
     void SetStatus(string key, params object?[] values)
@@ -234,6 +251,7 @@ public partial class MainWindow : Window
         if (busy) return false;
         Editor.CommitTextEdit();
         if (!Editor.HasEdits) return true;
+        Show(); if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal; Activate();
         var result = MessageBox.Show(this, I18n.T("目前的標註尚未儲存，要先存成 PNG 嗎？"), I18n.T("保留標註"), MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         return result == MessageBoxResult.No || result == MessageBoxResult.Yes && SaveCurrent();
     }
@@ -290,7 +308,7 @@ public partial class MainWindow : Window
     }
     void SettingsClick(object sender, RoutedEventArgs e)
     {
-        new SettingsWindow(this) { Owner = this }.ShowDialog(); HotkeyHint.Text = CompactHotkeyHint.Text = SettingsStore.Current.Hotkey; RefreshHistory();
+        new SettingsWindow(this) { Owner = this }.ShowDialog(); RefreshHotkeyHint(); RefreshHistory();
     }
     void ApplyUpdateClick(object sender, RoutedEventArgs e)
     {
@@ -299,27 +317,29 @@ public partial class MainWindow : Window
     }
     void WindowKeyDown(object sender, KeyEventArgs e)
     {
+        var modifiers = Keyboard.Modifiers;
         if (Editor.IsTextEditing)
         {
-            if ((Keyboard.Modifiers & ModifierKeys.Control) != 0 && e.Key == Key.S) { Editor.CommitTextEdit(); SaveCurrent(); e.Handled = true; }
+            if (modifiers == ModifierKeys.Control && e.Key == Key.S) { Editor.CommitTextEdit(); SaveCurrent(); e.Handled = true; }
             return;
         }
         if (Keyboard.FocusedElement is TextBox)
         {
-            if ((Keyboard.Modifiers & ModifierKeys.Control) != 0 && e.Key == Key.S)
+            if (modifiers == ModifierKeys.Control && e.Key == Key.S)
             {
                 if (TextSizeBox.IsKeyboardFocusWithin) ApplyTextSize();
                 SaveCurrent(); e.Handled = true;
             }
             return;
         }
-        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Z)
+        { Editor.Redo(); e.Handled = true; return; }
+        if (modifiers == ModifierKeys.Control)
         {
-            if (e.Key == Key.N) { _ = StartCaptureAsync((Keyboard.Modifiers & ModifierKeys.Shift) != 0); }
-            else if (e.Key == Key.S) SaveCurrent();
+            if (e.Key == Key.S) SaveCurrent();
             else if (e.Key == Key.O) OpenClick(this, new());
             else if (e.Key == Key.C) CopyClick(this, new());
-            else if (e.Key == Key.Z) { if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) Editor.Redo(); else Editor.Undo(); }
+            else if (e.Key == Key.Z) Editor.Undo();
             else if (e.Key == Key.Y) Editor.Redo();
             else if (e.Key == Key.V)
             {
@@ -328,6 +348,7 @@ public partial class MainWindow : Window
             else return;
             e.Handled = true; return;
         }
+        if (modifiers != ModifierKeys.None) return;
         var key = e.Key switch { Key.V => "Select", Key.A => "Arrow", Key.R => "Rectangle", Key.E => "Ellipse", Key.P => "Pen", Key.H => "Highlight", Key.T => "Text", Key.M => "Mosaic", _ => null };
         if (key != null) { ToolClick(new Button { Tag = key }, new()); e.Handled = true; }
     }

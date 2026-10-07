@@ -8,6 +8,9 @@ namespace SnipFlow.Editor;
 
 internal sealed class AnnotationItem
 {
+    internal static Typeface TextTypeface { get; } = new(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
+    internal static CultureInfo TextCulture => CultureInfo.CurrentUICulture;
+
     internal AnnotationTool Tool { get; init; }
     internal WpfPoint Start { get; set; }
     internal WpfPoint End { get; set; }
@@ -102,7 +105,7 @@ internal sealed class AnnotationItem
             && Points.Count == other.Points.Count && Points.Zip(other.Points).All(pair => SamePoint(pair.First, pair.Second));
     }
 
-    internal void Draw(DrawingContext context)
+    internal void Draw(DrawingContext context, double pixelsPerDip = 1.0)
     {
         var brush = new SolidColorBrush(Color);
         brush.Freeze();
@@ -131,7 +134,7 @@ internal sealed class AnnotationItem
                 DrawStroke(context, brush);
                 break;
             case AnnotationTool.Text:
-                context.DrawText(FormatText(), Start);
+                context.DrawText(FormatText(pixelsPerDip), Start);
                 break;
             case AnnotationTool.Mosaic:
                 if (Mosaic is not null)
@@ -205,18 +208,22 @@ internal sealed class AnnotationItem
         return false;
     }
 
-    internal FormattedText FormatText()
+    internal FormattedText FormatText(double pixelsPerDip = 1.0)
     {
         var formatted = new FormattedText(
             Text,
-            CultureInfo.CurrentUICulture,
+            TextCulture,
             FlowDirection.LeftToRight,
-            new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal),
+            TextTypeface,
             FontSize,
             new SolidColorBrush(Color),
-            1.0)
+            null,
+            TextFormattingMode.Ideal,
+            pixelsPerDip)
         {
-            Trimming = TextTrimming.None
+            Trimming = TextTrimming.None,
+            TextAlignment = TextAlignment.Left,
+            LineHeight = 0
         };
         if (TextWidth > 0)
             formatted.MaxTextWidth = Math.Max(1, TextWidth);

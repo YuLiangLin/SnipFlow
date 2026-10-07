@@ -9,6 +9,7 @@ public sealed class SettingsWindow : Window
     readonly TextBlock updateStatus;
     readonly Button download;
     readonly Button restart;
+    readonly TextBlock hotkeyStatus;
     readonly List<(TextBlock Element, string Key)> localizedText = new();
     readonly List<(ContentControl Element, string Key)> localizedContent = new();
     readonly ComboBox language = new() { Width = 220, HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(8) };
@@ -40,10 +41,15 @@ public sealed class SettingsWindow : Window
         var history = AddCheck(body, "保留最近截圖（最多 80 張）", SettingsStore.Current.KeepHistory);
         var startup = AddCheck(body, "登入 Windows 後常駐系統匣", SettingsStore.Current.StartWithWindows);
         var row = new DockPanel { Margin = new Thickness(0,16,0,20) };
-        var label = BindText(new TextBlock { Width = 132, VerticalAlignment = VerticalAlignment.Center }, "框選快捷鍵"); DockPanel.SetDock(label, Dock.Left); row.Children.Add(label);
-        var combo = new ComboBox { Width = 200, HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(8) };
-        foreach (var key in new[] { "Ctrl + Alt + S", "Ctrl + Shift + S", "Alt + Shift + S" }) combo.Items.Add(key);
-        combo.SelectedItem = SettingsStore.Current.Hotkey; row.Children.Add(combo); body.Children.Add(row);
+        var label = BindText(new TextBlock { Width = 132, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap }, "全域截圖快捷鍵"); DockPanel.SetDock(label, Dock.Left); row.Children.Add(label);
+        var shortcut = new HotkeyInputBox(SettingsStore.Current.Hotkey) { Width = 252, HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(8), Margin = new Thickness(0,0,8,0) };
+        DockPanel.SetDock(shortcut, Dock.Left); row.Children.Add(shortcut);
+        var resetShortcut = BindContent(new Button { HorizontalAlignment = HorizontalAlignment.Left, Background = (Brush)FindResource("Raised") }, "預設");
+        resetShortcut.Click += (_, _) => { HotkeyGesture.TryParse(HotkeyGesture.DefaultShortcut, out var gesture); shortcut.SetGesture(gesture); };
+        row.Children.Add(resetShortcut); body.Children.Add(row);
+        body.Children.Add(BindText(new TextBlock { Foreground = (Brush)FindResource("Muted"), FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,6) }, "點選欄位後按下組合鍵。字母／數字須搭配 Ctrl、Alt、Shift 中至少兩個鍵；也可使用 F1–F11。"));
+        body.Children.Add(BindText(new TextBlock { Foreground = (Brush)FindResource("Muted"), FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,6) }, "焦點在其他程式、最小化或隱藏至系統匣時也能截圖。"));
+        hotkeyStatus = new TextBlock { FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,20) }; body.Children.Add(hotkeyStatus);
         Section(body, "版本與更新", $"SnipFlow {typeof(App).Assembly.GetName().Version?.ToString(3)} · GitHub Releases");
         var autoCheck = AddCheck(body, "自動檢查新版本（啟動時與每 4 小時）", SettingsStore.Current.AutoCheckUpdates);
         var autoDownload = AddCheck(body, "自動下載更新，下次啟動時套用", SettingsStore.Current.AutoDownloadUpdates);
@@ -63,8 +69,10 @@ public sealed class SettingsWindow : Window
         }
         save.Click += (_, _) =>
         {
-            var chosenKey = combo.SelectedItem as string ?? "Ctrl + Alt + S";
-            if (chosenKey != SettingsStore.Current.Hotkey && !shell.SetHotkey(chosenKey)) { MessageBox.Show(this, I18n.T("這組快捷鍵已被其他程式使用，請換一組。"), I18n.T("快捷鍵無法設定")); return; }
+            var chosenKey = shortcut.Shortcut;
+            var previousKey = SettingsStore.Current.Hotkey;
+            var previousActiveKey = shell.ActiveHotkey;
+            if (!shell.SetHotkey(chosenKey)) { RefreshHotkeyStatus(); MessageBox.Show(this, shell.HotkeyError, I18n.T("快捷鍵無法設定")); return; }
             try
             {
                 using var run = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
@@ -82,7 +90,12 @@ public sealed class SettingsWindow : Window
                 SettingsStore.Current.AutoCheckUpdates = autoCheck.IsChecked == true; SettingsStore.Current.AutoDownloadUpdates = autoDownload.IsChecked == true;
                 SettingsStore.Save(); DialogResult = true;
             }
-            catch (Exception ex) { SettingsStore.Log(ex); MessageBox.Show(this, ex.Message, I18n.T("設定未儲存")); }
+            catch (Exception ex)
+            {
+                SettingsStore.Current.Hotkey = previousKey;
+                if (previousActiveKey != null) shell.SetHotkey(previousActiveKey); else shell.ReleaseHotkey();
+                RefreshHotkeyStatus(); SettingsStore.Log(ex); MessageBox.Show(this, ex.Message, I18n.T("設定未儲存"));
+            }
         };
         shell.Updates.Changed += OnUpdateChanged;
         I18n.Changed += OnLanguageChanged;
@@ -123,7 +136,12 @@ public sealed class SettingsWindow : Window
         Title = I18n.T("SnipFlow · 設定");
         foreach (var entry in localizedText) entry.Element.Text = I18n.T(entry.Key);
         foreach (var entry in localizedContent) entry.Element.Content = I18n.T(entry.Key);
-        SynchronizeLanguageChoice(); RefreshUpdates();
+        SynchronizeLanguageChoice(); RefreshUpdates(); RefreshHotkeyStatus();
+    }
+    void RefreshHotkeyStatus()
+    {
+        hotkeyStatus.Text = shell.ActiveHotkey is { } active ? I18n.F("目前啟用：{0}", active) : I18n.T("全域快捷鍵未啟用");
+        hotkeyStatus.Foreground = (Brush)FindResource(shell.ActiveHotkey != null ? "Accent" : "Muted");
     }
     void OnUpdateChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(RefreshUpdates);
     void RefreshUpdates()

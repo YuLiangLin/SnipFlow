@@ -6,13 +6,14 @@ Windows 截圖、標註與錄影工具，以 C# / WPF 開發。預覽版支援�
 
 從 [GitHub Releases](https://github.com/YuLiangLin/SnipFlow/releases) 下載 `SnipFlow-win-Setup.exe`。安裝版支援自動更新；直接從 ZIP 或 build 資料夾執行的可攜版不會自行安裝更新。
 
-- `Ctrl + Alt + S`：全域框選截圖。可在設定改為 `Ctrl + Shift + S` 或 `Alt + Shift + S`。
+- `Ctrl + Alt + S`：預設全域框選截圖。焦點在瀏覽器或其他程式、SnipFlow 最小化或隱藏至系統匣時都可使用；程式須保持執行。
+- 設定的「全域截圖快捷鍵」欄位可直接按下自訂組合：字母／數字搭配 Ctrl、Alt、Shift 中至少兩個鍵，或 F1–F11。只在按「儲存設定」後套用；被其他程式占用時會提示並保留原有綁定。未啟用時會顯示狀態，儲存相同組合也能重試註冊。
 - 框選時 `Esc`／右鍵取消；支援多螢幕與跨螢幕範圍。
-- `Ctrl + N`：新截圖，`Ctrl + Shift + N`：長頁截圖，`Ctrl + O`：開啟圖片。
+- 長頁截圖使用「長截圖」按鈕；程式內 `Ctrl + O` 開啟圖片。Ctrl + N／Ctrl + Shift + N 不再綁定截圖。
 - `Ctrl + C`／`Ctrl + S`：複製／存成 PNG，`Ctrl + V`：貼上圖片。
-- `Ctrl + Z`／`Ctrl + Y`：復原／重做。
+- `Ctrl + Z`／`Ctrl + Y`：復原／重做；`Ctrl + Shift + Z` 也可重做。
 - `V / A / R / E / P / H / T / M`：選取、箭頭、矩形、橢圓、畫筆、螢光筆、文字、馬賽克。
-- 文字直接在畫布輸入；雙擊既有文字重新編輯，`Ctrl + Enter` 或點外部完成，`Esc` 取消。
+- 文字直接在畫布輸入；雙擊既有文字重新編輯，`Ctrl + Enter` 或點外部完成，`Esc` 取消。輸入、完成後顯示與匯出共用字型及排版設定。
 - 選取後可拖移標註、拖控制點調整大小；箭頭可拖兩端。屬性列可修改選取項目的顏色、粗細或字級。
 - PNG 儲存與截圖歷史是合成圖片；同一次編輯期間保留可修改的標註物件，重新開啟 PNG 不含物件資料。
 - 滾輪縮放；中鍵或空白鍵拖曳移動畫布。
@@ -55,7 +56,7 @@ dotnet run --project src/SnipFlow.csproj
 `build-release.ps1` 建立自含執行環境的 Windows x64 發布目錄與 Velopack 安裝包。它只打包本專案程式檔案，不打包使用者資料。`-Version` 決定應用程式與套件版本。產物在 `release/`；發布到 GitHub 後，已安裝的舊版才能取得更新。
 
 ```powershell
-./build-release.ps1 -Version 0.3.0
+./build-release.ps1 -Version 0.3.1
 ```
 
 ## 驗證範圍

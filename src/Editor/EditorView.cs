@@ -130,7 +130,13 @@ public sealed class EditorView : WpfUserControl
             Background = BrushFor("#0C111B"),
             ClipToBounds = true
         };
-        _documentLayer = new WpfCanvas { Visibility = Visibility.Collapsed };
+        _documentLayer = new WpfCanvas
+        {
+            Visibility = Visibility.Collapsed,
+            UseLayoutRounding = false,
+            SnapsToDevicePixels = false
+        };
+        TextOptions.SetTextFormattingMode(_documentLayer, TextFormattingMode.Ideal);
         _surface = new ImageSurface(this);
         RenderOptions.SetBitmapScalingMode(_surface, BitmapScalingMode.HighQuality);
         _documentLayer.Children.Add(_surface);
@@ -148,13 +154,25 @@ public sealed class EditorView : WpfUserControl
             SelectionOpacity = 0.35,
             BorderThickness = new Thickness(0),
             Padding = new Thickness(0),
-            FontFamily = new FontFamily("Segoe UI"),
-            FontWeight = FontWeights.SemiBold,
+            Style = null,
+            FontFamily = AnnotationItem.TextTypeface.FontFamily,
+            FontWeight = AnnotationItem.TextTypeface.Weight,
+            FontStyle = AnnotationItem.TextTypeface.Style,
+            FontStretch = AnnotationItem.TextTypeface.Stretch,
+            TextAlignment = TextAlignment.Left,
+            FlowDirection = FlowDirection.LeftToRight,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            VerticalContentAlignment = VerticalAlignment.Top,
+            UseLayoutRounding = false,
+            SnapsToDevicePixels = false,
+            Language = System.Windows.Markup.XmlLanguage.GetLanguage(AnnotationItem.TextCulture.IetfLanguageTag),
             Cursor = Cursors.IBeam,
             UndoLimit = 100,
             SpellCheck = { IsEnabled = false }
         };
         TextOptions.SetTextFormattingMode(_textEditor, TextFormattingMode.Ideal);
+        TextBlock.SetLineHeight(_textEditor, double.NaN);
+        TextBlock.SetLineStackingStrategy(_textEditor, LineStackingStrategy.MaxHeight);
         _textEditBorder = new Border
         {
             Child = _textEditor,
@@ -550,15 +568,15 @@ public sealed class EditorView : WpfUserControl
 
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
-        bool control = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        ModifierKeys modifiers = Keyboard.Modifiers;
         if (IsTextEditing)
         {
-            if (control && e.Key == Key.Enter)
+            if (modifiers == ModifierKeys.Control && e.Key == Key.Enter)
             {
                 CommitTextEdit();
                 e.Handled = true;
             }
-            else if (e.Key == Key.Escape)
+            else if (modifiers == ModifierKeys.None && e.Key == Key.Escape)
             {
                 CancelTextEdit();
                 e.Handled = true;
@@ -566,36 +584,34 @@ public sealed class EditorView : WpfUserControl
             // Native TextBox caret, selection, IME, Delete, and local undo stay intact.
             return;
         }
-        if (control && e.Key == Key.Z)
+        if (modifiers == ModifierKeys.Control && e.Key == Key.Z)
         {
-            if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
-                Redo();
-            else
-                Undo();
+            Undo();
             e.Handled = true;
         }
-        else if (control && e.Key == Key.Y)
+        else if ((modifiers == ModifierKeys.Control && e.Key == Key.Y)
+            || (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Z))
         {
             Redo();
             e.Handled = true;
         }
-        else if (e.Key is Key.Delete or Key.Back)
+        else if (modifiers == ModifierKeys.None && (e.Key is Key.Delete or Key.Back))
         {
             DeleteSelection();
             e.Handled = true;
         }
-        else if (e.Key == Key.Escape)
+        else if (modifiers == ModifierKeys.None && e.Key == Key.Escape)
         {
             CancelGesture();
             SelectItem(null);
             e.Handled = true;
         }
-        else if ((e.Key is Key.Enter or Key.F2) && _selected?.Tool == AnnotationTool.Text)
+        else if (modifiers == ModifierKeys.None && (e.Key is Key.Enter or Key.F2) && _selected?.Tool == AnnotationTool.Text)
         {
             BeginTextEdit(_selected, null, null);
             e.Handled = true;
         }
-        else if (e.Key == Key.Space && !control)
+        else if (modifiers == ModifierKeys.None && e.Key == Key.Space)
         {
             _spaceDown = true;
             UpdateCursor();
@@ -607,7 +623,7 @@ public sealed class EditorView : WpfUserControl
     {
         if (IsTextEditing)
             return;
-        if (e.Key == Key.Space)
+        if (_spaceDown && e.Key == Key.Space)
         {
             _spaceDown = false;
             UpdateCursor();
@@ -642,6 +658,7 @@ public sealed class EditorView : WpfUserControl
             };
         }
         _selected = annotation;
+        UpdateTextEditor();
         _syncTextUi = true;
         _textEditor.IsUndoEnabled = false;
         _textEditor.Text = _textDraft.Text;
@@ -657,7 +674,7 @@ public sealed class EditorView : WpfUserControl
         if (annotation is not null && caretPosition is WpfPoint position)
         {
             _textEditor.UpdateLayout();
-            int index = _textEditor.GetCharacterIndexFromPoint(new WpfPoint(position.X - _textDraft.Start.X, position.Y - _textDraft.Start.Y), true);
+            int index = _textEditor.GetCharacterIndexFromPoint(_documentLayer.TranslatePoint(position, _textEditor), true);
             if (index >= 0)
                 _textEditor.CaretIndex = index;
         }
@@ -746,16 +763,22 @@ public sealed class EditorView : WpfUserControl
         WpfRect bounds = _textDraft.Bounds;
         double border = 1 / _zoom;
         _textEditBorder.BorderThickness = new Thickness(border);
+        _textEditor.Language = System.Windows.Markup.XmlLanguage.GetLanguage(AnnotationItem.TextCulture.IetfLanguageTag);
         _textEditor.FontSize = _textDraft.FontSize;
         _textEditor.Foreground = new SolidColorBrush(_textDraft.Color);
         bool lightInput = RelativeLuminance(_textDraft.Color) < 0.23;
         _textEditor.Background = BrushFor(lightInput ? "#F2FFFFFF" : "#F2151D2B");
         _textEditor.CaretBrush = BrushFor(lightInput ? "#0C111B" : "#EEF3F9");
-        _textEditor.Width = Math.Max(1, bounds.Width);
+        // TextBoxView reserves caret space in its content margin, even with zero
+        // Padding. Keep that UI inset outside the annotation's text origin/width.
+        _textEditor.ApplyTemplate();
+        Thickness inset = (_textEditor.Template?.FindName("PART_ContentHost", _textEditor) as ScrollViewer)?.Content is FrameworkElement textView
+            ? textView.Margin : new Thickness(0);
+        _textEditor.Width = Math.Max(1, bounds.Width) + inset.Left + inset.Right;
         // The input viewport grows with all lines. Its extra caret room is UI only.
-        _textEditor.Height = Math.Max(bounds.Height, _textDraft.FontSize * 1.4) + _textDraft.FontSize * 0.2;
-        WpfCanvas.SetLeft(_textEditBorder, _textDraft.Start.X - border);
-        WpfCanvas.SetTop(_textEditBorder, _textDraft.Start.Y - border);
+        _textEditor.Height = Math.Max(bounds.Height, _textDraft.FontSize * 1.4) + _textDraft.FontSize * 0.2 + inset.Top + inset.Bottom;
+        WpfCanvas.SetLeft(_textEditBorder, _textDraft.Start.X - inset.Left - border);
+        WpfCanvas.SetTop(_textEditBorder, _textDraft.Start.Y - inset.Top - border);
     }
 
     private void AttachHostWindow()
@@ -1169,9 +1192,10 @@ public sealed class EditorView : WpfUserControl
         var imageBounds = new WpfRect(0, 0, _image.PixelWidth, _image.PixelHeight);
         context.PushClip(new RectangleGeometry(imageBounds));
         context.DrawImage(_image, imageBounds);
+        double pixelsPerDip = includeSelection ? VisualTreeHelper.GetDpi(_surface).PixelsPerDip : 1.0;
         foreach (AnnotationItem annotation in _annotations)
             if (!includeSelection || !IsTextEditing || !ReferenceEquals(annotation, _textTarget))
-                annotation.Draw(context);
+                annotation.Draw(context, pixelsPerDip);
         context.Pop();
         if (includeSelection)
         {
@@ -1183,7 +1207,7 @@ public sealed class EditorView : WpfUserControl
                 context.DrawRectangle(null, new Pen(BrushFor("#63D5C5"), 1 / _zoom), bounds);
             }
             else
-                _pending?.Draw(context);
+                _pending?.Draw(context, pixelsPerDip);
             if (_selected is not null && !IsTextEditing)
                 DrawSelection(context, _selected);
         }
@@ -1326,5 +1350,11 @@ public sealed class EditorView : WpfUserControl
     private sealed class ImageSurface(EditorView editor) : FrameworkElement
     {
         protected override void OnRender(DrawingContext drawingContext) => editor.DrawScene(drawingContext, includeSelection: true);
+
+        protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            InvalidateVisual();
+        }
     }
 }
