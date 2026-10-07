@@ -113,6 +113,8 @@ internal static class UpdateBootstrapper
             parentExited = WaitForParentExit(request);
             if (!parentExited)
                 throw new TimeoutException("The original SnipFlow process did not exit; the installer was not started.");
+            ValidateInstallerPath(request.InstallerPath);
+            ParseHash(request.Sha256);
             ValidateInstallLocation();
             Install(request, Path.GetFileNameWithoutExtension(validatedPath));
             Launch(Path.Combine(InstallRoot, ExecutableName), request.RestartArgs);
@@ -185,8 +187,6 @@ internal static class UpdateBootstrapper
             || request.ParentStartTimeUtcTicks > DateTime.UtcNow.AddMinutes(1).Ticks
             || !string.Equals(NormalizePath(request.OriginalExe), CurrentExecutable(), StringComparison.OrdinalIgnoreCase))
             throw InvalidRequest();
-        ValidateInstallerPath(request.InstallerPath);
-        ParseHash(request.Sha256);
         ValidateRestartArguments(request.RestartArgs);
     }
 
