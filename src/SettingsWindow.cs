@@ -16,13 +16,14 @@ public sealed class SettingsWindow : Window
     readonly List<FrameworkElement> panes = new();
     readonly ScrollViewer paneScroll = new();
     readonly ComboBox language = new() { Width = 184, MinHeight = 34, HorizontalAlignment = HorizontalAlignment.Right };
-    readonly CheckBox copy = new(), history = new(), startup = new(), autoCheck = new(), autoDownload = new();
+    readonly CheckBox copy = new(), history = new(), startup = new(), autoSave = new(), autoCheck = new(), autoDownload = new();
+    readonly TextBox captureFolder = new() { IsReadOnly = true, MinHeight = 34, VerticalContentAlignment = VerticalAlignment.Center };
     readonly HotkeyInputBox shortcut = new(SettingsStore.Current.Hotkey);
     readonly TextBlock hotkeyStatus = new(), updateStatus = new(), updateDetail = new(), currentVersion = new(), latestVersion = new(), feedback = new();
     readonly Button check = new(), download = new(), restart = new(), installer = new(), releaseNotes = new();
     readonly ProgressBar updateProgress = new() { Minimum = 0, Maximum = 100, Height = 4, BorderThickness = new Thickness(0) };
     readonly Border updateCard = new();
-    bool synchronizingLanguage, updateActionRunning, hotkeyFailure, isClosed;
+    bool synchronizingLanguage, synchronizingOptions, updateActionRunning, hotkeyFailure, isClosed, feedbackIsError;
     string? feedbackKey;
 
     public SettingsWindow(MainWindow shell, bool showUpdates = false)
@@ -80,11 +81,14 @@ public sealed class SettingsWindow : Window
 
         shell.Updates.Changed += OnUpdateChanged;
         I18n.Changed += OnLanguageChanged;
+        SettingsStore.Changed += OnSettingsChanged;
+        AttachOptionHandlers();
         Closed += (_, _) =>
         {
             isClosed = true;
             shell.Updates.Changed -= OnUpdateChanged;
             I18n.Changed -= OnLanguageChanged;
+            SettingsStore.Changed -= OnSettingsChanged;
         };
         SelectPane(showUpdates ? 2 : 0); ApplyLanguage();
     }
@@ -138,9 +142,29 @@ public sealed class SettingsWindow : Window
         AddValueRow(pane, "介面語言", "切換後立即套用並儲存。", language);
         AddDivider(pane);
         AddToggleRow(pane, "自動複製", "截圖完成後複製到剪貼簿。", copy, SettingsStore.Current.CopyAfterCapture);
-        AddToggleRow(pane, "保留最近截圖", "最多保留 80 張截圖。", history, SettingsStore.Current.KeepHistory);
+        AddToggleRow(pane, "自動儲存截圖", "截圖存為 PNG；標註修改會更新同一個檔案。", autoSave, SettingsStore.Current.AutoSaveCaptures);
+        AddCaptureFolderControls(pane);
+        AddDivider(pane);
+        AddToggleRow(pane, "保留最近截圖", "最近截圖另行保留，最多 80 張；不影響截圖資料夾。", history, SettingsStore.Current.KeepHistory);
         AddToggleRow(pane, "登入時啟動", "登入 Windows 後常駐系統匣。", startup, SettingsStore.Current.StartWithWindows);
         return pane;
+    }
+
+    void AddCaptureFolderControls(Panel pane)
+    {
+        pane.Children.Add(BindText(new TextBlock { Margin = new Thickness(0, 10, 0, 9) }, "截圖資料夾"));
+        var controls = new Grid();
+        controls.ColumnDefinitions.Add(new ColumnDefinition());
+        controls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        captureFolder.Text = SettingsStore.Current.CaptureSaveDirectory;
+        captureFolder.ToolTip = captureFolder.Text;
+        captureFolder.Margin = new Thickness(0, 0, 10, 0);
+        BindName(captureFolder, "截圖資料夾"); controls.Children.Add(captureFolder);
+        var browse = BindContent(new Button { Style = Resource<Style>("QuietButton"), MinWidth = 70 }, "選擇…");
+        browse.Click += (_, _) => ChooseCaptureFolder();
+        Grid.SetColumn(browse, 1); controls.Children.Add(browse); pane.Children.Add(controls);
+        var open = BindContent(new Button { Style = Resource<Style>("QuietButton"), HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(0, 8, 0, 8), Margin = new Thickness(0, 3, 0, 4) }, "開啟資料夾 ↗");
+        open.Click += (_, _) => OpenCaptureFolder(); pane.Children.Add(open);
     }
 
     FrameworkElement BuildHotkeyPane()
@@ -152,13 +176,12 @@ public sealed class SettingsWindow : Window
         controls.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         shortcut.MinHeight = 38; shortcut.Padding = new Thickness(12, 9, 12, 9); shortcut.Margin = new Thickness(0, 0, 12, 0);
         BindName(shortcut, "全域截圖快捷鍵");
-        shortcut.TextChanged += (_, _) => { hotkeyFailure = false; RefreshHotkeyStatus(); };
         controls.Children.Add(shortcut);
         var reset = BindContent(new Button { Style = Resource<Style>("QuietButton"), MinWidth = 70 }, "預設");
-        reset.Click += (_, _) => { HotkeyGesture.TryParse(HotkeyGesture.DefaultShortcut, out var gesture); shortcut.SetGesture(gesture); };
+        reset.Click += (_, _) => ApplyHotkey(HotkeyGesture.DefaultShortcut);
         Grid.SetColumn(reset, 1); controls.Children.Add(reset); pane.Children.Add(controls);
         pane.Children.Add(BindText(new TextBlock { Foreground = Resource<Brush>("Muted"), FontSize = 12, TextWrapping = TextWrapping.Wrap, LineHeight = 19 }, "點選欄位後按下組合鍵。字母／數字須搭配 Ctrl、Alt、Shift 中至少兩個鍵；也可使用 F1–F11。"));
-        pane.Children.Add(BindText(new TextBlock { Foreground = Resource<Brush>("Muted"), FontSize = 12, Margin = new Thickness(0, 10, 0, 22) }, "儲存後生效。"));
+        pane.Children.Add(BindText(new TextBlock { Foreground = Resource<Brush>("Muted"), FontSize = 12, Margin = new Thickness(0, 10, 0, 22) }, "輸入完整組合鍵後立即生效並儲存。"));
         hotkeyStatus.FontSize = 13; hotkeyStatus.TextWrapping = TextWrapping.Wrap; hotkeyStatus.LineHeight = 21;
         pane.Children.Add(new Border { Background = Resource<Brush>("Raised"), CornerRadius = new CornerRadius(9), Padding = new Thickness(16, 13, 16, 13), Child = hotkeyStatus });
         pane.Children.Add(BindText(new TextBlock { Foreground = Resource<Brush>("Muted"), FontSize = 12, TextWrapping = TextWrapping.Wrap, LineHeight = 19, Margin = new Thickness(0, 16, 0, 0) }, "焦點在其他程式、最小化或隱藏至系統匣時也能截圖。"));
@@ -229,22 +252,62 @@ public sealed class SettingsWindow : Window
     {
         var footer = new Grid { Margin = new Thickness(24, 16, 24, 16) };
         footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        feedback.Foreground = ErrorBrush; feedback.FontSize = 12; feedback.TextWrapping = TextWrapping.Wrap; feedback.VerticalAlignment = VerticalAlignment.Center; feedback.Margin = new Thickness(0, 0, 18, 0); footer.Children.Add(feedback);
-        var actions = new StackPanel { Orientation = Orientation.Horizontal };
-        var cancel = BindContent(new Button { IsCancel = true, Style = Resource<Style>("QuietButton"), Margin = new Thickness(0, 0, 10, 0), MinWidth = 72, Height = 36 }, "取消");
-        var save = BindContent(new Button { Style = Resource<Style>("Primary"), MinWidth = 90, Height = 36 }, "儲存設定"); save.Click += (_, _) => SaveSettings();
-        actions.Children.Add(cancel); actions.Children.Add(save); Grid.SetColumn(actions, 1); footer.Children.Add(actions);
+        var status = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) };
+        status.Children.Add(BindText(new TextBlock { FontSize = 12, Foreground = Resource<Brush>("Muted"), TextWrapping = TextWrapping.Wrap }, "變更會立即套用並自動儲存。"));
+        feedback.Foreground = ErrorBrush; feedback.FontSize = 12; feedback.TextWrapping = TextWrapping.Wrap; feedback.Margin = new Thickness(0, 5, 0, 0); feedback.Visibility = Visibility.Collapsed; status.Children.Add(feedback); footer.Children.Add(status);
+        var close = BindContent(new Button { IsCancel = true, Style = Resource<Style>("Primary"), MinWidth = 84, Height = 36 }, "關閉");
+        close.Click += (_, _) => Close(); Grid.SetColumn(close, 1); footer.Children.Add(close);
         return new Border { BorderBrush = Resource<Brush>("Line"), BorderThickness = new Thickness(0, 1, 0, 0), Child = footer };
     }
 
-    void SaveSettings()
+    void AttachOptionHandlers()
     {
-        SetFeedback(null);
-        var previous = SnapshotSettings(); var previousActiveKey = shell.ActiveHotkey;
-        if (!shell.SetHotkey(shortcut.Shortcut))
+        BindOption(copy, settings => settings.CopyAfterCapture, (settings, value) => settings.CopyAfterCapture = value);
+        BindOption(history, settings => settings.KeepHistory, (settings, value) => settings.KeepHistory = value);
+        BindOption(autoSave, settings => settings.AutoSaveCaptures, (settings, value) => settings.AutoSaveCaptures = value);
+        BindOption(autoCheck, settings => settings.AutoCheckUpdates, (settings, value) => settings.AutoCheckUpdates = value);
+        BindOption(autoDownload, settings => settings.AutoDownloadUpdates, (settings, value) => settings.AutoDownloadUpdates = value);
+        startup.Checked += StartupChanged; startup.Unchecked += StartupChanged;
+        shortcut.TextChanged += (_, _) =>
         {
-            hotkeyFailure = true; SelectPane(1); RefreshHotkeyStatus(); SetFeedback("快捷鍵無法設定。"); return;
+            if (!synchronizingOptions && !isClosed) ApplyHotkey(shortcut.Shortcut);
+        };
+    }
+
+    void BindOption(CheckBox box, Func<UserSettings, bool> read, Action<UserSettings, bool> apply)
+    {
+        void Changed(object? sender, RoutedEventArgs args)
+        {
+            if (synchronizingOptions || isClosed) return;
+            var value = box.IsChecked == true;
+            if (read(SettingsStore.Current) == value) return;
+            var previous = SnapshotSettings();
+            bool validatingFolder = box == autoSave && value;
+            try
+            {
+                if (validatingFolder)
+                {
+                    SettingsStore.Current.CaptureSaveDirectory = ValidateCaptureFolder(SettingsStore.Current.CaptureSaveDirectory);
+                    validatingFolder = false;
+                }
+                apply(SettingsStore.Current, value); SettingsStore.Save();
+                SetFeedback("設定已自動儲存。", false);
+            }
+            catch (Exception ex)
+            {
+                RestoreSettings(previous); SettingsStore.Log(ex); SynchronizeOptions();
+                SetFeedback(validatingFolder ? "截圖資料夾無法使用，請選擇可寫入的資料夾。" : "設定未儲存，請再試一次。");
+            }
         }
+        box.Checked += Changed; box.Unchecked += Changed;
+    }
+
+    void StartupChanged(object? sender, RoutedEventArgs args)
+    {
+        if (synchronizingOptions || isClosed) return;
+        bool value = startup.IsChecked == true;
+        if (SettingsStore.Current.StartWithWindows == value) return;
+        var previous = SnapshotSettings();
         object? previousRunValue = null; RegistryValueKind previousRunKind = RegistryValueKind.String;
         bool runChanged = false;
         try
@@ -253,7 +316,7 @@ public sealed class SettingsWindow : Window
             previousRunValue = run.GetValue("SnipFlow", null, RegistryValueOptions.DoNotExpandEnvironmentNames);
             if (previousRunValue != null) previousRunKind = run.GetValueKind("SnipFlow");
             runChanged = true;
-            if (startup.IsChecked == true)
+            if (value)
             {
                 var executable = Environment.ProcessPath ?? throw new InvalidOperationException(I18n.T("無法取得程式路徑。"));
                 var parent = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar));
@@ -262,13 +325,8 @@ public sealed class SettingsWindow : Window
                 run.SetValue("SnipFlow", $"\"{executable}\" --background");
             }
             else run.DeleteValue("SnipFlow", false);
-            SettingsStore.Current.CopyAfterCapture = copy.IsChecked == true;
-            SettingsStore.Current.KeepHistory = history.IsChecked == true;
-            SettingsStore.Current.StartWithWindows = startup.IsChecked == true;
-            SettingsStore.Current.Hotkey = shortcut.Shortcut;
-            SettingsStore.Current.AutoCheckUpdates = autoCheck.IsChecked == true;
-            SettingsStore.Current.AutoDownloadUpdates = autoDownload.IsChecked == true;
-            SettingsStore.Save();
+            SettingsStore.Current.StartWithWindows = value; SettingsStore.Save();
+            SetFeedback("設定已自動儲存。", false);
         }
         catch (Exception ex)
         {
@@ -284,21 +342,132 @@ public sealed class SettingsWindow : Window
                 }
                 catch (Exception rollbackError) { SettingsStore.Log(rollbackError); rollbackFailed = true; }
             }
+            SynchronizeOptions();
+            SetFeedback(rollbackFailed ? "登入啟動未完整還原，請重新設定。" : "設定未儲存，請再試一次。");
+        }
+    }
+
+    void ApplyHotkey(string candidate)
+    {
+        if (synchronizingOptions || isClosed) return;
+        SetFeedback(null);
+        var previous = SnapshotSettings(); var previousActiveKey = shell.ActiveHotkey;
+        if (!HotkeyGesture.TryParse(candidate, out var gesture))
+        {
+            SynchronizeOptions(); SetFeedback("請使用至少兩個修飾鍵加字母／數字，或 F1–F11。"); return;
+        }
+        var normalized = gesture.ToString();
+        if (normalized == SettingsStore.Current.Hotkey && normalized == previousActiveKey)
+        {
+            hotkeyFailure = false; SynchronizeOptions(); RefreshHotkeyStatus();
+            SetFeedback("設定已自動儲存。", false); return;
+        }
+        if (!shell.SetHotkey(normalized))
+        {
+            hotkeyFailure = true; SynchronizeOptions(); RefreshHotkeyStatus();
+            SetFeedback("快捷鍵無法設定。"); return;
+        }
+        hotkeyFailure = false;
+        try
+        {
+            SettingsStore.Current.Hotkey = normalized;
+            if (previous.Hotkey != normalized) SettingsStore.Save();
+            SynchronizeOptions(); RefreshHotkeyStatus(); SetFeedback("設定已自動儲存。", false);
+        }
+        catch (Exception ex)
+        {
+            RestoreSettings(previous); SettingsStore.Log(ex);
+            bool rollbackFailed = false;
             try
             {
-                if (previousActiveKey != null) rollbackFailed |= !shell.SetHotkey(previousActiveKey);
+                if (previousActiveKey != null) rollbackFailed = !shell.SetHotkey(previousActiveKey);
                 else shell.ReleaseHotkey();
             }
             catch (Exception rollbackError) { SettingsStore.Log(rollbackError); rollbackFailed = true; }
-            hotkeyFailure = rollbackFailed && shell.ActiveHotkey != previousActiveKey; RefreshHotkeyStatus();
-            SetFeedback(rollbackFailed ? "設定未完整還原，請重新檢查登入啟動與快捷鍵。" : "設定未儲存，請再試一次。"); return;
+            hotkeyFailure = rollbackFailed; SynchronizeOptions(); RefreshHotkeyStatus();
+            SetFeedback(rollbackFailed ? "快捷鍵未完整還原，請重新設定。" : "設定未儲存，請再試一次。");
         }
-        DialogResult = true;
+    }
+
+    void ChooseCaptureFolder()
+    {
+        try
+        {
+            var dialog = new OpenFolderDialog
+            {
+                Title = I18n.T("選擇截圖資料夾"), Multiselect = false,
+                InitialDirectory = Directory.Exists(SettingsStore.Current.CaptureSaveDirectory)
+                    ? SettingsStore.Current.CaptureSaveDirectory : Environment.GetFolderPath(Environment.SpecialFolder.MyPictures)
+            };
+            if (dialog.ShowDialog(this) != true) return;
+            var normalized = ValidateCaptureFolder(dialog.FolderName);
+            var previous = SnapshotSettings();
+            try
+            {
+                SettingsStore.Current.CaptureSaveDirectory = normalized;
+                if (previous.CaptureSaveDirectory != normalized) SettingsStore.Save();
+                SynchronizeOptions(); SetFeedback("設定已自動儲存。", false);
+            }
+            catch (Exception ex)
+            {
+                RestoreSettings(previous); SettingsStore.Log(ex); SynchronizeOptions();
+                SetFeedback("設定未儲存，請再試一次。");
+            }
+        }
+        catch (Exception ex)
+        {
+            SettingsStore.Log(ex); SynchronizeOptions();
+            SetFeedback("截圖資料夾無法使用，請選擇可寫入的資料夾。");
+        }
+    }
+
+    static string ValidateCaptureFolder(string directory)
+    {
+        var normalized = SettingsStore.NormalizeCaptureSaveDirectory(directory);
+        Directory.CreateDirectory(normalized);
+        var probePath = Path.Combine(normalized, $".snipflow-write-check-{Guid.NewGuid():N}.tmp");
+        using var probe = new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
+        probe.WriteByte(0);
+        return normalized;
+    }
+
+    void OpenCaptureFolder()
+    {
+        try
+        {
+            var directory = SettingsStore.NormalizeCaptureSaveDirectory(SettingsStore.Current.CaptureSaveDirectory);
+            Directory.CreateDirectory(directory);
+            Process.Start(new ProcessStartInfo(directory) { UseShellExecute = true });
+        }
+        catch (Exception ex) { SettingsStore.Log(ex); SetFeedback("無法開啟截圖資料夾。"); }
+    }
+
+    void OnSettingsChanged(object? sender, EventArgs args)
+    {
+        if (isClosed) return;
+        if (Dispatcher.CheckAccess()) SynchronizeOptions();
+        else Dispatcher.BeginInvoke(() => { if (!isClosed) SynchronizeOptions(); });
+    }
+
+    void SynchronizeOptions()
+    {
+        synchronizingOptions = true;
+        try
+        {
+            var settings = SettingsStore.Current;
+            copy.IsChecked = settings.CopyAfterCapture; history.IsChecked = settings.KeepHistory;
+            autoSave.IsChecked = settings.AutoSaveCaptures; startup.IsChecked = settings.StartWithWindows;
+            autoCheck.IsChecked = settings.AutoCheckUpdates; autoDownload.IsChecked = settings.AutoDownloadUpdates;
+            captureFolder.Text = settings.CaptureSaveDirectory; captureFolder.ToolTip = captureFolder.Text;
+            shortcut.Text = settings.Hotkey;
+        }
+        finally { synchronizingOptions = false; }
     }
 
     static UserSettings SnapshotSettings() => new()
     {
         Language = SettingsStore.Current.Language, CopyAfterCapture = SettingsStore.Current.CopyAfterCapture,
+        AutoSaveCaptures = SettingsStore.Current.AutoSaveCaptures, CaptureSaveDirectory = SettingsStore.Current.CaptureSaveDirectory,
         KeepHistory = SettingsStore.Current.KeepHistory, StartWithWindows = SettingsStore.Current.StartWithWindows,
         Hotkey = SettingsStore.Current.Hotkey, AutoCheckUpdates = SettingsStore.Current.AutoCheckUpdates,
         AutoDownloadUpdates = SettingsStore.Current.AutoDownloadUpdates, HistoryLimit = SettingsStore.Current.HistoryLimit
@@ -306,12 +475,16 @@ public sealed class SettingsWindow : Window
 
     static void RestoreSettings(UserSettings previous)
     {
+        SettingsStore.Current.Language = previous.Language;
         SettingsStore.Current.CopyAfterCapture = previous.CopyAfterCapture;
+        SettingsStore.Current.AutoSaveCaptures = previous.AutoSaveCaptures;
+        SettingsStore.Current.CaptureSaveDirectory = previous.CaptureSaveDirectory;
         SettingsStore.Current.KeepHistory = previous.KeepHistory;
         SettingsStore.Current.StartWithWindows = previous.StartWithWindows;
         SettingsStore.Current.Hotkey = previous.Hotkey;
         SettingsStore.Current.AutoCheckUpdates = previous.AutoCheckUpdates;
         SettingsStore.Current.AutoDownloadUpdates = previous.AutoDownloadUpdates;
+        SettingsStore.Current.HistoryLimit = previous.HistoryLimit;
     }
 
     void LanguageSelectionChanged(object sender, SelectionChangedEventArgs args)
@@ -324,7 +497,7 @@ public sealed class SettingsWindow : Window
             SettingsStore.Current.Language = previousSetting; SynchronizeLanguageChoice(); SettingsStore.Log(ex);
             SetFeedback("語系未儲存，請再試一次。"); return;
         }
-        I18n.SetLanguage(tag); SetFeedback(null);
+        I18n.SetLanguage(tag); SetFeedback("設定已自動儲存。", false);
     }
 
     void SynchronizeLanguageChoice()
@@ -357,6 +530,7 @@ public sealed class SettingsWindow : Window
         foreach (var entry in localizedContent) entry.Element.Content = I18n.T(entry.Key);
         foreach (var entry in localizedNames) AutomationProperties.SetName(entry.Element, I18n.T(entry.Key));
         feedback.Text = feedbackKey == null ? "" : I18n.T(feedbackKey);
+        feedback.Foreground = feedbackIsError ? ErrorBrush : Resource<Brush>("Muted");
         SynchronizeLanguageChoice(); RefreshUpdates(); RefreshHotkeyStatus();
     }
 
@@ -394,7 +568,13 @@ public sealed class SettingsWindow : Window
         releaseNotes.IsEnabled = !string.IsNullOrWhiteSpace(updates.ReleaseUrl);
     }
 
-    void SetFeedback(string? key) { feedbackKey = key; feedback.Text = key == null ? "" : I18n.T(key); }
+    void SetFeedback(string? key, bool isError = true)
+    {
+        feedbackKey = key; feedbackIsError = isError;
+        feedback.Text = key == null ? "" : I18n.T(key);
+        feedback.Foreground = isError ? ErrorBrush : Resource<Brush>("Muted");
+        feedback.Visibility = key == null ? Visibility.Collapsed : Visibility.Visible;
+    }
     static Brush ErrorBrush { get; } = CreateErrorBrush();
     static Brush CreateErrorBrush() { var brush = new SolidColorBrush(Color.FromRgb(242, 157, 152)); brush.Freeze(); return brush; }
     T Resource<T>(string key) where T : class => (T)FindResource(key);

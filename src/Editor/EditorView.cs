@@ -76,6 +76,8 @@ public sealed class EditorView : WpfUserControl
     public bool CanRedo => _redo.Count != 0 && !TextHasChanges && !PropertyHasChanges;
     public double ZoomFactor => _zoom;
     public bool IsTextEditing => _textDraft is not null;
+    public long Revision => _revision;
+    public bool IsInteracting => _textDraft is not null || _pending is not null || _transformSource is not null || _propertySource is not null;
     public AnnotationTool? SelectedTool => SelectedItem?.Tool;
     public WpfColor? SelectedColor => SelectedItem?.Color;
     public double? SelectedStrokeWidth => SelectedItem?.Width;
@@ -323,6 +325,14 @@ public sealed class EditorView : WpfUserControl
         CommitTextEdit();
         EndPropertyEdit();
         _savedRevision = _revision;
+        RaiseChanged();
+    }
+
+    public void MarkUnsaved()
+    {
+        VerifyAccess();
+        if (_savedRevision == -1) return;
+        _savedRevision = -1;
         RaiseChanged();
     }
 

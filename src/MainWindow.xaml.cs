@@ -25,6 +25,16 @@ public partial class MainWindow : Window
     bool modeInitialized;
     bool hadImage;
     Rect? editorBounds;
+    readonly System.Windows.Threading.DispatcherTimer autoSaveTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    string autoSaveDirectory = SettingsStore.Current.CaptureSaveDirectory;
+    bool autoSaveEnabled = SettingsStore.Current.AutoSaveCaptures;
+    string? autoSavePath;
+    long autoSavedRevision = -1;
+    int documentGeneration;
+    long autoSaveSequence;
+    bool autoSaveInProgress;
+    bool isClosed;
+    Task? autoSaveWrite;
     string statusKey = "就緒";
     object?[] statusValues = Array.Empty<object?>();
     bool showingUpdateStatus;
@@ -37,13 +47,18 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent(); ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
-        Editor.Changed += (_, _) => RefreshDocumentState();
+        Editor.Changed += (_, _) => { RefreshDocumentState(); QueueAutoSave(); };
         Editor.SelectionChanged += (_, _) => RefreshProperties();
         Updates.Changed += (_, _) => Dispatcher.BeginInvoke(() => { showingUpdateStatus = true; StatusText.Text = Updates.Status; UpdateBanner.Visibility = Updates.ReadyToRestart ? Visibility.Visible : Visibility.Collapsed; });
         I18n.Changed += LanguageChanged;
-        Closed += (_, _) => { I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
+        SettingsStore.Changed += SettingsChanged;
+        autoSaveTimer.Tick += AutoSaveTick;
+        Closed += (_, _) => { isClosed = true; autoSaveTimer.Stop(); SettingsStore.Changed -= SettingsChanged; I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
         ApplyWindowMode(true);
-        SourceInitialized += (_, _) => { WindowAppearance.Apply(this); SetHotkey(SettingsStore.Current.Hotkey); };
+        SourceInitialized += (_, _) => { WindowAppearance.Apply(this); WindowBoundsService.Attach(this); UpdateMinimumWindowSize(); SetHotkey(SettingsStore.Current.Hotkey); };
+        SizeChanged += (_, _) => UpdateMinimumWindowSize();
+        StateChanged += (_, _) => UpdateMinimumWindowSize();
+        LocationChanged += (_, _) => UpdateMinimumWindowSize();
         Loaded += (_, _) => { RefreshHistory(); RefreshDocumentState(); };
     }
     void GlobalHotkeyPressed(object? sender, EventArgs e)
@@ -98,13 +113,13 @@ public partial class MainWindow : Window
                 image = window.Result;
             }
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
-            Editor.LoadImage(image); ApplyWindowMode(false); Show(); Activate();
+            LoadDocument(image); ApplyWindowMode(false); Show(); Activate();
             await AddHistoryAsync(image);
             if (SettingsStore.Current.CopyAfterCapture) await CopyImageAsync(image);
             SetStatus(SettingsStore.Current.CopyAfterCapture ? "截圖完成，已複製到剪貼簿。" : "截圖完成，可以開始標註。");
         }
         catch (Exception ex) { Show(); Activate(); ReportError(ex, "截圖未完成"); }
-        finally { busy = false; capturePending = false; RefreshDocumentState(); }
+        finally { busy = false; capturePending = false; RefreshDocumentState(); QueueAutoSave(); }
     }
     public async Task StartRecordingAsync()
     {
@@ -132,8 +147,108 @@ public partial class MainWindow : Window
     public void OpenImage(string path)
     {
         if (busy || !PrepareToDiscard()) return;
-        try { var image = HistoryStore.Read(path); Editor.LoadImage(image); ApplyWindowMode(false); ImageInfo.Text = $"{image.PixelWidth:N0} × {image.PixelHeight:N0} px"; SetStatus("已開啟 {0}", Path.GetFileName(path)); RefreshDocumentState(); }
+        try { var image = HistoryStore.Read(path); LoadDocument(image); ApplyWindowMode(false); ImageInfo.Text = $"{image.PixelWidth:N0} × {image.PixelHeight:N0} px"; SetStatus("已開啟 {0}", Path.GetFileName(path)); RefreshDocumentState(); }
         catch (Exception ex) { ReportError(ex, "圖片無法開啟"); }
+    }
+    void LoadDocument(BitmapSource image)
+    {
+        autoSaveTimer.Stop(); documentGeneration++; autoSavePath = null; autoSavedRevision = -1;
+        Editor.LoadImage(image);
+    }
+    void QueueAutoSave()
+    {
+        autoSaveTimer.Stop();
+        if (isClosed || !SettingsStore.Current.AutoSaveCaptures || !Editor.HasImage) return;
+        if (Editor.Revision == autoSavedRevision)
+        {
+            if (!Editor.IsInteracting && Editor.HasEdits) Editor.MarkSaved();
+            return;
+        }
+        autoSaveTimer.Start();
+    }
+    void SettingsChanged(object? sender, EventArgs e)
+    {
+        if (isClosed || Dispatcher.HasShutdownStarted) return;
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => SettingsChanged(sender, e)); return; }
+        var finishPendingSave = autoSaveEnabled && !SettingsStore.Current.AutoSaveCaptures;
+        autoSaveEnabled = SettingsStore.Current.AutoSaveCaptures;
+        if (finishPendingSave && Editor.HasImage && (autoSavePath != null || autoSaveWrite != null)
+            && (autoSaveInProgress || Editor.Revision != autoSavedRevision))
+            SaveAutomaticallyBeforeDiscard(finishPending: true);
+        var directory = SettingsStore.Current.CaptureSaveDirectory;
+        if (!string.Equals(autoSaveDirectory, directory, StringComparison.OrdinalIgnoreCase))
+        {
+            autoSaveDirectory = directory; documentGeneration++; autoSavePath = null; autoSavedRevision = -1;
+        }
+        QueueAutoSave();
+    }
+    async void AutoSaveTick(object? sender, EventArgs e)
+    {
+        autoSaveTimer.Stop();
+        if (isClosed || !SettingsStore.Current.AutoSaveCaptures || !Editor.HasImage || Editor.Revision == autoSavedRevision) return;
+        if (busy || capturePending || autoSaveInProgress || Editor.IsInteracting) { QueueAutoSave(); return; }
+        autoSaveInProgress = true;
+        var sequence = ++autoSaveSequence;
+        var generation = documentGeneration;
+        var revision = Editor.Revision;
+        try
+        {
+            var image = Editor.ExportImage();
+            revision = Editor.Revision;
+            var path = autoSavePath ??= CaptureFileStore.CreatePath(autoSaveDirectory);
+            // The last saved revision becomes uncertain as soon as a replacement starts.
+            // Undoing back to it must still wait for, and replace, the pending write.
+            autoSavedRevision = -1; Editor.MarkUnsaved();
+            autoSaveWrite = Task.Run(() => CaptureFileStore.Save(image, path));
+            await autoSaveWrite;
+            if (!isClosed && SettingsStore.Current.AutoSaveCaptures && generation == documentGeneration && sequence == autoSaveSequence && path == autoSavePath)
+            {
+                autoSavedRevision = revision;
+                if (Editor.Revision == revision && !Editor.IsInteracting)
+                {
+                    Editor.MarkSaved(); SetStatus("已自動儲存：{0}", path);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            SettingsStore.Log(ex);
+            if (!isClosed && generation == documentGeneration && sequence == autoSaveSequence && autoSavedRevision != revision)
+                SetStatus("自動儲存失敗，請檢查截圖資料夾或手動儲存。");
+        }
+        finally
+        {
+            autoSaveInProgress = false; autoSaveWrite = null;
+            if (!isClosed && (generation != documentGeneration || Editor.Revision != revision)) QueueAutoSave();
+        }
+    }
+    bool SaveAutomaticallyBeforeDiscard(bool finishPending = false)
+    {
+        if (!SettingsStore.Current.AutoSaveCaptures && !finishPending) return false;
+        autoSaveTimer.Stop();
+        try
+        {
+            // Finish the background disk write before writing the latest revision to the same file.
+            // This task contains only PNG encoding and file IO, so it does not need the UI thread.
+            FinishAutoSaveWrite();
+            autoSaveSequence++;
+            var image = Editor.ExportImage();
+            var path = autoSavePath ??= CaptureFileStore.CreatePath(autoSaveDirectory);
+            CaptureFileStore.Save(image, path);
+            autoSavedRevision = Editor.Revision; Editor.MarkSaved();
+            SetStatus("已自動儲存：{0}", path);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SettingsStore.Log(ex); Editor.MarkUnsaved(); SetStatus("自動儲存失敗，請檢查截圖資料夾或手動儲存。");
+            return false;
+        }
+    }
+    void FinishAutoSaveWrite()
+    {
+        try { autoSaveWrite?.GetAwaiter().GetResult(); }
+        catch (Exception ex) { SettingsStore.Log(ex); }
     }
     void RefreshDocumentState()
     {
@@ -165,11 +280,22 @@ public partial class MainWindow : Window
         else
         {
             ResizeMode = ResizeMode.CanResize;
-            MinWidth = 950; MinHeight = 620;
-            var area = SystemParameters.WorkArea;
+            UpdateMinimumWindowSize();
+            var area = WindowBoundsService.GetWorkArea(this);
             var bounds = editorBounds ?? new Rect(area.Left + Math.Max(0, (area.Width - 1240) / 2), area.Top + Math.Max(0, (area.Height - 810) / 2), Math.Min(1240, area.Width), Math.Min(810, area.Height));
-            if (WindowState == WindowState.Normal) { Width = bounds.Width; Height = bounds.Height; Left = bounds.Left; Top = bounds.Top; }
+            if (WindowState == WindowState.Normal)
+            {
+                Width = Math.Clamp(bounds.Width, MinWidth, area.Width); Height = Math.Clamp(bounds.Height, MinHeight, area.Height);
+                Left = Math.Clamp(bounds.Left, area.Left, Math.Max(area.Left, area.Right - Width));
+                Top = Math.Clamp(bounds.Top, area.Top, Math.Max(area.Top, area.Bottom - Height));
+            }
         }
+    }
+    void UpdateMinimumWindowSize()
+    {
+        if (compact || !modeInitialized) return;
+        var area = WindowBoundsService.GetWorkArea(this);
+        MinWidth = Math.Min(950, area.Width); MinHeight = Math.Min(620, area.Height);
     }
     void CompactClick(object sender, RoutedEventArgs e) { Editor.CommitTextEdit(); ApplyWindowMode(true); }
     void ExpandClick(object sender, RoutedEventArgs e) => ApplyWindowMode(false);
@@ -178,10 +304,11 @@ public partial class MainWindow : Window
         RefreshDocumentState();
         RefreshHotkeyHint();
         StatusText.Text = showingUpdateStatus ? Updates.Status : I18n.F(statusKey, statusValues);
+        StatusText.ToolTip = StatusText.Text;
     });
     void SetStatus(string key, params object?[] values)
     {
-        showingUpdateStatus = false; statusKey = key; statusValues = values; StatusText.Text = I18n.F(key, values);
+        showingUpdateStatus = false; statusKey = key; statusValues = values; StatusText.Text = I18n.F(key, values); StatusText.ToolTip = StatusText.Text;
     }
     void RefreshProperties()
     {
@@ -233,7 +360,7 @@ public partial class MainWindow : Window
     async void CopyClick(object sender, RoutedEventArgs e)
     {
         if (!Editor.HasImage || busy) return;
-        try { await CopyImageAsync(Editor.ExportImage()); SetStatus("已複製圖片"); }
+        try { await CopyImageAsync(Editor.ExportImage()); SetStatus("已複製含標註圖片"); }
         catch (Exception ex) { ReportError(ex, "複製失敗"); }
     }
     bool SaveCurrent()
@@ -241,8 +368,18 @@ public partial class MainWindow : Window
         if (!Editor.HasImage) return false;
         Editor.CommitTextEdit();
         var dialog = new Microsoft.Win32.SaveFileDialog { Filter = I18n.T("PNG 圖片 (*.png)|*.png"), FileName = $"SnipFlow_{DateTime.Now:yyyyMMdd_HHmmss}.png", AddExtension = true, DefaultExt = ".png", OverwritePrompt = true };
+        if (Directory.Exists(SettingsStore.Current.CaptureSaveDirectory)) dialog.InitialDirectory = SettingsStore.Current.CaptureSaveDirectory;
         if (dialog.ShowDialog(this) != true) return false;
-        try { var image = Editor.ExportImage(); HistoryStore.SavePng(image, dialog.FileName); Editor.MarkSaved(); HistoryStore.Add(image); RefreshHistory(); SetStatus("已儲存 {0}", Path.GetFileName(dialog.FileName)); return true; }
+        try
+        {
+            FinishAutoSaveWrite();
+            var isAutoSaveFile = string.Equals(Path.GetFullPath(dialog.FileName), autoSavePath, StringComparison.OrdinalIgnoreCase);
+            if (isAutoSaveFile) autoSaveSequence++;
+            var image = Editor.ExportImage(); CaptureFileStore.Save(image, dialog.FileName);
+            if (isAutoSaveFile) autoSavedRevision = Editor.Revision;
+            Editor.MarkSaved(); HistoryStore.Add(image); RefreshHistory(); SetStatus("已儲存 {0}", Path.GetFileName(dialog.FileName));
+            return true;
+        }
         catch (Exception ex) { ReportError(ex, "儲存失敗"); return false; }
     }
     void SaveClick(object sender, RoutedEventArgs e) => SaveCurrent();
@@ -250,9 +387,12 @@ public partial class MainWindow : Window
     {
         if (busy) return false;
         Editor.CommitTextEdit();
-        if (!Editor.HasEdits) return true;
+        var hasUnsavedEdits = Editor.HasEdits;
+        var needsAutoSave = SettingsStore.Current.AutoSaveCaptures && Editor.HasImage && Editor.Revision != autoSavedRevision;
+        if (!hasUnsavedEdits && !needsAutoSave) return true;
+        if (SaveAutomaticallyBeforeDiscard()) return true;
         Show(); if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal; Activate();
-        var result = MessageBox.Show(this, I18n.T("目前的標註尚未儲存，要先存成 PNG 嗎？"), I18n.T("保留標註"), MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+        var result = MessageBox.Show(this, I18n.T(hasUnsavedEdits ? "目前的標註尚未儲存，要先存成 PNG 嗎？" : "自動儲存未完成，要改為手動儲存嗎？"), I18n.T("保留標註"), MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         return result == MessageBoxResult.No || result == MessageBoxResult.Yes && SaveCurrent();
     }
     void OpenClick(object sender, RoutedEventArgs e)
@@ -343,7 +483,7 @@ public partial class MainWindow : Window
             else if (e.Key == Key.Y) Editor.Redo();
             else if (e.Key == Key.V)
             {
-                if (PrepareToDiscard()) try { if (Clipboard.ContainsImage()) { var image = Clipboard.GetImage(); if (image != null) { image.Freeze(); Editor.LoadImage(image); ApplyWindowMode(false); ImageInfo.Text = $"{image.PixelWidth} × {image.PixelHeight} px"; } } } catch (Exception ex) { ReportError(ex, "貼上失敗"); }
+                if (PrepareToDiscard()) try { if (Clipboard.ContainsImage()) { var image = Clipboard.GetImage(); if (image != null) { image.Freeze(); LoadDocument(image); ApplyWindowMode(false); ImageInfo.Text = $"{image.PixelWidth} × {image.PixelHeight} px"; } } } catch (Exception ex) { ReportError(ex, "貼上失敗"); }
             }
             else return;
             e.Handled = true; return;

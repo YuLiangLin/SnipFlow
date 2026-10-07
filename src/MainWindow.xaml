@@ -20,23 +20,37 @@
       </Border>
       <Grid Grid.Row="1" x:Name="Workspace" Visibility="Collapsed"><Grid.ColumnDefinitions><ColumnDefinition Width="64" /><ColumnDefinition /><ColumnDefinition Width="220" x:Name="HistoryColumn" /></Grid.ColumnDefinitions>
         <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
-          <DockPanel Margin="6,10,6,8">
-            <DockPanel.Resources><Style TargetType="Button" BasedOn="{StaticResource QuietButton}"><Setter Property="Padding" Value="4,9" /></Style></DockPanel.Resources>
-            <StackPanel DockPanel.Dock="Top">
-              <Button Click="CaptureClick" ToolTip="{ui:Tr '框選截圖'}" Margin="0,0,0,8"><StackPanel><TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="20" HorizontalAlignment="Center" /><TextBlock Text="{ui:Tr '截圖'}" FontSize="10" Margin="0,7,0,0" HorizontalAlignment="Center" /></StackPanel></Button>
-              <Button Click="ScrollClick" ToolTip="{ui:Tr '長頁捲動截圖'}" Margin="0,0,0,8"><StackPanel><TextBlock Text="&#xE8CB;" FontFamily="Segoe Fluent Icons" FontSize="20" HorizontalAlignment="Center" /><TextBlock Text="{ui:Tr '長截圖'}" FontSize="10" Margin="0,7,0,0" HorizontalAlignment="Center" /></StackPanel></Button>
-              <Button Click="RecordClick" ToolTip="{ui:Tr '螢幕錄影'}" Margin="0,0,0,8"><StackPanel><TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="20" HorizontalAlignment="Center" /><TextBlock Text="{ui:Tr '錄影'}" FontSize="10" Margin="0,7,0,0" HorizontalAlignment="Center" /></StackPanel></Button>
-              <Button Click="OpenClick" ToolTip="{ui:Tr '開啟圖片'}"><StackPanel><TextBlock Text="&#xE8E5;" FontFamily="Segoe Fluent Icons" FontSize="20" HorizontalAlignment="Center" /><TextBlock Text="{ui:Tr '開啟'}" FontSize="10" Margin="0,7,0,0" HorizontalAlignment="Center" /></StackPanel></Button>
+          <Grid Margin="10,12,10,12">
+            <Grid.Resources>
+              <Style TargetType="Button" BasedOn="{StaticResource QuietButton}">
+                <Setter Property="Width" Value="40" /><Setter Property="Height" Value="40" />
+                <Setter Property="Padding" Value="0" /><Setter Property="Margin" Value="0,0,0,6" />
+                <Setter Property="Foreground" Value="{StaticResource Ink}" />
+                <Setter Property="ToolTipService.Placement" Value="Right" /><Setter Property="ToolTipService.InitialShowDelay" Value="350" />
+              </Style>
+            </Grid.Resources>
+            <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,6">
+              <StackPanel>
+              <Button Click="CaptureClick" ToolTip="{ui:Tr '框選截圖'}" AutomationProperties.Name="{ui:Tr '框選截圖'}"><TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
+              <Button Click="ScrollClick" ToolTip="{ui:Tr '長頁捲動截圖'}" AutomationProperties.Name="{ui:Tr '長頁捲動截圖'}"><TextBlock Text="&#xE8CB;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
+              <Button Click="RecordClick" ToolTip="{ui:Tr '螢幕錄影'}" AutomationProperties.Name="{ui:Tr '螢幕錄影'}"><TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
+              <Button Click="OpenClick" ToolTip="{ui:Tr '開啟圖片'}" AutomationProperties.Name="{ui:Tr '開啟圖片'}"><TextBlock Text="&#xE8E5;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
+              </StackPanel>
+            </ScrollViewer>
+            <StackPanel Grid.Row="1">
+              <Button Click="SettingsClick" ToolTip="{ui:Tr '設定'}" AutomationProperties.Name="{ui:Tr '設定'}"><TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
+              <Button Click="ExitClick" ToolTip="{ui:Tr '結束程式'}" AutomationProperties.Name="{ui:Tr '結束程式'}" Margin="0"><TextBlock Text="&#xE7E8;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
             </StackPanel>
-            <StackPanel DockPanel.Dock="Bottom"><Button Click="SettingsClick" ToolTip="{ui:Tr '設定'}"><TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button><Button Click="ExitClick" ToolTip="{ui:Tr '結束程式'}"><TextBlock Text="&#xE7E8;" FontFamily="Segoe Fluent Icons" FontSize="18" /></Button></StackPanel>
-            <Border />
-          </DockPanel>
+          </Grid>
         </Border>
         <Grid Grid.Column="1"><Grid.RowDefinitions><RowDefinition Height="48" /><RowDefinition Height="40" /><RowDefinition /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
           <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
             <DockPanel Margin="12,8">
               <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                <Button x:Name="CopyButton" Content="{ui:Tr '複製'}" Click="CopyClick" Style="{StaticResource QuietButton}" ToolTip="Ctrl + C" Margin="0,0,6,0" />
+                <Button x:Name="CopyButton" Content="{ui:Tr '複製含標註圖片'}" Click="CopyClick" Style="{StaticResource QuietButton}" AutomationProperties.Name="{ui:Tr '複製含標註圖片'}" Margin="0,0,6,0">
+                  <Button.ToolTip><StackPanel><TextBlock Text="{ui:Tr '複製含標註圖片'}" /><TextBlock Text="Ctrl + C" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,4,0,0" /></StackPanel></Button.ToolTip>
+                </Button>
                 <Button x:Name="SaveButton" Content="{ui:Tr '儲存'}" Click="SaveClick" Style="{StaticResource QuietButton}" Background="{StaticResource Raised}" ToolTip="Ctrl + S" />
               </StackPanel>
               <StackPanel Orientation="Horizontal" x:Name="ToolButtons">
