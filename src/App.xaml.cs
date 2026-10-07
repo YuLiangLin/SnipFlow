@@ -57,7 +57,7 @@ public partial class App : Application
         menu.Items.Add(I18n.T("開啟 SnipFlow"), null, (_, _) => Dispatcher.BeginInvoke(ShowShell));
         menu.Items.Add(I18n.T("結束"), null, (_, _) => Dispatcher.BeginInvoke(ExitRequested));
         I18n.Changed += TrayLanguageChanged;
-        trayIcon = new System.Drawing.Icon(Path.Combine(AppContext.BaseDirectory, "Assets", "SnipFlow-v2.ico"), 32, 32);
+        trayIcon = new System.Drawing.Icon(Path.Combine(AppContext.BaseDirectory, "Assets", "SnipFlow-v3.ico"), 32, 32);
         tray = new System.Windows.Forms.NotifyIcon { Icon = trayIcon, Text = "SnipFlow", Visible = true, ContextMenuStrip = menu };
         tray.DoubleClick += (_, _) => Dispatcher.BeginInvoke(ShowShell);
         shell.Show();

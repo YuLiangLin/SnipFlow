@@ -1,4 +1,4 @@
-<Window x:Class="SnipFlow.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework" xmlns:editor="clr-namespace:SnipFlow.Editor" xmlns:ui="clr-namespace:SnipFlow.Services" Style="{StaticResource AppWindow}" Title="SnipFlow" Icon="Assets/SnipFlow-v2.png" Width="420" Height="264" MinWidth="420" MinHeight="264" WindowStartupLocation="CenterScreen" WindowStyle="None" ResizeMode="CanResize" AllowDrop="True" Drop="ImageDropped" PreviewKeyDown="WindowKeyDown" Closing="WindowClosing">
+<Window x:Class="SnipFlow.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework" xmlns:editor="clr-namespace:SnipFlow.Editor" xmlns:ui="clr-namespace:SnipFlow.Services" Style="{StaticResource AppWindow}" Title="SnipFlow" Icon="Assets/SnipFlow-v3.png" Width="420" Height="264" MinWidth="420" MinHeight="264" WindowStartupLocation="CenterScreen" WindowStyle="None" ResizeMode="CanResize" AllowDrop="True" Drop="ImageDropped" PreviewKeyDown="WindowKeyDown" Closing="WindowClosing">
   <shell:WindowChrome.WindowChrome><shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="6" CornerRadius="10" GlassFrameThickness="0" /></shell:WindowChrome.WindowChrome>
   <Border BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="10">
     <Grid>
@@ -6,7 +6,7 @@
       <Border Grid.Row="0" Background="{StaticResource Bg}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" MouseLeftButtonDown="TitleDrag">
         <Grid Margin="16,0,8,0"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
           <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-            <Image Source="Assets/SnipFlow-v2.png" Width="28" Height="28" Margin="0,0,9,0" />
+            <Image Source="Assets/SnipFlow-v3.png" Width="28" Height="28" Margin="0,0,9,0" />
             <TextBlock Text="SnipFlow" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
           </StackPanel>
           <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -74,7 +74,7 @@
           <editor:EditorView Grid.Row="2" x:Name="Editor" />
           <Grid Grid.Row="2" x:Name="EmptyState" Background="{StaticResource Bg}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="420" Margin="35">
-              <Image Source="Assets/SnipFlow-v2.png" Width="96" Height="96" HorizontalAlignment="Center" Margin="0,0,0,20" />
+              <Image Source="Assets/SnipFlow-v3.png" Width="96" Height="96" HorizontalAlignment="Center" Margin="0,0,0,20" />
               <Button Style="{StaticResource Primary}" Content="{ui:Tr '框選截圖'}" Click="CaptureClick" Width="180" Padding="16,13" HorizontalAlignment="Center" />
               <TextBlock x:Name="HotkeyHint" Text="Ctrl + Alt + S" FontFamily="Cascadia Code, Consolas" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,16,0,18" />
               <Button Content="{ui:Tr '開啟圖片'}" Click="OpenClick" Width="180" BorderThickness="1" />

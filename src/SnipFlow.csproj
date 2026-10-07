@@ -11,7 +11,7 @@
     <Nullable>enable</Nullable>
     <StartupObject>SnipFlow.App</StartupObject>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>Assets/SnipFlow-v2.ico</ApplicationIcon>
+    <ApplicationIcon>Assets/SnipFlow-v3.ico</ApplicationIcon>
     <Version>0.4.0</Version>
     <AssemblyName>SnipFlow</AssemblyName>
     <Product>SnipFlow</Product>
@@ -27,8 +27,8 @@
     <Page Include="App.xaml" />
     <Content Include="update-source.json" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="update-source.json" LogicalName="SnipFlow.update-source.json" />
-    <Resource Include="Assets/SnipFlow-v2.png" />
-    <Content Include="Assets/SnipFlow-v2.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Resource Include="Assets/SnipFlow-v3.png" />
+    <Content Include="Assets/SnipFlow-v3.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../licenses/*.txt" Link="licenses/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
