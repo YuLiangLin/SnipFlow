@@ -13,6 +13,7 @@ public sealed class UserSettings
     public bool StartWithWindows { get; set; }
     public string Hotkey { get; set; } = HotkeyGesture.DefaultShortcut;
     public int HistoryLimit { get; set; } = 80;
+    public List<string> RecentColors { get; set; } = new();
 }
 
 public static class SettingsStore
@@ -37,6 +38,9 @@ public static class SettingsStore
         try
         {
             var settings = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(Path.Combine(DataRoot, "settings.json"))) ?? new();
+            settings.RecentColors = (settings.RecentColors ?? new()).Where(value =>
+                value is { Length: 7 } && value[0] == '#' && value.Skip(1).All(Uri.IsHexDigit))
+                .Select(value => value.ToUpperInvariant()).Distinct(StringComparer.Ordinal).Take(8).ToList();
             try { settings.CaptureSaveDirectory = NormalizeCaptureSaveDirectory(settings.CaptureSaveDirectory); }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
             { settings.CaptureSaveDirectory = DefaultCaptureSaveDirectory; }

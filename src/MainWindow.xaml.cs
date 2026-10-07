@@ -54,7 +54,7 @@ public partial class MainWindow : Window
         I18n.Changed += LanguageChanged;
         SettingsStore.Changed += SettingsChanged;
         autoSaveTimer.Tick += AutoSaveTick;
-        Closed += (_, _) => { isClosed = true; autoSaveTimer.Stop(); SettingsStore.Changed -= SettingsChanged; I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
+        Closed += (_, _) => { isClosed = true; CloseColorPalette(); autoSaveTimer.Stop(); SettingsStore.Changed -= SettingsChanged; I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
         ApplyWindowMode(true);
         SourceInitialized += (_, _) => { WindowAppearance.Apply(this); WindowBoundsService.Attach(this); UpdateMinimumWindowSize(); SetHotkey(SettingsStore.Current.Hotkey); };
         SizeChanged += (_, _) => UpdateMinimumWindowSize();
@@ -98,6 +98,7 @@ public partial class MainWindow : Window
     public async Task StartCaptureAsync(bool scrolling)
     {
         if (busy || capturePending || !CanStartCapture) return;
+        CloseColorPalette();
         capturePending = true;
         try
         {
@@ -117,7 +118,7 @@ public partial class MainWindow : Window
             BitmapSource image = result.Image;
             if (scrolling)
             {
-                var window = new ScrollCaptureWindow(result.Bounds);
+                var window = new ScrollCaptureWindow(result.Bounds, result.Image);
                 if (window.ShowDialog() != true || window.Result == null) { if (wasVisible) { Show(); Activate(); } return; }
                 image = window.Result;
             }
@@ -288,6 +289,7 @@ public partial class MainWindow : Window
     void RefreshDocumentState()
     {
         if (Editor == null) return;
+        if (busy || capturePending) CloseColorPalette();
         EmptyState.Visibility = Editor.HasImage ? Visibility.Collapsed : Visibility.Visible;
         CopyButton.IsEnabled = SaveButton.IsEnabled = OcrButton.IsEnabled = Editor.HasImage && !busy;
         Editor.IsEnabled = !busy;
@@ -367,10 +369,12 @@ public partial class MainWindow : Window
             var color = Editor.SelectedColor ?? activeColor;
             foreach (var button in ColorButtons.Children.OfType<Button>())
             {
-                bool selected = button.Tag is string hex && (Color)ColorConverter.ConvertFromString(hex) == color;
+                if (button.Tag is not string hex) continue;
+                bool selected = (Color)ColorConverter.ConvertFromString(hex) == color;
                 button.BorderBrush = (Brush)FindResource(selected ? "Accent" : "Muted");
                 button.BorderThickness = new Thickness(selected ? 2 : 1);
             }
+            MoreColorsButton.ToolTip = I18n.T("更多顏色") + " · " + ColorPaletteView.ToHex(color);
         }
         finally { refreshingProperties = false; }
     }
@@ -462,7 +466,7 @@ public partial class MainWindow : Window
     }
     void ColorClick(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: string value }) { activeColor = (Color)ColorConverter.ConvertFromString(value); Editor.SetColor(activeColor); RefreshProperties(); }
+        if (sender is Button { Tag: string value }) ApplyAnnotationColor((Color)ColorConverter.ConvertFromString(value));
     }
     void StrokeChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (Editor != null && !refreshingProperties) Editor.StrokeWidth = e.NewValue; }
     void PropertyDragStarted(object sender, DragStartedEventArgs e) => Editor.BeginPropertyEdit();

@@ -45,8 +45,9 @@
             </StackPanel>
           </Grid>
         </Border>
-        <Grid Grid.Column="1"><Grid.RowDefinitions><RowDefinition Height="48" /><RowDefinition Height="40" /><RowDefinition Height="Auto" /><RowDefinition /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+        <Grid Grid.Column="1"><Grid.RowDefinitions><RowDefinition Height="Auto" MinHeight="48" /><RowDefinition Height="Auto" MinHeight="40" /><RowDefinition Height="Auto" /><RowDefinition /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
           <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" PanningMode="HorizontalOnly">
             <DockPanel Margin="12,8">
               <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                 <Button x:Name="CopyButton" Content="{ui:Tr '複製含標註圖片'}" Click="CopyClick" Style="{StaticResource QuietButton}" AutomationProperties.Name="{ui:Tr '複製含標註圖片'}" Margin="0,0,6,0">
@@ -58,8 +59,8 @@
                 <StackPanel.Resources><Style TargetType="Button" BasedOn="{StaticResource QuietButton}"><Setter Property="Padding" Value="7,3" /><Setter Property="MinWidth" Value="32" /></Style></StackPanel.Resources>
                 <Button Tag="Select" Click="ToolClick" ToolTip="{ui:Tr '選取／移動 (V)'}"><TextBlock Text="&#xE7C9;" FontFamily="Segoe Fluent Icons" /></Button>
                 <Button Tag="Arrow" Click="ToolClick" ToolTip="{ui:Tr '箭頭 (A)'}" Content="↗" FontSize="20" />
-                <Button Tag="Rectangle" Click="ToolClick" ToolTip="{ui:Tr '矩形 (R)'}" Content="□" FontSize="21" />
-                <Button Tag="Ellipse" Click="ToolClick" ToolTip="{ui:Tr '橢圓 (E)'}" Content="○" FontSize="21" />
+                <Button Tag="Rectangle" Click="ToolClick" ToolTip="{ui:Tr '矩形 (R)'}" AutomationProperties.Name="{ui:Tr '矩形'}"><Grid Width="18" Height="18" UseLayoutRounding="True" SnapsToDevicePixels="True"><Rectangle Width="14" Height="12" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" HorizontalAlignment="Center" VerticalAlignment="Center" /></Grid></Button>
+                <Button Tag="Ellipse" Click="ToolClick" ToolTip="{ui:Tr '橢圓 (E)'}" AutomationProperties.Name="{ui:Tr '橢圓'}"><Grid Width="18" Height="18" UseLayoutRounding="True"><Ellipse Width="14" Height="14" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" HorizontalAlignment="Center" VerticalAlignment="Center" /></Grid></Button>
                 <Button Tag="Pen" Click="ToolClick" ToolTip="{ui:Tr '畫筆 (P)'}"><TextBlock Text="&#xE70F;" FontFamily="Segoe Fluent Icons" /></Button>
                 <Button Tag="Highlight" Click="ToolClick" ToolTip="{ui:Tr '螢光筆 (H)'}"><TextBlock Text="&#xE7E6;" FontFamily="Segoe Fluent Icons" /></Button>
                 <Button Tag="Text" Click="ToolClick" ToolTip="{ui:Tr '文字 (T)'}" Content="T" FontWeight="Bold" />
@@ -68,23 +69,32 @@
                 <Button x:Name="UndoButton" Content="↶" FontSize="20" Click="UndoClick" ToolTip="{ui:Tr '復原 · Ctrl + Z'}" /><Button x:Name="RedoButton" Content="↷" FontSize="20" Click="RedoClick" ToolTip="{ui:Tr '重做 · Ctrl + Y'}" />
               </StackPanel>
             </DockPanel>
+            </ScrollViewer>
           </Border>
           <Border Grid.Row="1" Background="{StaticResource Bg}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" PanningMode="HorizontalOnly">
             <DockPanel Margin="18,5">
               <Button DockPanel.Dock="Right" x:Name="OcrButton" Content="{ui:Tr '辨識文字  OCR'}" Click="OcrClick" Style="{StaticResource QuietButton}" Padding="10,4" Foreground="{StaticResource Ink}" />
               <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock x:Name="ToolLabel" Text="{ui:Tr '畫筆'}" Foreground="{StaticResource Muted}" Margin="0,0,14,0" VerticalAlignment="Center" />
-                <StackPanel x:Name="ColorButtons" Orientation="Horizontal" Margin="0,0,14,0">
+                <TextBlock x:Name="ToolLabel" Text="{ui:Tr '畫筆'}" Foreground="{StaticResource Muted}" Margin="0,0,10,0" VerticalAlignment="Center" MaxWidth="64" TextTrimming="CharacterEllipsis" />
+                <StackPanel x:Name="ColorButtons" Orientation="Horizontal" Margin="0,0,10,0">
                   <Button Tag="#111827" Click="ColorClick" Style="{StaticResource ColorSwatch}" Background="#111827" ToolTip="{ui:Tr '黑色'}" />
                   <Button Tag="#63D5C5" Click="ColorClick" Style="{StaticResource ColorSwatch}" Background="#63D5C5" ToolTip="{ui:Tr '青綠'}" />
                   <Button Tag="#FF646C" Click="ColorClick" Style="{StaticResource ColorSwatch}" Background="#FF646C" ToolTip="{ui:Tr '紅色'}" />
                   <Button Tag="#FFCC6A" Click="ColorClick" Style="{StaticResource ColorSwatch}" Background="#FFCC6A" ToolTip="{ui:Tr '黃色'}" />
+                  <Button Tag="#3B82F6" Click="ColorClick" Style="{StaticResource ColorSwatch}" Background="#3B82F6" ToolTip="{ui:Tr '藍色'}" />
+                  <Button Tag="#8B5CF6" Click="ColorClick" Style="{StaticResource ColorSwatch}" Background="#8B5CF6" ToolTip="{ui:Tr '紫色'}" />
+                  <Button Tag="#F97316" Click="ColorClick" Style="{StaticResource ColorSwatch}" Background="#F97316" ToolTip="{ui:Tr '橘色'}" />
                   <Button Tag="#FFFFFF" Click="ColorClick" Style="{StaticResource ColorSwatch}" Background="White" ToolTip="{ui:Tr '白色'}" />
+                  <Button x:Name="MoreColorsButton" Click="MoreColorsClick" Width="26" Height="24" MinHeight="0" Padding="3" ToolTip="{ui:Tr '更多顏色'}" AutomationProperties.Name="{ui:Tr '更多顏色'}">
+                    <Ellipse Width="16" Height="16" Stroke="{StaticResource Muted}" StrokeThickness="1"><Ellipse.Fill><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#FF646C" Offset="0" /><GradientStop Color="#FFCC6A" Offset="0.25" /><GradientStop Color="#63D5C5" Offset="0.5" /><GradientStop Color="#3B82F6" Offset="0.75" /><GradientStop Color="#8B5CF6" Offset="1" /></LinearGradientBrush></Ellipse.Fill></Ellipse>
+                  </Button>
                 </StackPanel>
                 <StackPanel x:Name="WidthProperties" Orientation="Horizontal"><TextBlock Text="{ui:Tr '粗細'}" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0" /><Slider x:Name="WidthSlider" Minimum="1" Maximum="32" Value="4" Width="90" VerticalAlignment="Center" ValueChanged="StrokeChanged" Thumb.DragStarted="PropertyDragStarted" Thumb.DragCompleted="PropertyDragCompleted" /></StackPanel>
                 <StackPanel x:Name="TextProperties" Orientation="Horizontal" Visibility="Collapsed"><TextBlock Text="{ui:Tr '字級'}" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0" /><TextBox x:Name="TextSizeBox" Text="26" Width="58" Padding="6,3" TextAlignment="Center" VerticalContentAlignment="Center" LostKeyboardFocus="TextSizeChanged" PreviewKeyDown="TextSizeKeyDown" ToolTip="{ui:Tr '文字大小（12–240 px）'}" /></StackPanel>
               </StackPanel>
             </DockPanel>
+            </ScrollViewer>
           </Border>
           <Border Grid.Row="2" x:Name="CollageBar" Visibility="Collapsed" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
             <WrapPanel Margin="12,6">

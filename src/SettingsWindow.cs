@@ -458,7 +458,8 @@ public sealed class SettingsWindow : Window
         AutoSaveCaptures = SettingsStore.Current.AutoSaveCaptures, CaptureSaveDirectory = SettingsStore.Current.CaptureSaveDirectory,
         KeepHistory = SettingsStore.Current.KeepHistory, StartWithWindows = SettingsStore.Current.StartWithWindows,
         Hotkey = SettingsStore.Current.Hotkey, AutoCheckUpdates = SettingsStore.Current.AutoCheckUpdates,
-        AutoDownloadUpdates = SettingsStore.Current.AutoDownloadUpdates, HistoryLimit = SettingsStore.Current.HistoryLimit
+        AutoDownloadUpdates = SettingsStore.Current.AutoDownloadUpdates, HistoryLimit = SettingsStore.Current.HistoryLimit,
+        RecentColors = new List<string>(SettingsStore.Current.RecentColors)
     };
 
     static void RestoreSettings(UserSettings previous)
@@ -473,6 +474,7 @@ public sealed class SettingsWindow : Window
         SettingsStore.Current.AutoCheckUpdates = previous.AutoCheckUpdates;
         SettingsStore.Current.AutoDownloadUpdates = previous.AutoDownloadUpdates;
         SettingsStore.Current.HistoryLimit = previous.HistoryLimit;
+        SettingsStore.Current.RecentColors = new List<string>(previous.RecentColors);
     }
 
     void LanguageSelectionChanged(object sender, SelectionChangedEventArgs args)
