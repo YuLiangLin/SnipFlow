@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using SnipFlow.Services;
 using DrawingRectangle = System.Drawing.Rectangle;
 
 namespace SnipFlow.Recording;
@@ -47,8 +48,8 @@ public sealed class RecordingWindow : Window
         SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
-        Background = ColorBrush("#171D2A");
-        Foreground = ColorBrush("#ECF2FC");
+        Background = ColorBrush("#202020");
+        Foreground = ColorBrush("#ECECEC");
         FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI");
         FontSize = 13;
         Topmost = true;
@@ -57,8 +58,8 @@ public sealed class RecordingWindow : Window
 
         var shell = new Border
         {
-            Background = ColorBrush("#171D2A"), BorderBrush = ColorBrush("#344056"),
-            BorderThickness = new Thickness(1), Padding = new Thickness(20)
+            Background = ColorBrush("#202020"), BorderBrush = ColorBrush("#383838"),
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(9), Padding = new Thickness(20)
         };
         var layout = new StackPanel();
         shell.Child = layout;
@@ -79,12 +80,12 @@ public sealed class RecordingWindow : Window
         heading.Children.Add(_clock);
         layout.Children.Add(heading);
 
-        _stateLabel = new TextBlock { Text = T("準備錄影"), Foreground = ColorBrush("#76E9CF"), Margin = new Thickness(0, 0, 0, 5) };
+        _stateLabel = new TextBlock { Text = T("準備錄影"), Foreground = ColorBrush("#ECECEC"), Margin = new Thickness(0, 0, 0, 5) };
         layout.Children.Add(_stateLabel);
         layout.Children.Add(new TextBlock
         {
             Text = $"{_bounds.Width:N0} × {_bounds.Height:N0} px · 30 fps · MP4",
-            Foreground = ColorBrush("#94A7C4"), FontSize = 11, Margin = new Thickness(0, 0, 0, 15)
+            Foreground = ColorBrush("#A3A3A3"), FontSize = 11, Margin = new Thickness(0, 0, 0, 15)
         });
 
         var toggles = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
@@ -101,7 +102,7 @@ public sealed class RecordingWindow : Window
             Text = _bounds.Size != targetPhysicalBounds.Size
                 ? T("為符合影片尺寸，右或下邊緣最多內縮 1 像素。")
                 : T("按下開始後才會錄製，停止後儲存為 MP4。"),
-            Foreground = ColorBrush("#A6B5CE"), TextWrapping = TextWrapping.Wrap,
+            Foreground = ColorBrush("#A3A3A3"), TextWrapping = TextWrapping.Wrap,
             LineHeight = 19, Margin = new Thickness(0, 0, 0, 13)
         };
         layout.Children.Add(_status);
@@ -125,7 +126,7 @@ public sealed class RecordingWindow : Window
 
         _pathLabel = new TextBlock
         {
-            Foreground = ColorBrush("#7185A4"), FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = ColorBrush("#A3A3A3"), FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis,
             Margin = new Thickness(0, 12, 0, 0), Text = T("儲存位置在開始錄影前選擇")
         };
         layout.Children.Add(_pathLabel);
@@ -137,7 +138,7 @@ public sealed class RecordingWindow : Window
             if (!Dispatcher.HasShutdownStarted)
                 _ = Dispatcher.BeginInvoke(() => ShowState(state));
         };
-        SourceInitialized += (_, _) => ConfigureToolbarWindow();
+        SourceInitialized += (_, _) => { WindowAppearance.Apply(this); ConfigureToolbarWindow(); };
         Closing += OnClosing;
         Closed += (_, _) => { _timer.Stop(); _lifetime.Cancel(); };
         PreviewKeyDown += async (_, args) =>
@@ -297,7 +298,7 @@ public sealed class RecordingWindow : Window
             RecordingState.Failed => T("錄影失敗"),
             _ => T("準備錄影")
         };
-        _stateLabel.Foreground = ColorBrush(state is RecordingState.Recording or RecordingState.Failed ? "#F17B82" : "#76E9CF");
+        _stateLabel.Foreground = ColorBrush(state is RecordingState.Recording or RecordingState.Failed ? "#F17B82" : "#ECECEC");
     }
 
     private void ResetStartControls()
@@ -305,7 +306,7 @@ public sealed class RecordingWindow : Window
         _recordingStarted = false;
         _timer.Stop();
         _recordButton.Content = T("開始錄影");
-        _recordButton.Background = ColorBrush("#70E8C7");
+        _recordButton.Background = ColorBrush("#E8E8E8");
         _cancelButton.Content = T("取消");
     }
 
@@ -321,7 +322,7 @@ public sealed class RecordingWindow : Window
     private void SetStatus(string text, bool error = false)
     {
         _status.Text = text;
-        _status.Foreground = ColorBrush(error ? "#F5B7BA" : "#A6B5CE");
+        _status.Foreground = ColorBrush(error ? "#F5B7BA" : "#A3A3A3");
     }
 
     private void ConfigureToolbarWindow()
@@ -340,7 +341,7 @@ public sealed class RecordingWindow : Window
     private static CheckBox MakeToggle(string label, bool selected) => new()
     {
         Content = label, IsChecked = selected, VerticalContentAlignment = VerticalAlignment.Center,
-        Foreground = ColorBrush("#D4E1F3"), Margin = new Thickness(0, 0, 17, 5), FontSize = 12
+        Foreground = ColorBrush("#ECECEC"), Margin = new Thickness(0, 0, 17, 5), FontSize = 12
     };
 
     private static Button MakeButton(string text, bool primary)
@@ -348,8 +349,8 @@ public sealed class RecordingWindow : Window
         var button = new Button
         {
             Content = text, Padding = new Thickness(15, 10, 15, 10),
-            Background = ColorBrush(primary ? "#70E8C7" : "#29354A"),
-            Foreground = ColorBrush(primary ? "#092820" : "#DDE8F7"),
+            Background = ColorBrush(primary ? "#E8E8E8" : "#2B2B2B"),
+            Foreground = ColorBrush(primary ? "#191919" : "#ECECEC"),
             BorderThickness = new Thickness(0), FontWeight = FontWeights.SemiBold,
             FontSize = 12, Cursor = Cursors.Hand
         };

@@ -12,7 +12,7 @@
     <StartupObject>SnipFlow.App</StartupObject>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets/SnipFlow-v2.ico</ApplicationIcon>
-    <Version>0.3.1</Version>
+    <Version>0.4.0</Version>
     <AssemblyName>SnipFlow</AssemblyName>
     <Product>SnipFlow</Product>
     <Description>SnipFlow 快剪 · 截圖與標註</Description>
@@ -26,6 +26,7 @@
     <ApplicationDefinition Remove="App.xaml" />
     <Page Include="App.xaml" />
     <Content Include="update-source.json" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="update-source.json" LogicalName="SnipFlow.update-source.json" />
     <Resource Include="Assets/SnipFlow-v2.png" />
     <Content Include="Assets/SnipFlow-v2.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../licenses/*.txt" Link="licenses/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />

@@ -43,7 +43,7 @@ public partial class MainWindow : Window
         I18n.Changed += LanguageChanged;
         Closed += (_, _) => { I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
         ApplyWindowMode(true);
-        SourceInitialized += (_, _) => SetHotkey(SettingsStore.Current.Hotkey);
+        SourceInitialized += (_, _) => { WindowAppearance.Apply(this); SetHotkey(SettingsStore.Current.Hotkey); };
         Loaded += (_, _) => { RefreshHistory(); RefreshDocumentState(); };
     }
     void GlobalHotkeyPressed(object? sender, EventArgs e)
@@ -159,7 +159,7 @@ public partial class MainWindow : Window
         if (compact)
         {
             WindowState = WindowState.Normal;
-            MinWidth = 440; MinHeight = 300; Width = 440; Height = 300;
+            MinWidth = 420; MinHeight = 264; Width = 420; Height = 264;
             ResizeMode = ResizeMode.CanMinimize;
         }
         else
@@ -267,7 +267,7 @@ public partial class MainWindow : Window
     void ToolClick(object sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: string tag } button && Enum.TryParse<AnnotationTool>(tag, out var tool))
-        { activeTool = tool; Editor.SetTool(tool); foreach (var candidate in ToolButtons.Children.OfType<Button>().Where(b => b.Tag is string)) { candidate.Background = candidate.Tag?.ToString() == tag ? new SolidColorBrush(Color.FromRgb(35,69,69)) : Brushes.Transparent; candidate.Foreground = candidate.Tag?.ToString() == tag ? (Brush)FindResource("Accent") : (Brush)FindResource("Ink"); } RefreshProperties(); SetStatus(ToolKey(tool)); }
+        { activeTool = tool; Editor.SetTool(tool); foreach (var candidate in ToolButtons.Children.OfType<Button>().Where(b => b.Tag is string)) { candidate.Background = candidate.Tag?.ToString() == tag ? (Brush)FindResource("Selected") : Brushes.Transparent; candidate.Foreground = (Brush)FindResource("Ink"); } RefreshProperties(); SetStatus(ToolKey(tool)); }
     }
     void ColorClick(object sender, RoutedEventArgs e)
     {

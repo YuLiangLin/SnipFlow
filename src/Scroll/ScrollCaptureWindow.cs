@@ -52,14 +52,14 @@ public sealed class ScrollCaptureWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI");
         FontSize = 13;
-        Foreground = Brush("#ECF2FC");
+        Foreground = Brush("#ECECEC");
 
         var shell = new Border
         {
-            Background = Brush("#161D2B"),
-            BorderBrush = Brush("#344056"),
+            Background = Brush("#202020"),
+            BorderBrush = Brush("#383838"),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(18),
+            CornerRadius = new CornerRadius(12),
             Padding = new Thickness(22),
             Margin = new Thickness(12),
             Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 18, ShadowDepth = 5, Opacity = 0.35 }
@@ -78,7 +78,7 @@ public sealed class ScrollCaptureWindow : Window
         layout.Children.Add(new TextBlock
         {
             Text = I18n.T("回到目標頁面向下捲動約半頁，再按「加入畫面」。保留重疊內容，並避開固定標頭、頁尾及動畫。"),
-            Foreground = Brush("#B6C2D1"), TextWrapping = TextWrapping.Wrap,
+            Foreground = Brush("#A3A3A3"), TextWrapping = TextWrapping.Wrap,
             LineHeight = 20, Margin = new Thickness(0, 0, 0, 14)
         });
 
@@ -86,19 +86,19 @@ public sealed class ScrollCaptureWindow : Window
         RenderOptions.SetBitmapScalingMode(_preview, BitmapScalingMode.HighQuality);
         layout.Children.Add(new Border
         {
-            Height = 140, Background = Brush("#0D131D"), BorderBrush = Brush("#2A374C"),
+            Height = 140, Background = Brush("#181818"), BorderBrush = Brush("#383838"),
             BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
             ClipToBounds = true, Child = _preview
         });
         _dimensions = new TextBlock
         {
             Text = I18n.F("範圍 {0:N0} × {1:N0} px", _targetBounds.Width, _targetBounds.Height),
-            Foreground = Brush("#B6C2D1"), FontSize = 11, Margin = new Thickness(0, 8, 0, 8)
+            Foreground = Brush("#A3A3A3"), FontSize = 11, Margin = new Thickness(0, 8, 0, 8)
         };
         layout.Children.Add(_dimensions);
         _status = new TextBlock
         {
-            Text = I18n.T("正在取得第一個畫面…"), Foreground = Brush("#76E9CF"),
+            Text = I18n.T("正在取得第一個畫面…"), Foreground = Brush("#ECECEC"),
             TextWrapping = TextWrapping.Wrap, LineHeight = 19, Margin = new Thickness(0, 0, 0, 12)
         };
         layout.Children.Add(_status);
@@ -109,7 +109,7 @@ public sealed class ScrollCaptureWindow : Window
             Text = I18n.T("檢查上方接縫預覽，調整下一張要略過的頂部高度："),
             Foreground = Brush("#EAC88D"), TextWrapping = TextWrapping.Wrap
         });
-        _overlapLabel = new TextBlock { Margin = new Thickness(0, 7, 0, 0), Foreground = Brush("#B6C2D1") };
+        _overlapLabel = new TextBlock { Margin = new Thickness(0, 7, 0, 0), Foreground = Brush("#A3A3A3") };
         _manualPanel.Children.Add(_overlapLabel);
         _overlapSlider = new Slider { Minimum = 0, TickFrequency = 1, IsSnapToTickEnabled = true, Margin = new Thickness(0, 8, 0, 8) };
         _overlapSlider.ValueChanged += (_, _) => UpdateJoinPreview();
@@ -356,7 +356,7 @@ public sealed class ScrollCaptureWindow : Window
     private void SetStatus(string text, bool warning = false)
     {
         _status.Text = I18n.T(text);
-        _status.Foreground = Brush(warning ? "#EAC88D" : "#76E9CF");
+        _status.Foreground = Brush(warning ? "#EAC88D" : "#ECECEC");
     }
 
     private void ExcludeToolbarFromCapture()
@@ -375,10 +375,10 @@ public sealed class ScrollCaptureWindow : Window
     {
         var button = new Button
         {
-            Content = new TextBlock { Text = I18n.T(label), Foreground = Brush(accent ? "#092820" : "#F4F7FC") }, Padding = new Thickness(13, 9, 13, 9),
+            Content = new TextBlock { Text = I18n.T(label), Foreground = Brush(accent ? "#191919" : "#ECECEC") }, Padding = new Thickness(13, 9, 13, 9),
             Margin = new Thickness(0, 0, 7, 0), FontSize = 12,
-            Background = Brush(accent ? "#6FE7C8" : "#29344A"),
-            Foreground = Brush(accent ? "#092820" : "#DDE8F7"),
+            Background = Brush(accent ? "#E8E8E8" : "#2B2B2B"),
+            Foreground = Brush(accent ? "#191919" : "#ECECEC"),
             BorderThickness = new Thickness(0), Cursor = Cursors.Hand,
             FontWeight = FontWeights.SemiBold
         };

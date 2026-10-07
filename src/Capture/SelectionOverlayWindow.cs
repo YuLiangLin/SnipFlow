@@ -12,8 +12,8 @@ internal sealed class SelectionOverlayWindow : Window
 {
     private static readonly Brush MaskBrush = FrozenBrush(Color.FromArgb(152, 7, 12, 20));
     private static readonly Brush PanelBrush = FrozenBrush(Color.FromArgb(244, 18, 24, 34));
-    private static readonly Brush MutedBrush = FrozenBrush(Color.FromRgb(163, 178, 198));
-    private static readonly Brush AccentBrush = FrozenBrush(Color.FromRgb(84, 205, 225));
+    private static readonly Brush MutedBrush = FrozenBrush(Color.FromRgb(163, 163, 163));
+    private static readonly Brush AccentBrush = FrozenBrush(Color.FromRgb(232, 232, 232));
     private static readonly Pen SelectionPen = FrozenPen(AccentBrush, 1.5);
     private static readonly Pen PanelPen = FrozenPen(FrozenBrush(Color.FromArgb(180, 73, 92, 116)), 1);
     private readonly CaptureSession _session;

@@ -124,10 +124,10 @@ public sealed class EditorView : WpfUserControl
     {
         Focusable = true;
         ClipToBounds = true;
-        Background = BrushFor("#0C111B");
+        Background = BrushFor("#181818");
         _viewport = new WpfCanvas
         {
-            Background = BrushFor("#0C111B"),
+            Background = BrushFor("#181818"),
             ClipToBounds = true
         };
         _documentLayer = new WpfCanvas
@@ -147,10 +147,10 @@ public sealed class EditorView : WpfUserControl
             TextWrapping = TextWrapping.Wrap,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
-            Background = BrushFor("#F2151D2B"),
+            Background = BrushFor("#F2202020"),
             Foreground = new SolidColorBrush(_color),
-            CaretBrush = BrushFor("#EEF3F9"),
-            SelectionBrush = BrushFor("#63D5C5"),
+            CaretBrush = BrushFor("#ECECEC"),
+            SelectionBrush = BrushFor("#B8B8B8"),
             SelectionOpacity = 0.35,
             BorderThickness = new Thickness(0),
             Padding = new Thickness(0),
@@ -176,7 +176,7 @@ public sealed class EditorView : WpfUserControl
         _textEditBorder = new Border
         {
             Child = _textEditor,
-            BorderBrush = BrushFor("#63D5C5"),
+            BorderBrush = BrushFor("#B8B8B8"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(2),
             Visibility = Visibility.Collapsed
@@ -195,10 +195,10 @@ public sealed class EditorView : WpfUserControl
         _emptyState = CreateEmptyState();
         layout.Children.Add(_emptyState);
 
-        _imageLabel = new TextBlock { FontSize = 11, Foreground = BrushFor("#B6C2D1") };
+        _imageLabel = new TextBlock { FontSize = 11, Foreground = BrushFor("#A3A3A3") };
         _imageBadge = CreateBadge(_imageLabel, HorizontalAlignment.Left);
         layout.Children.Add(_imageBadge);
-        _zoomLabel = new TextBlock { FontSize = 11, Foreground = BrushFor("#EEF3F9") };
+        _zoomLabel = new TextBlock { FontSize = 11, Foreground = BrushFor("#ECECEC") };
         _zoomBadge = CreateBadge(_zoomLabel, HorizontalAlignment.Right);
         layout.Children.Add(_zoomBadge);
 
@@ -206,7 +206,7 @@ public sealed class EditorView : WpfUserControl
         {
             Text = I18n.T(CanvasHint),
             FontSize = 12,
-            Foreground = BrushFor("#B6C2D1"),
+            Foreground = BrushFor("#A3A3A3"),
             Margin = new Thickness(20, 0, 20, 15),
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Bottom,
@@ -767,8 +767,8 @@ public sealed class EditorView : WpfUserControl
         _textEditor.FontSize = _textDraft.FontSize;
         _textEditor.Foreground = new SolidColorBrush(_textDraft.Color);
         bool lightInput = RelativeLuminance(_textDraft.Color) < 0.23;
-        _textEditor.Background = BrushFor(lightInput ? "#F2FFFFFF" : "#F2151D2B");
-        _textEditor.CaretBrush = BrushFor(lightInput ? "#0C111B" : "#EEF3F9");
+        _textEditor.Background = BrushFor(lightInput ? "#F2FFFFFF" : "#F2202020");
+        _textEditor.CaretBrush = BrushFor(lightInput ? "#181818" : "#ECECEC");
         // TextBoxView reserves caret space in its content margin, even with zero
         // Padding. Keep that UI inset outside the annotation's text origin/width.
         _textEditor.ApplyTemplate();
@@ -1204,7 +1204,7 @@ public sealed class EditorView : WpfUserControl
                 WpfRect bounds = _pending.Bounds;
                 if (_pending.TextWidth == 0)
                     bounds = new WpfRect(_pending.Start, new Size(Math.Min(360, Math.Max(1, _image.PixelWidth - _pending.Start.X)), _pending.FontSize * 1.4));
-                context.DrawRectangle(null, new Pen(BrushFor("#63D5C5"), 1 / _zoom), bounds);
+                context.DrawRectangle(null, new Pen(BrushFor("#B8B8B8"), 1 / _zoom), bounds);
             }
             else
                 _pending?.Draw(context, pixelsPerDip);
@@ -1215,12 +1215,12 @@ public sealed class EditorView : WpfUserControl
 
     private void DrawSelection(DrawingContext context, AnnotationItem item)
     {
-        var outline = new Pen(BrushFor("#63D5C5"), 1 / _zoom) { DashStyle = DashStyles.Dash };
+        var outline = new Pen(BrushFor("#B8B8B8"), 1 / _zoom) { DashStyle = DashStyles.Dash };
         if (item.Tool != AnnotationTool.Arrow)
             context.DrawRectangle(null, outline, EditableBounds(item));
-        var handlePen = new Pen(BrushFor("#63D5C5"), 1.5 / _zoom);
+        var handlePen = new Pen(BrushFor("#B8B8B8"), 1.5 / _zoom);
         foreach (var handle in HandlePoints(item))
-            context.DrawEllipse(BrushFor("#EEF3F9"), handlePen, handle.Position, 4 / _zoom, 4 / _zoom);
+            context.DrawEllipse(BrushFor("#ECECEC"), handlePen, handle.Position, 4 / _zoom, 4 / _zoom);
     }
 
     private void ZoomFromCenter(double factor)
@@ -1331,8 +1331,8 @@ public sealed class EditorView : WpfUserControl
     private static Border CreateBadge(TextBlock label, HorizontalAlignment alignment) => new()
     {
         Child = label,
-        Background = BrushFor("#D9151D2B"),
-        BorderBrush = BrushFor("#293448"),
+        Background = BrushFor("#D9242424"),
+        BorderBrush = BrushFor("#383838"),
         BorderThickness = new Thickness(1),
         CornerRadius = new CornerRadius(7),
         Padding = new Thickness(10, 6, 10, 6),
