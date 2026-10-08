@@ -355,7 +355,8 @@ internal static class EditorSessionStore
         ValidateImageSize(image.PixelWidth, image.PixelHeight);
         using var stream = CreateNewFile(path);
         var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(image));
+        // Frozen decoded frames may retain a decoder owned by their source thread.
+        encoder.Frames.Add(BitmapFrame.Create(image, null, null, null));
         encoder.Save(stream);
         if (stream.Length > MaxImageBytes) throw InvalidCheckpoint();
         stream.Flush(flushToDisk: true);

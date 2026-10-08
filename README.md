@@ -134,7 +134,7 @@ dotnet run --project src/SnipFlow.csproj
 `build-release.ps1` 建立自含執行環境的 Windows x64 發布目錄與 Velopack 安裝包。它只打包本專案程式檔案，不打包使用者資料。`-Version` 決定應用程式與套件版本。產物在 `release/`；發布到 GitHub 後，已安裝的舊版才能取得更新。
 
 ```powershell
-./build-release.ps1 -Version 0.5.4
+./build-release.ps1 -Version 0.5.5
 ```
 
 ## 驗證範圍

@@ -273,8 +273,9 @@ public sealed partial class EditorView : WpfUserControl
         CancelTextEdit();
         CancelGesture();
         EndPropertyEdit();
-        _image = image.CloneCurrentValue();
-        _image.Freeze();
+        // Cloning a frozen decoded image can still access its original thread's decoder.
+        _image = image.IsFrozen ? image : image.CloneCurrentValue();
+        if (!_image.IsFrozen) _image.Freeze();
         _pixelSource = null;
         _annotations.Clear();
         _selection.Clear();

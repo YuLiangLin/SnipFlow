@@ -35,7 +35,7 @@ public static class HistoryStore
         if (!SettingsStore.Current.KeepHistory) return null;
         // Encode outside the lock; only publishing and pruning the history files are serialized.
         using var encoded = new MemoryStream();
-        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image)); encoder.Save(encoded);
+        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image, null, null, null)); encoder.Save(encoded);
         encoded.Position = 0;
         lock (Gate)
         {
@@ -145,7 +145,8 @@ public static class HistoryStore
     }
     public static void SavePng(BitmapSource image, string path)
     {
-        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image));
+        // Explicit metadata avoids accessing a frozen frame's thread-bound decoder.
+        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image, null, null, null));
         using var stream = File.Create(path); encoder.Save(stream);
     }
 }
