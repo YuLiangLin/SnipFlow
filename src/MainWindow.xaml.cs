@@ -9,6 +9,7 @@ using SnipFlow.Editor;
 using SnipFlow.Recording;
 using SnipFlow.Scroll;
 using SnipFlow.Services;
+using CaptureMode = SnipFlow.Capture.CaptureMode;
 namespace SnipFlow;
 
 public partial class MainWindow : Window
@@ -44,10 +45,11 @@ public partial class MainWindow : Window
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     static extern bool IsWindowEnabled(IntPtr hwnd);
-    bool CanStartCapture => IsEnabled && IsWindowEnabled(new WindowInteropHelper(this).Handle);
+    bool CanStartCapture => !historyDragInProgress && IsEnabled && IsWindowEnabled(new WindowInteropHelper(this).Handle);
     public MainWindow()
     {
         InitializeComponent(); ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
+        InitializeHistoryDrag();
         TaskbarIconService.Attach(this);
         Editor.Changed += (_, _) => { RefreshDocumentState(); QueueAutoSave(); };
         Editor.SelectionChanged += (_, _) => RefreshProperties();
@@ -96,7 +98,9 @@ public partial class MainWindow : Window
     {
         hotkeys?.Dispose(); hotkeys = null; RefreshHotkeyHint();
     }
-    public async Task StartCaptureAsync(bool scrolling)
+    public Task StartCaptureAsync(bool scrolling) => StartCaptureCoreAsync(CaptureMode.Region, scrolling);
+    public Task StartCaptureAsync(CaptureMode mode) => StartCaptureCoreAsync(mode, scrolling: false);
+    async Task StartCaptureCoreAsync(CaptureMode mode, bool scrolling)
     {
         if (busy || capturePending || !CanStartCapture) return;
         CloseColorPalette();
@@ -114,7 +118,9 @@ public partial class MainWindow : Window
             busy = true; var wasVisible = IsVisible;
             RefreshDocumentState();
             Hide(); await Task.Delay(220);
-            var result = await ScreenshotService.CaptureRegionAsync();
+            var result = scrolling
+                ? await ScreenshotService.CaptureRegionAsync()
+                : await ScreenshotService.CaptureAsync(mode);
             if (result == null) { if (wasVisible) { Show(); Activate(); } return; }
             BitmapSource image = result.Image;
             if (scrolling)
@@ -300,6 +306,7 @@ public partial class MainWindow : Window
         UndoButton.IsEnabled = Editor.CanUndo && !busy && !capturePending;
         RedoButton.IsEnabled = Editor.CanRedo && !busy && !capturePending;
         Workspace.IsEnabled = CompactPanel.IsEnabled = HeaderCapture.IsEnabled = !busy && !capturePending;
+        HistoryClearButton.IsEnabled = !busy && !capturePending && !historyDragInProgress && HistoryList.Items.Count > 0;
         Title = Editor.HasEdits ? "SnipFlow *" : "SnipFlow";
         if (Editor.HasImage && !hadImage) ApplyWindowMode(false);
         hadImage = Editor.HasImage;
@@ -384,7 +391,7 @@ public partial class MainWindow : Window
     void RefreshHistory()
     {
         selectingHistory = true;
-        try { var items = HistoryStore.Load(); HistoryList.ItemsSource = items; HistoryCount.Text = items.Count.ToString(); HistoryEmpty.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed; }
+        try { var items = HistoryStore.Load(); HistoryList.ItemsSource = items; HistoryCount.Text = items.Count.ToString(); HistoryEmpty.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed; HistoryClearButton.IsEnabled = !busy && !capturePending && !historyDragInProgress && items.Count > 0; }
         catch (Exception ex) { ReportError(ex, "歷史讀取失敗"); }
         finally { selectingHistory = false; }
     }
@@ -436,7 +443,7 @@ public partial class MainWindow : Window
     void SaveClick(object sender, RoutedEventArgs e) => SaveCurrent();
     public bool PrepareToDiscard()
     {
-        if (busy) return false;
+        if (busy || historyDragInProgress) return false;
         Editor.CommitTextEdit();
         var hasUnsavedEdits = Editor.HasEdits;
         var needsAutoSave = SettingsStore.Current.AutoSaveCaptures && Editor.HasImage && Editor.Revision != autoSavedRevision;
@@ -490,8 +497,7 @@ public partial class MainWindow : Window
     {
         if (!selectingHistory && HistoryList.SelectedItem is HistoryItem item)
         {
-            if (Editor.IsCollage) AddImageFiles(new[] { item.Path });
-            else OpenImage(item.Path);
+            if (!Editor.IsCollage) OpenImage(item.Path);
         }
     }
     async void OcrClick(object sender, RoutedEventArgs e)
@@ -512,7 +518,7 @@ public partial class MainWindow : Window
     }
     public async Task UpdateNowAsync()
     {
-        if (updating || busy || capturePending || Updates.IsBusy) return;
+        if (updating || busy || capturePending || historyDragInProgress || Updates.IsBusy) return;
         updating = busy = true; RefreshDocumentState();
         try
         {
@@ -539,7 +545,7 @@ public partial class MainWindow : Window
     }
     void WindowKeyDown(object sender, KeyEventArgs e)
     {
-        if (busy || capturePending) return;
+        if (busy || capturePending || historyDragInProgress) return;
         var modifiers = Keyboard.Modifiers;
         if (Editor.IsTextEditing)
         {

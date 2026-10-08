@@ -10,7 +10,10 @@
             <TextBlock Text="SnipFlow" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
           </StackPanel>
           <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-            <Button x:Name="HeaderCapture" Click="CaptureClick" Style="{StaticResource Primary}" Padding="12,7" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE710;" FontFamily="Segoe Fluent Icons" Margin="0,0,7,0" Foreground="{StaticResource AccentInk}" /><TextBlock Text="{ui:Tr '新截圖'}" Foreground="{StaticResource AccentInk}" /></StackPanel></Button>
+            <StackPanel x:Name="HeaderCapture" Orientation="Horizontal" Margin="0,0,10,0">
+              <Button Click="CaptureClick" Style="{StaticResource Primary}" Padding="12,7" ToolTip="{ui:Tr '框選截圖'}"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE710;" FontFamily="Segoe Fluent Icons" Margin="0,0,7,0" Foreground="{StaticResource AccentInk}" /><TextBlock Text="{ui:Tr '新截圖'}" Foreground="{StaticResource AccentInk}" /></StackPanel></Button>
+              <Button Click="CaptureMenuClick" Style="{StaticResource Primary}" Width="30" Padding="0" Margin="4,0,0,0" ToolTip="{ui:Tr '截圖模式'}" AutomationProperties.Name="{ui:Tr '截圖模式'}"><TextBlock Text="&#xE70D;" FontFamily="Segoe Fluent Icons" FontSize="12" /></Button>
+            </StackPanel>
             <Button x:Name="CompactButton" Content="▣" Style="{StaticResource WindowControl}" FontSize="15" Click="CompactClick" ToolTip="{ui:Tr '小型面板'}" />
             <Button Content="─" Style="{StaticResource WindowControl}" Click="MinimizeClick" ToolTip="{ui:Tr '最小化'}" />
             <Button x:Name="MaximizeButton" Content="□" Style="{StaticResource WindowControl}" Click="MaximizeClick" ToolTip="{ui:Tr '最大化／還原'}" />
@@ -32,7 +35,7 @@
             <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,6">
               <StackPanel>
-              <Button Click="CaptureClick" ToolTip="{ui:Tr '框選截圖'}" AutomationProperties.Name="{ui:Tr '框選截圖'}"><TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
+              <Button Click="CaptureMenuClick" Tag="CaptureRight" ToolTip="{ui:Tr '截圖模式'}" AutomationProperties.Name="{ui:Tr '截圖模式'}"><TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="ScrollClick" ToolTip="{ui:Tr '長頁捲動截圖'}" AutomationProperties.Name="{ui:Tr '長頁捲動截圖'}"><TextBlock Text="&#xE8CB;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="RecordClick" ToolTip="{ui:Tr '螢幕錄影'}" AutomationProperties.Name="{ui:Tr '螢幕錄影'}"><TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="OpenClick" ToolTip="{ui:Tr '開啟圖片'}" AutomationProperties.Name="{ui:Tr '開啟圖片'}"><TextBlock Text="&#xE8E5;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
@@ -111,7 +114,10 @@
           <Grid Grid.Row="3" x:Name="EmptyState" Background="{StaticResource Bg}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="420" Margin="35">
               <Image Source="Assets/SnipFlow-v3.png" Width="96" Height="96" HorizontalAlignment="Center" Margin="0,0,0,20" />
-              <Button Style="{StaticResource Primary}" Content="{ui:Tr '框選截圖'}" Click="CaptureClick" Width="180" Padding="16,13" HorizontalAlignment="Center" />
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <Button Style="{StaticResource Primary}" Content="{ui:Tr '框選截圖'}" Click="CaptureClick" Width="180" Padding="16,13" />
+                <Button Style="{StaticResource Primary}" Click="CaptureMenuClick" Width="32" Padding="0" Margin="6,0,0,0" ToolTip="{ui:Tr '截圖模式'}" AutomationProperties.Name="{ui:Tr '截圖模式'}"><TextBlock Text="&#xE70D;" FontFamily="Segoe Fluent Icons" FontSize="12" /></Button>
+              </StackPanel>
               <TextBlock x:Name="HotkeyHint" Text="Ctrl + Alt + S" FontFamily="Cascadia Code, Consolas" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,16,0,18" />
               <Button Content="{ui:Tr '開啟圖片'}" Click="OpenClick" Width="180" BorderThickness="1" />
               <TextBlock Text="Ctrl + O ／ Ctrl + V" Foreground="{StaticResource Muted}" FontSize="12" HorizontalAlignment="Center" Margin="0,12,0,0" />
@@ -121,10 +127,22 @@
         </Grid>
         <Border Grid.Column="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1,0,0,0">
           <Grid><Grid.RowDefinitions><RowDefinition Height="48" /><RowDefinition /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-            <DockPanel Margin="16,0"><TextBlock Text="{ui:Tr '最近截圖'}" FontWeight="SemiBold" VerticalAlignment="Center" /><TextBlock x:Name="HistoryCount" Text="0" Foreground="{StaticResource Muted}" HorizontalAlignment="Right" VerticalAlignment="Center" /></DockPanel>
-            <ListBox x:Name="HistoryList" Grid.Row="1" Background="Transparent" Foreground="{StaticResource Ink}" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="HistorySelected" Padding="10,0">
+            <Grid Margin="16,0,10,0">
+              <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+              <TextBlock Text="{ui:Tr '最近截圖'}" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="1" x:Name="HistoryCount" Text="0" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="6,0" />
+              <Button Grid.Column="2" x:Name="HistoryClearButton" Click="ClearHistoryClick" Width="28" Height="28" MinHeight="0" Padding="0" ToolTip="{ui:Tr '清空截圖歷史'}" AutomationProperties.Name="{ui:Tr '清空截圖歷史'}"><TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons" FontSize="15" /></Button>
+            </Grid>
+            <ListBox x:Name="HistoryList" Grid.Row="1" Background="Transparent" Foreground="{StaticResource Ink}" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="HistorySelected" PreviewMouseLeftButtonDown="HistoryDragMouseDown" PreviewMouseMove="HistoryDragMouseMove" Padding="10,0">
               <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="Padding" Value="0" /><Setter Property="Margin" Value="0,0,0,10" /><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Background" Value="Transparent" /><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border x:Name="Card" CornerRadius="9" BorderBrush="{StaticResource Line}" BorderThickness="1" Background="{StaticResource Soft}" Padding="8"><ContentPresenter /></Border><ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Muted}" /><Setter TargetName="Card" Property="Background" Value="{StaticResource Selected}" /></Trigger><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Card" Property="Background" Value="{StaticResource Raised}" /></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
-              <ListBox.ItemTemplate><DataTemplate><StackPanel><Border Background="{StaticResource Bg}" CornerRadius="5" ClipToBounds="True"><Image Source="{Binding Thumbnail}" Height="104" Stretch="Uniform" /></Border><TextBlock Text="{Binding Title}" Foreground="{StaticResource Ink}" FontSize="12" Margin="2,9,0,3" /><TextBlock Text="{Binding Detail}" Foreground="{StaticResource Muted}" FontSize="10" Margin="2,0,0,0" /></StackPanel></DataTemplate></ListBox.ItemTemplate>
+              <ListBox.ItemTemplate><DataTemplate><StackPanel PreviewMouseRightButtonDown="HistoryPreviewRightButtonDown">
+                <StackPanel.ContextMenu><ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"><MenuItem Header="{ui:Tr '刪除此截圖紀錄'}" Tag="{Binding}" Click="DeleteHistoryClick" /></ContextMenu></StackPanel.ContextMenu>
+                <Border Background="{StaticResource Bg}" CornerRadius="5" ClipToBounds="True"><Image Source="{Binding Thumbnail}" Height="104" Stretch="Uniform" /></Border>
+                <Grid Margin="2,5,0,0"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                  <StackPanel VerticalAlignment="Center"><TextBlock Text="{Binding Title}" Foreground="{StaticResource Ink}" FontSize="12" Margin="0,0,0,3" /><TextBlock Text="{Binding Detail}" Foreground="{StaticResource Muted}" FontSize="10" /></StackPanel>
+                  <Button Grid.Column="1" Tag="{Binding}" Click="DeleteHistoryClick" Focusable="False" Width="26" Height="28" MinHeight="0" Padding="0" ToolTip="{ui:Tr '刪除此截圖紀錄'}" AutomationProperties.Name="{ui:Tr '刪除此截圖紀錄'}"><TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons" FontSize="14" Foreground="{StaticResource Muted}" /></Button>
+                </Grid>
+              </StackPanel></DataTemplate></ListBox.ItemTemplate>
             </ListBox>
             <TextBlock x:Name="HistoryEmpty" Grid.Row="1" Text="{ui:Tr '尚無截圖'}" Foreground="{StaticResource Muted}" FontSize="12" TextAlignment="Center" Margin="10,38" VerticalAlignment="Top" />
           </Grid>
@@ -133,7 +151,10 @@
       <Grid Grid.Row="1" x:Name="CompactPanel" Margin="20,18,20,12">
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
         <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition /></Grid.ColumnDefinitions>
-        <Button Click="CaptureClick" Style="{StaticResource Primary}" Height="48" Margin="0,0,6,0"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="18" Foreground="{StaticResource AccentInk}" Margin="0,0,8,0" /><TextBlock Text="{ui:Tr '框選截圖'}" FontSize="13" Foreground="{StaticResource AccentInk}" /></StackPanel></Button>
+        <Grid Height="48" Margin="0,0,6,0"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="32" /></Grid.ColumnDefinitions>
+          <Button Click="CaptureClick" Style="{StaticResource Primary}" Padding="8,6"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="18" Foreground="{StaticResource AccentInk}" Margin="0,0,7,0" /><TextBlock Text="{ui:Tr '截圖'}" FontSize="13" Foreground="{StaticResource AccentInk}" /></StackPanel></Button>
+          <Button Grid.Column="1" Click="CaptureMenuClick" Style="{StaticResource Primary}" Padding="0" Margin="4,0,0,0" ToolTip="{ui:Tr '截圖模式'}" AutomationProperties.Name="{ui:Tr '截圖模式'}"><TextBlock Text="&#xE70D;" FontFamily="Segoe Fluent Icons" FontSize="12" /></Button>
+        </Grid>
         <Button Grid.Column="1" Click="RecordClick" Height="48" Margin="6,0,0,0" Background="{StaticResource Raised}"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="18" Margin="0,0,8,0" /><TextBlock Text="{ui:Tr '螢幕錄影'}" FontSize="13" /></StackPanel></Button>
         <TextBlock Grid.Row="1" x:Name="CompactHotkeyHint" Text="Ctrl + Alt + S" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,9,0,0" />
         <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Center">

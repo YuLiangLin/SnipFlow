@@ -73,7 +73,7 @@ internal sealed class SelectionOverlayWindow : Window
 
     private void PositionPhysical()
     {
-        if (_handle == IntPtr.Zero || _positioning)
+        if (_closed || _handle == IntPtr.Zero || _positioning)
             return;
 
         _positioning = true;
@@ -139,6 +139,27 @@ internal sealed class SelectionOverlayWindow : Window
             args.Handled = true;
             _session.Cancel();
         }
+        else if (args.Key == Key.Enter && _session.Mode != CaptureMode.Region)
+        {
+            args.Handled = true;
+            _session.ConfirmChoice();
+        }
+        else if (_session.AllowModeSwitch && Keyboard.Modifiers == ModifierKeys.None)
+        {
+            var mode = args.Key switch
+            {
+                Key.R => CaptureMode.Region,
+                Key.W => CaptureMode.Window,
+                Key.S => CaptureMode.Monitor,
+                Key.A => CaptureMode.AllMonitors,
+                _ => (CaptureMode?)null
+            };
+            if (mode is { } selectedMode)
+            {
+                args.Handled = true;
+                _session.SwitchMode(selectedMode);
+            }
+        }
     }
 
     private void RenderSelection(DrawingContext drawing)
@@ -159,14 +180,15 @@ internal sealed class SelectionOverlayWindow : Window
                 mask.Children.Add(new RectangleGeometry(intersection));
             drawing.DrawGeometry(MaskBrush, null, mask);
             drawing.DrawRectangle(null, SelectionPen, localSelection);
-            DrawCorners(drawing, localSelection);
+            if (_session.Mode == CaptureMode.Region)
+                DrawCorners(drawing, localSelection);
         }
         else
         {
             drawing.DrawRectangle(MaskBrush, null, viewport);
         }
 
-        if (!_session.IsSelecting)
+        if (!_session.IsSelecting && MonitorBounds.Contains(_session.Cursor))
             DrawHint(drawing);
 
         if (_session.IsSelecting && MonitorBounds.Contains(_session.Cursor))
@@ -184,13 +206,48 @@ internal sealed class SelectionOverlayWindow : Window
 
     private void DrawHint(DrawingContext drawing)
     {
-        const double width = 310;
-        const double height = 70;
+        var title = _session.Mode switch
+        {
+            CaptureMode.Window => I18n.T("點選視窗"),
+            CaptureMode.Monitor => I18n.T("點選要擷取的螢幕"),
+            CaptureMode.AllMonitors => I18n.T("點一下擷取所有螢幕"),
+            _ => I18n.T("拖曳框選畫面")
+        };
+        var caption = _session.StatusHint;
+        if (caption is null && _session.Mode == CaptureMode.Window && _session.HoveredWindow is { } target)
+            caption = string.IsNullOrWhiteSpace(target.Title) ? I18n.T("視窗") : target.Title;
+        if (caption is null && _session.Selection is { } bounds && _session.Mode != CaptureMode.Region)
+            caption = I18n.F("{0:N0} × {1:N0} px", bounds.Width, bounds.Height);
+
+        var width = _session.AllowModeSwitch ? 430 : 310;
+        var height = 70 + (_session.AllowModeSwitch ? 25 : 0) + (caption is not null ? 25 : 0);
         var panel = new Rect(Math.Max(12, (ActualWidth - width) / 2), Math.Min(38, ActualHeight / 8),
-            Math.Min(width, Math.Max(1, ActualWidth - 24)), height);
+            Math.Min(width, Math.Max(1, ActualWidth - 24)), Math.Min(height, Math.Max(1, ActualHeight - 24)));
         drawing.DrawRoundedRectangle(PanelBrush, PanelPen, panel, 13, 13);
-        drawing.DrawText(Text(I18n.T("拖曳框選畫面"), 16, Brushes.White), new WpfPoint(panel.Left + 20, panel.Top + 13));
-        drawing.DrawText(Text(I18n.T("Esc 取消   ·   右鍵取消"), 12, MutedBrush), new WpfPoint(panel.Left + 20, panel.Top + 39));
+        drawing.PushClip(new RectangleGeometry(panel));
+        var textWidth = Math.Max(1, panel.Width - 40);
+        void Line(string value, double size, Brush brush, double top)
+        {
+            var text = Text(value, size, brush);
+            text.MaxTextWidth = textWidth;
+            text.MaxLineCount = 1;
+            text.Trimming = TextTrimming.CharacterEllipsis;
+            drawing.DrawText(text, new WpfPoint(panel.Left + 20, top));
+        }
+        Line(title, 16, Brushes.White, panel.Top + 13);
+        var lineY = panel.Top + 39;
+        if (caption is not null)
+        {
+            Line(caption, 12, _session.StatusHint is null ? MutedBrush : Brushes.White, lineY);
+            lineY += 25;
+        }
+        if (_session.AllowModeSwitch)
+        {
+            Line(I18n.T("R 框選   W 視窗   S 單一螢幕   A 所有螢幕"), 12, MutedBrush, lineY);
+            lineY += 25;
+        }
+        Line(I18n.T("Esc 取消   ·   右鍵取消"), 12, MutedBrush, lineY);
+        drawing.Pop();
     }
 
     private void DrawDimensions(DrawingContext drawing)

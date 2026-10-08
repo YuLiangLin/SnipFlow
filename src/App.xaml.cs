@@ -1,6 +1,7 @@
 using System.IO.Pipes;
 using System.Windows.Threading;
 using Velopack;
+using SnipFlow.Capture;
 using SnipFlow.Services;
 namespace SnipFlow;
 
@@ -56,10 +57,19 @@ public partial class App : Application
         };
         shell = new MainWindow(); MainWindow = shell;
         var menu = new System.Windows.Forms.ContextMenuStrip();
-        menu.Items.Add(I18n.T("框選截圖"), null, (_, _) => Dispatcher.BeginInvoke(() => shell.StartCaptureAsync(false)));
-        menu.Items.Add(I18n.T("螢幕錄影"), null, (_, _) => Dispatcher.BeginInvoke(() => shell.StartRecordingAsync()));
-        menu.Items.Add(I18n.T("開啟 SnipFlow"), null, (_, _) => Dispatcher.BeginInvoke(ShowShell));
-        menu.Items.Add(I18n.T("結束"), null, (_, _) => Dispatcher.BeginInvoke(ExitRequested));
+        void AddTrayAction(string key, Action action)
+        {
+            var item = menu.Items.Add(I18n.T(key), null, (_, _) => Dispatcher.BeginInvoke(action));
+            item.Tag = key;
+        }
+        AddTrayAction("框選截圖", () => _ = shell.StartCaptureAsync(CaptureMode.Region));
+        AddTrayAction("視窗截圖", () => _ = shell.StartCaptureAsync(CaptureMode.Window));
+        AddTrayAction("單一螢幕截圖", () => _ = shell.StartCaptureAsync(CaptureMode.Monitor));
+        AddTrayAction("全部螢幕截圖", () => _ = shell.StartCaptureAsync(CaptureMode.AllMonitors));
+        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        AddTrayAction("螢幕錄影", () => _ = shell.StartRecordingAsync());
+        AddTrayAction("開啟 SnipFlow", ShowShell);
+        AddTrayAction("結束", ExitRequested);
         I18n.Changed += TrayLanguageChanged;
         trayIcon = new System.Drawing.Icon(Path.Combine(AppContext.BaseDirectory, "Assets", "SnipFlow-v3.ico"), 32, 32);
         tray = new System.Windows.Forms.NotifyIcon { Icon = trayIcon, Text = "SnipFlow", Visible = true, ContextMenuStrip = menu };
@@ -78,8 +88,8 @@ public partial class App : Application
     void TrayLanguageChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(() =>
     {
         if (tray?.ContextMenuStrip is not { } menu) return;
-        string[] keys = { "框選截圖", "螢幕錄影", "開啟 SnipFlow", "結束" };
-        for (int index = 0; index < keys.Length; index++) menu.Items[index].Text = I18n.T(keys[index]);
+        foreach (System.Windows.Forms.ToolStripItem item in menu.Items)
+            if (item.Tag is string key) item.Text = I18n.T(key);
     });
     async Task CheckUpdatesAsync()
     {

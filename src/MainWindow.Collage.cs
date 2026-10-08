@@ -10,7 +10,7 @@ public partial class MainWindow
 
     void CollageClick(object sender, RoutedEventArgs e)
     {
-        if (busy || capturePending) return;
+        if (busy || capturePending || historyDragInProgress) return;
         try
         {
             if (!Editor.IsCollage)
@@ -23,7 +23,7 @@ public partial class MainWindow
             }
             ToolClick(new Button { Tag = "Select" }, new());
             ApplyWindowMode(false);
-            SetStatus("合圖已開啟，可加入圖片或繼續截圖。");
+            SetStatus("合圖已開啟，可拖入最近截圖或加入圖片。");
             RefreshDocumentState();
             QueueAutoSave();
             Editor.Focus();
@@ -41,7 +41,7 @@ public partial class MainWindow
 
     void AddImagesClick(object sender, RoutedEventArgs e)
     {
-        if (busy || capturePending) return;
+        if (busy || capturePending || historyDragInProgress) return;
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Filter = I18n.T("圖片|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff|所有檔案|*.*"), Multiselect = true
@@ -51,7 +51,7 @@ public partial class MainWindow
 
     void AddImageFiles(IReadOnlyList<string> paths)
     {
-        if (busy || capturePending || paths.Count == 0) return;
+        if (busy || capturePending || historyDragInProgress || paths.Count == 0) return;
         try
         {
             if (paths.Count + Editor.ImageCount + (Editor.IsCollage || !Editor.HasImage ? 0 : 1) > 24)
@@ -71,7 +71,7 @@ public partial class MainWindow
 
     void OpenProject(string path)
     {
-        if (busy || !PrepareToDiscard()) return;
+        if (busy || capturePending || historyDragInProgress || !PrepareToDiscard()) return;
         try
         {
             EditorSessionStore.RestoreProject(Editor, path);
@@ -88,7 +88,7 @@ public partial class MainWindow
 
     bool SaveProjectCurrent(bool saveAs = false)
     {
-        if (!Editor.HasImage || busy) return false;
+        if (!Editor.HasImage || busy || capturePending || historyDragInProgress) return false;
         Editor.CommitTextEdit();
         string? path = saveAs ? null : projectPath;
         if (path is null)
@@ -123,25 +123,26 @@ public partial class MainWindow
 
     void NewCollageDocument()
     {
+        if (busy || capturePending || historyDragInProgress) return;
         if (!PrepareToDiscard()) return;
         ResetDocumentStorage();
         Editor.NewCollage();
         activeColor = Color.FromRgb(17, 24, 39);
         ToolClick(new Button { Tag = "Select" }, new());
         RefreshDocumentState();
-        SetStatus("合圖已開啟，可加入圖片或繼續截圖。");
+        SetStatus("合圖已開啟，可拖入最近截圖或加入圖片。");
     }
 
     void RunObjectCommand(Action action)
     {
-        if (busy || capturePending) return;
+        if (busy || capturePending || historyDragInProgress) return;
         try { action(); RefreshDocumentState(); Editor.Focus(); }
         catch (Exception ex) { ReportError(ex, "無法修改物件"); }
     }
 
     void OpenActionMenu(object sender, IEnumerable<(string Label, Action Action, bool Enabled)> actions)
     {
-        if (busy || sender is not Button button) return;
+        if (busy || capturePending || historyDragInProgress || sender is not Button button) return;
         Editor.CommitTextEdit();
         var menu = new ContextMenu { PlacementTarget = button, Placement = PlacementMode.Bottom };
         foreach (var action in actions)

@@ -72,25 +72,64 @@ public sealed partial class EditorView
     internal void AddImages(IReadOnlyList<BitmapSource> images)
     {
         VerifyAccess();
+        var prepared = PrepareImagesForInsertion(images, null);
+        if (prepared.Count != 0) InsertPreparedImages(prepared);
+    }
+
+    internal void AddImageAt(BitmapSource image, WpfPoint center)
+    {
+        VerifyAccess();
+        if (!double.IsFinite(center.X) || !double.IsFinite(center.Y) || !InsideImage(center))
+            throw new ArgumentOutOfRangeException(nameof(center));
+        InsertPreparedImages(PrepareImagesForInsertion(new[] { image }, center));
+    }
+
+    internal void ValidateImageInsertion(BitmapSource image)
+    {
+        VerifyAccess();
+        ValidateImagesForInsertion(new[] { image });
+    }
+
+    private void ValidateImagesForInsertion(IReadOnlyList<BitmapSource> images)
+    {
         if (!IsCollage) throw new InvalidOperationException(I18n.T("請先開啟多張合圖。"));
-        if (images.Count == 0) return;
         if (ImageCount + images.Count > MaximumImages)
             throw new InvalidOperationException(I18n.T("每份合圖最多可放入 24 張圖片。"));
         long pixels = _annotations.Where(item => item.Image is not null).Sum(item => (long)item.Image!.PixelWidth * item.Image.PixelHeight);
-        var prepared = new List<AnnotationItem>();
         foreach (BitmapSource input in images)
         {
             if (input.PixelWidth < 1 || input.PixelHeight < 1) throw new ArgumentException(I18n.T("影像尺寸不得為零。"));
             pixels += (long)input.PixelWidth * input.PixelHeight;
             if (pixels > 80_000_000) throw new InvalidOperationException(I18n.T("圖片總尺寸過大，請減少張數或縮小原圖。"));
+        }
+    }
+
+    private List<AnnotationItem> PrepareImagesForInsertion(IReadOnlyList<BitmapSource> images, WpfPoint? center)
+    {
+        ValidateImagesForInsertion(images);
+        var prepared = new List<AnnotationItem>();
+        foreach (BitmapSource input in images)
+        {
             BitmapSource image = input.IsFrozen ? input : input.CloneCurrentValue();
             if (!image.IsFrozen) image.Freeze();
-            double scale = Math.Min(1, Math.Min(Math.Max(1, PixelWidth - 80.0) / image.PixelWidth, Math.Max(1, PixelHeight - 80.0) / image.PixelHeight));
-            double width = image.PixelWidth * scale, height = image.PixelHeight * scale;
-            double x = Math.Clamp(40 + ((ImageCount + prepared.Count) % 5) * 24, 0, PixelWidth - width);
-            double y = Math.Clamp(40 + ((ImageCount + prepared.Count) % 5) * 24, 0, PixelHeight - height);
-            prepared.Add(new AnnotationItem { Tool = AnnotationTool.Image, Image = image, Start = new WpfPoint(x, y), End = new WpfPoint(x + width, y + height), Width = 1 });
+            WpfRect bounds = InitialImageBounds(image, center, ImageCount + prepared.Count);
+            prepared.Add(new AnnotationItem { Tool = AnnotationTool.Image, Image = image, Start = bounds.TopLeft, End = bounds.BottomRight, Width = 1 });
         }
+        return prepared;
+    }
+
+    private WpfRect InitialImageBounds(BitmapSource image, WpfPoint? center, int index = 0)
+    {
+        double scale = Math.Min(1, Math.Min(Math.Max(1, PixelWidth - 80.0) / image.PixelWidth, Math.Max(1, PixelHeight - 80.0) / image.PixelHeight));
+        double width = image.PixelWidth * scale, height = image.PixelHeight * scale;
+        double offset = 40 + (index % 5) * 24;
+        double x = Math.Clamp(center?.X - width / 2 ?? offset, 0, Math.Max(0, PixelWidth - width));
+        double y = Math.Clamp(center?.Y - height / 2 ?? offset, 0, Math.Max(0, PixelHeight - height));
+        return new WpfRect(x, y, width, height);
+    }
+
+    private void InsertPreparedImages(List<AnnotationItem> prepared)
+    {
         PrepareObjectCommand();
         RememberMutation();
         // New photographs stay below text and callouts, while preserving photograph order.
