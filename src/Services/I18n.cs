@@ -219,6 +219,7 @@ public static partial class I18n
         ["正在下載更新 · {0}%"] = ("Downloading update · {0}%", "正在下载更新 · {0}%"),
         ["{0} 已下載 · 重新啟動以更新"] = ("{0} downloaded · Restart to update", "{0} 已下载 · 重启以更新"),
         ["新版本已下載。完成編輯後即可更新。"] = ("An update is ready. Finish editing, then restart to install it.", "新版本已下载。完成编辑后即可更新。"),
+        ["保存目前編輯，重新啟動並套用更新。"] = ("Save your editing session, restart, and apply the update.", "保存当前编辑，重启并应用更新。"),
         ["更新尚未套用"] = ("Update has not been applied", "更新尚未应用"),
 
         // OCR results and local Windows OCR diagnostics.

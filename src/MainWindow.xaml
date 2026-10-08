@@ -2,7 +2,7 @@
   <shell:WindowChrome.WindowChrome><shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="6" CornerRadius="10" GlassFrameThickness="0" /></shell:WindowChrome.WindowChrome>
   <Border BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="10">
     <Grid>
-      <Grid.RowDefinitions><RowDefinition Height="52" /><RowDefinition Height="*" /><RowDefinition Height="26" /></Grid.RowDefinitions>
+      <Grid.RowDefinitions><RowDefinition Height="52" /><RowDefinition Height="*" /><RowDefinition x:Name="StatusRow" Height="26" /></Grid.RowDefinitions>
       <Border Grid.Row="0" Background="{StaticResource Bg}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" MouseLeftButtonDown="TitleDrag">
         <Grid Margin="16,0,8,0"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
           <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -124,7 +124,7 @@
               <TextBlock Text="Ctrl + O ／ Ctrl + V" Foreground="{StaticResource Muted}" FontSize="12" HorizontalAlignment="Center" Margin="0,12,0,0" />
             </StackPanel>
           </Grid>
-          <Border Grid.Row="4" x:Name="UpdateBanner" Visibility="Collapsed" Background="{StaticResource Raised}" Padding="14,9"><DockPanel><Button Content="{ui:Tr '重新啟動更新'}" DockPanel.Dock="Right" Click="ApplyUpdateClick" Padding="10,4" Style="{StaticResource Primary}" /><TextBlock Text="{ui:Tr '新版本已下載。完成編輯後即可更新。'}" VerticalAlignment="Center" Foreground="{StaticResource Ink}" /></DockPanel></Border>
+          <Border Grid.Row="4" x:Name="UpdateBanner" Visibility="Collapsed" Background="{StaticResource Raised}" Padding="14,9"><DockPanel><Button x:Name="EditorUpdateButton" Content="{ui:Tr '重新啟動並更新'}" DockPanel.Dock="Right" Click="ApplyUpdateClick" Padding="10,4" Style="{StaticResource Primary}" /><TextBlock Text="{ui:Tr '新版本已下載。完成編輯後即可更新。'}" VerticalAlignment="Center" Foreground="{StaticResource Ink}" /></DockPanel></Border>
         </Grid>
         <Border Grid.Column="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1,0,0,0">
           <Grid><Grid.RowDefinitions><RowDefinition Height="48" /><RowDefinition /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
@@ -167,7 +167,14 @@
           <Button Click="SettingsClick" ToolTip="{ui:Tr '設定'}" Padding="10,8"><TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons" FontSize="16" /></Button>
         </WrapPanel>
       </Grid>
-      <Border Grid.Row="2" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Background="{StaticResource Bg}"><DockPanel Margin="16,0"><TextBlock DockPanel.Dock="Right" x:Name="ImageInfo" Foreground="{StaticResource Muted}" FontFamily="Consolas" FontSize="11" VerticalAlignment="Center" /><TextBlock x:Name="StatusText" Text="{ui:Tr '就緒'}" Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" /></DockPanel></Border>
+      <Border Grid.Row="2" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Background="{StaticResource Bg}">
+        <Grid Margin="16,0">
+          <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+          <TextBlock x:Name="StatusText" Text="{ui:Tr '就緒'}" Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="1" x:Name="ImageInfo" Foreground="{StaticResource Muted}" FontFamily="Consolas" FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0" />
+          <Button Grid.Column="2" x:Name="CompactUpdateButton" Content="{ui:Tr '重新啟動並更新'}" Click="ApplyUpdateClick" Style="{StaticResource Primary}" Visibility="Collapsed" Height="28" MinHeight="28" Padding="10,4" FontSize="11" Margin="12,6,0,6" ToolTip="{ui:Tr '保存目前編輯，重新啟動並套用更新。'}" AutomationProperties.Name="{ui:Tr '重新啟動並更新'}" />
+        </Grid>
+      </Border>
     </Grid>
   </Border>
 </Window>

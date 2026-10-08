@@ -53,17 +53,17 @@ public partial class MainWindow : Window
         TaskbarIconService.Attach(this);
         Editor.Changed += (_, _) => { RefreshDocumentState(); QueueAutoSave(); };
         Editor.SelectionChanged += (_, _) => RefreshProperties();
-        Updates.Changed += (_, _) => Dispatcher.BeginInvoke(() => { showingUpdateStatus = true; StatusText.Text = Updates.Status; UpdateBanner.Visibility = Updates.ReadyToRestart ? Visibility.Visible : Visibility.Collapsed; });
+        Updates.Changed += UpdateChanged;
         I18n.Changed += LanguageChanged;
         SettingsStore.Changed += SettingsChanged;
         autoSaveTimer.Tick += AutoSaveTick;
-        Closed += (_, _) => { isClosed = true; CloseColorPalette(); autoSaveTimer.Stop(); SettingsStore.Changed -= SettingsChanged; I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
+        Closed += (_, _) => { isClosed = true; CloseColorPalette(); autoSaveTimer.Stop(); Updates.Changed -= UpdateChanged; SettingsStore.Changed -= SettingsChanged; I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
         ApplyWindowMode(true);
         SourceInitialized += (_, _) => { WindowAppearance.Apply(this); WindowBoundsService.Attach(this); UpdateMinimumWindowSize(); SetHotkey(SettingsStore.Current.Hotkey); };
         SizeChanged += (_, _) => UpdateMinimumWindowSize();
-        StateChanged += (_, _) => UpdateMinimumWindowSize();
+        StateChanged += (_, _) => { UpdateMinimumWindowSize(); RefreshUpdateControls(); };
         LocationChanged += (_, _) => UpdateMinimumWindowSize();
-        Loaded += (_, _) => { RefreshHistory(); RefreshDocumentState(); };
+        Loaded += (_, _) => { RefreshHistory(); RefreshDocumentState(); if (Updates.ReadyToRestart) RefreshUpdateStatus(); };
     }
     void GlobalHotkeyPressed(object? sender, EventArgs e)
     {
@@ -311,6 +311,7 @@ public partial class MainWindow : Window
         if (Editor.HasImage && !hadImage) ApplyWindowMode(false);
         hadImage = Editor.HasImage;
         RefreshProperties();
+        RefreshUpdateControls();
     }
     void ApplyWindowMode(bool useCompact)
     {
@@ -325,7 +326,7 @@ public partial class MainWindow : Window
         if (compact)
         {
             WindowState = WindowState.Normal;
-            MinWidth = 420; MinHeight = 264; Width = 420; Height = 264;
+            MinWidth = 420; Width = 420;
             ResizeMode = ResizeMode.CanMinimize;
         }
         else
@@ -341,6 +342,7 @@ public partial class MainWindow : Window
                 Top = Math.Clamp(bounds.Top, area.Top, Math.Max(area.Top, area.Bottom - Height));
             }
         }
+        RefreshUpdateControls();
     }
     void UpdateMinimumWindowSize()
     {
@@ -360,6 +362,39 @@ public partial class MainWindow : Window
     void SetStatus(string key, params object?[] values)
     {
         showingUpdateStatus = false; statusKey = key; statusValues = values; StatusText.Text = I18n.F(key, values); StatusText.ToolTip = StatusText.Text;
+    }
+    void UpdateChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(() =>
+    {
+        if (isClosed) return;
+        RefreshUpdateStatus();
+    });
+    void RefreshUpdateStatus()
+    {
+        showingUpdateStatus = true;
+        StatusText.Text = Updates.Status; StatusText.ToolTip = StatusText.Text;
+        RefreshUpdateControls();
+    }
+    void RefreshUpdateControls()
+    {
+        bool ready = Updates.ReadyToRestart;
+        bool showCompactAction = ready && compact;
+        UpdateBanner.Visibility = ready && !compact ? Visibility.Visible : Visibility.Collapsed;
+        CompactUpdateButton.Visibility = showCompactAction ? Visibility.Visible : Visibility.Collapsed;
+        EditorUpdateButton.IsEnabled = CompactUpdateButton.IsEnabled = ready && !Updates.IsBusy && !updating && !busy && !capturePending && !historyDragInProgress;
+        StatusRow.Height = new GridLength(showCompactAction ? 42 : 26);
+        if (compact && modeInitialized)
+        {
+            // Keep the capture controls at their normal size when the update action appears.
+            double height = showCompactAction ? 280 : 264;
+            MinHeight = height;
+            if (Height != height) Height = height;
+            if (showCompactAction && WindowState == WindowState.Normal && double.IsFinite(Top))
+            {
+                var area = WindowBoundsService.GetWorkArea(this);
+                double top = Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - height));
+                if (Top != top) Top = top;
+            }
+        }
     }
     void RefreshProperties()
     {
