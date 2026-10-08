@@ -37,7 +37,7 @@
               <StackPanel>
               <Button Click="CaptureMenuClick" Tag="CaptureRight" ToolTip="{ui:Tr '截圖模式'}" AutomationProperties.Name="{ui:Tr '截圖模式'}"><TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="ScrollClick" ToolTip="{ui:Tr '長頁捲動截圖'}" AutomationProperties.Name="{ui:Tr '長頁捲動截圖'}"><TextBlock Text="&#xE8CB;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
-              <Button Click="CodeClick" ToolTip="{ui:Tr '程式碼長圖'}" AutomationProperties.Name="{ui:Tr '程式碼長圖'}"><TextBlock Text="&lt;/&gt;" FontFamily="Consolas" FontSize="15" FontWeight="SemiBold" /></Button>
+               <Button Click="CodeClick" ToolTip="{ui:Tr '程式碼長截圖'}" AutomationProperties.Name="{ui:Tr '程式碼長截圖'}"><TextBlock Text="&lt;/&gt;" FontFamily="Consolas" FontSize="15" FontWeight="SemiBold" /></Button>
               <Button Click="RecordClick" ToolTip="{ui:Tr '螢幕錄影'}" AutomationProperties.Name="{ui:Tr '螢幕錄影'}"><TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="OpenClick" ToolTip="{ui:Tr '開啟圖片'}" AutomationProperties.Name="{ui:Tr '開啟圖片'}"><TextBlock Text="&#xE8E5;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="CollageClick" ToolTip="{ui:Tr '多張合圖'}" AutomationProperties.Name="{ui:Tr '多張合圖'}"><TextBlock Text="&#xE8A9;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
@@ -160,7 +160,7 @@
         <TextBlock Grid.Row="1" x:Name="CompactHotkeyHint" Text="Ctrl + Alt + S" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,9,0,0" />
         <WrapPanel Grid.Row="3" Grid.ColumnSpan="2" HorizontalAlignment="Center" MaxWidth="378">
           <Button Content="{ui:Tr '長截圖'}" Click="ScrollClick" Padding="9,8" Margin="0,0,3,0" />
-          <Button Content="{ui:Tr '程式碼長圖'}" Click="CodeClick" Padding="9,8" Margin="0,0,3,0" />
+          <Button Content="{ui:Tr '程式碼長截圖'}" Click="CodeClick" Padding="9,8" Margin="0,0,3,0" />
           <Button Content="{ui:Tr '開啟圖片'}" Click="OpenClick" Padding="9,8" Margin="0,0,3,0" />
           <Button Content="{ui:Tr '合圖'}" Click="CollageClick" Padding="9,8" Margin="0,0,3,0" />
           <Button x:Name="ExpandButton" Content="{ui:Tr '編輯器'}" Click="ExpandClick" Padding="9,8" Margin="0,0,3,0" />

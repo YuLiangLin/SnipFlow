@@ -100,7 +100,8 @@ public partial class MainWindow : Window
     }
     public Task StartCaptureAsync(bool scrolling) => StartCaptureCoreAsync(CaptureMode.Region, scrolling);
     public Task StartCaptureAsync(CaptureMode mode) => StartCaptureCoreAsync(mode, scrolling: false);
-    async Task StartCaptureCoreAsync(CaptureMode mode, bool scrolling)
+    public Task StartCodeCaptureAsync() => StartCaptureCoreAsync(CaptureMode.Region, scrolling: true, workflow: ScrollCaptureWorkflow.Code);
+    async Task StartCaptureCoreAsync(CaptureMode mode, bool scrolling, ScrollCaptureWorkflow workflow = ScrollCaptureWorkflow.Quick)
     {
         if (busy || capturePending || !CanStartCapture) return;
         CloseColorPalette();
@@ -125,7 +126,7 @@ public partial class MainWindow : Window
             BitmapSource image = result.Image;
             if (scrolling)
             {
-                var window = new ScrollCaptureWindow(result.Bounds, result.Image);
+                var window = new ScrollCaptureWindow(result.Bounds, result.Image, workflow);
                 if (window.ShowDialog() != true || window.Result == null) { if (wasVisible) { Show(); Activate(); } return; }
                 image = window.Result;
             }

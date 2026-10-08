@@ -4,6 +4,12 @@ public static partial class I18n
 {
     private static readonly Dictionary<string, (string English, string Simplified)> ScrollWorkflowTranslations = new(StringComparer.Ordinal)
     {
+        ["在原視窗慢慢捲動，保留重疊；按「完成」產生長圖。"] = ("Scroll slowly in the original window, keeping overlap. Choose Done to create the image.", "在原窗口慢慢滚动，保留重叠；按「完成」生成长图。"),
+        ["已開始收集程式碼畫面；自行捲動後按「完成」。"] = ("Capturing the code window. Scroll manually, then choose Done.", "已开始收集代码画面；自行滚动后按「完成」。"),
+        ["起點"] = ("Start", "起点"),
+        ["終點"] = ("End", "终点"),
+        ["從已收集的第一頁調整起點。"] = ("Adjust the start on the first captured frame.", "从已收集的第一页调整起点。"),
+        ["從已收集的最後一頁調整終點。"] = ("Adjust the end on the last captured frame.", "从已收集的最后一页调整终点。"),
         ["已收集長圖預覽"] = ("Captured image preview", "已收集长图预览"),
         ["已收集首張；在原視窗慢慢捲動。"] = ("First frame captured. Scroll slowly in the original window.", "已收集首张；在原窗口慢慢滚动。"),
         ["已達 {0} 張上限；按「完成」保留已收集內容。"] = ("Frame limit ({0}) reached. Choose Done to keep captured content.", "已达 {0} 张上限；按「完成」保留已收集内容。"),

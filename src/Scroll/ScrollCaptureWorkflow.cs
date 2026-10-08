@@ -1,8 +1,9 @@
 namespace SnipFlow.Scroll;
 
-/// <summary>Quick captures immediately; Precise requires an explicit start and end on retained frames.</summary>
+/// <summary>Quick and Code capture immediately; Precise requires explicit boundaries on retained frames.</summary>
 public enum ScrollCaptureWorkflow
 {
     Quick,
-    Precise
+    Precise,
+    Code
 }

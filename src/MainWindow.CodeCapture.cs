@@ -6,7 +6,7 @@ namespace SnipFlow;
 
 public partial class MainWindow
 {
-    async void CodeClick(object sender, RoutedEventArgs e) => await StartCodeImageAsync();
+    async void CodeClick(object sender, RoutedEventArgs e) => await StartCodeCaptureAsync();
 
     public async Task StartCodeImageAsync()
     {

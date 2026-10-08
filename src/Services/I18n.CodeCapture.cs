@@ -5,6 +5,8 @@ public static partial class I18n
     private static readonly Dictionary<string, (string English, string Simplified)> CodeCaptureTranslations = new(StringComparer.Ordinal)
     {
         ["程式碼長圖"] = ("Code image", "代码长图"),
+        ["程式碼長截圖"] = ("Code capture", "代码长截图"),
+        ["SnipFlow · 程式碼長截圖"] = ("SnipFlow · Code capture", "SnipFlow · 代码长截图"),
         ["SnipFlow · 程式碼長圖"] = ("SnipFlow · Code image", "SnipFlow · 代码长图"),
         ["程式語言"] = ("Language", "代码语言"),
         ["等寬字型"] = ("Monospaced font", "等宽字体"),

@@ -18,10 +18,13 @@ public sealed partial class ScrollCaptureWindow
 
     private StackPanel CreateRangeControls()
     {
-        var panel = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var isCode = _workflow == ScrollCaptureWorkflow.Code;
+        var panel = new StackPanel { Margin = isCode ? new Thickness(0, 0, 0, 10) : new Thickness(0, 8, 0, 0) };
         var actions = new WrapPanel();
-        _startButton = MakeButton("首頁選起點");
-        _endButton = MakeButton("末頁選終點");
+        _startButton = MakeButton(isCode ? "起點" : "首頁選起點");
+        _endButton = MakeButton(isCode ? "終點" : "末頁選終點");
+        _startButton.ToolTip = I18n.T("從已收集的第一頁調整起點。");
+        _endButton.ToolTip = I18n.T("從已收集的最後一頁調整終點。");
         _startButton.Click += async (_, _) => await PickBoundaryAsync(isStart: true);
         _endButton.Click += async (_, _) => await PickBoundaryAsync(isStart: false);
         actions.Children.Add(_startButton);
@@ -165,11 +168,14 @@ public sealed partial class ScrollCaptureWindow
         _endButton.IsEnabled = idle && _frames.Count > 0 && !NeedsStart;
         _rangeSummary.Text = I18n.T(_rangeEnd is not null ? "只保留已收集內容到選定終點。"
             : _rangeStart is not null ? "起點已調整；終點隨收集內容延伸。" : "未調整範圍；保留所有已收集內容。");
+        var quickInstruction = _workflow == ScrollCaptureWorkflow.Code
+            ? "在原視窗慢慢捲動，保留重疊；按「完成」產生長圖。"
+            : "在原視窗慢慢捲動，完成後按「完成」。";
         _instruction.Text = I18n.T(_workflow == ScrollCaptureWorkflow.Precise
             ? NeedsStart ? "從首頁選起點，再捲動對話。終點可從末頁選取。"
                 : _rangeEnd is null ? "捲動對話後，從已收集末頁選終點。" : "範圍已選，按「完成」產生長圖。"
             : _rangeEnd is not null ? "範圍已選，按「完成」產生長圖。"
                 : _userPaused ? "已暫停；可繼續捲動或完成已收集內容。"
-                : "在原視窗慢慢捲動，完成後按「完成」。");
+                : quickInstruction);
     }
 }

@@ -69,13 +69,13 @@ public sealed partial class ScrollCaptureWindow : Window
         if (initialFrame is not null && (initialFrame.PixelWidth != targetPhysicalBounds.Width
             || initialFrame.PixelHeight != targetPhysicalBounds.Height))
             throw new ArgumentException("The initial frame must match the selected region.", nameof(initialFrame));
-        if (workflow is not ScrollCaptureWorkflow.Quick and not ScrollCaptureWorkflow.Precise)
+        if (workflow is not ScrollCaptureWorkflow.Quick and not ScrollCaptureWorkflow.Precise and not ScrollCaptureWorkflow.Code)
             throw new ArgumentOutOfRangeException(nameof(workflow));
 
         _targetBounds = targetPhysicalBounds;
         _target = new ScrollCaptureTarget(_targetBounds);
         _workflow = workflow;
-        Title = I18n.T("SnipFlow · 對話長截圖");
+        Title = I18n.T(workflow == ScrollCaptureWorkflow.Code ? "SnipFlow · 程式碼長截圖" : "SnipFlow · 對話長截圖");
         Width = 410;
         SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.None;
@@ -104,7 +104,11 @@ public sealed partial class ScrollCaptureWindow : Window
         var header = new Grid { Margin = new Thickness(0, 0, 0, 8) };
         header.ColumnDefinitions.Add(new ColumnDefinition());
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var title = new TextBlock { Text = I18n.T("對話長截圖"), FontWeight = FontWeights.SemiBold, FontSize = 15 };
+        var title = new TextBlock
+        {
+            Text = I18n.T(workflow == ScrollCaptureWorkflow.Code ? "程式碼長截圖" : "對話長截圖"),
+            FontWeight = FontWeights.SemiBold, FontSize = 15
+        };
         header.Children.Add(title);
         title.MouseLeftButtonDown += (_, args) =>
         {
@@ -119,7 +123,9 @@ public sealed partial class ScrollCaptureWindow : Window
         layout.Children.Add(header);
         _instruction = new TextBlock
         {
-            Text = I18n.T("在原視窗慢慢捲動，完成後按「完成」。"),
+            Text = I18n.T(workflow == ScrollCaptureWorkflow.Code
+                ? "在原視窗慢慢捲動，保留重疊；按「完成」產生長圖。"
+                : "在原視窗慢慢捲動，完成後按「完成」。"),
             Foreground = Brush("#A3A3A3"), TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 8)
         };
@@ -149,6 +155,9 @@ public sealed partial class ScrollCaptureWindow : Window
         information.Children.Add(_status);
         previewRow.Children.Add(information);
         layout.Children.Add(previewRow);
+
+        var rangeControls = CreateRangeControls();
+        if (workflow == ScrollCaptureWorkflow.Code) layout.Children.Add(rangeControls);
 
         var actions = new WrapPanel();
         _pauseButton = MakeButton("暫停");
@@ -236,7 +245,8 @@ public sealed partial class ScrollCaptureWindow : Window
         trimActions.Children.Add(_applyTrimButton);
         trimContent.Children.Add(trimActions);
         _trimExpander.Content = trimContent;
-        var adjustments = CreateRangeControls();
+        var adjustments = new StackPanel();
+        if (workflow != ScrollCaptureWorkflow.Code) adjustments.Children.Add(rangeControls);
         _undoButton.Margin = new Thickness(0, 8, 0, 0);
         adjustments.Children.Add(_undoButton);
         adjustments.Children.Add(_trimExpander);
@@ -268,9 +278,12 @@ public sealed partial class ScrollCaptureWindow : Window
             }
             _userPaused = _workflow == ScrollCaptureWorkflow.Precise;
             if (!_userPaused) _timer.Start();
-            SetStatus(_workflow == ScrollCaptureWorkflow.Quick
-                ? "自動收集中；慢慢捲動後按「完成」。"
-                : "從首頁選起點，再捲動對話。終點可從末頁選取。");
+            SetStatus(_workflow switch
+            {
+                ScrollCaptureWorkflow.Code => "已開始收集程式碼畫面；自行捲動後按「完成」。",
+                ScrollCaptureWorkflow.Precise => "從首頁選起點，再捲動對話。終點可從末頁選取。",
+                _ => "自動收集中；慢慢捲動後按「完成」。"
+            });
             UpdateButtons();
         };
         LocationChanged += (_, _) => LimitWindowHeight();

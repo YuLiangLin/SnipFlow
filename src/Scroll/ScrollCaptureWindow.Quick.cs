@@ -10,7 +10,7 @@ public sealed partial class ScrollCaptureWindow
     private Button _resolveFinishButton = null!;
 
     private bool NeedsStart => _workflow == ScrollCaptureWorkflow.Precise && _rangeStart is null;
-    private bool HasFinishRange => _workflow == ScrollCaptureWorkflow.Quick
+    private bool HasFinishRange => _workflow != ScrollCaptureWorkflow.Precise
         || (_rangeStart is not null && _rangeEnd is not null);
 
     private StackPanel CreateFinishNotice()
