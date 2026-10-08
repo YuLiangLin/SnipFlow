@@ -48,6 +48,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent(); ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
+        TaskbarIconService.Attach(this);
         Editor.Changed += (_, _) => { RefreshDocumentState(); QueueAutoSave(); };
         Editor.SelectionChanged += (_, _) => RefreshProperties();
         Updates.Changed += (_, _) => Dispatcher.BeginInvoke(() => { showingUpdateStatus = true; StatusText.Text = Updates.Status; UpdateBanner.Visibility = Updates.ReadyToRestart ? Visibility.Visible : Visibility.Collapsed; });

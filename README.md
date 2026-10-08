@@ -101,6 +101,8 @@ Codex、Claude 與其他可捲動視窗也可使用相同流程。可展開設�
 
 0.4.0 採中性石墨灰、柔白文字與細邊框，搭配使用者選定的「Flow S」Logo。設定分為「一般／快捷鍵／更新」；主視窗、錄影操作條、OCR 與程式提示視窗使用相同色系。
 
+0.5.3 統一使用內嵌的多尺寸 ICO 作為視窗圖示。主視窗顯示、工作列按鈕重建或 DPI 改變時會重新套用圖示；首次顯示也會通知 Windows 更新 SnipFlow 自己的程式檔與圖示項目，改善工作列保留預設圖示的情況。
+
 設定、最多 80 張截圖歷史與錯誤紀錄放在 `%LocalAppData%\SnipFlowData`，與會被更新取代的程式目錄分開。停用歷史只會停止記錄新的截圖。截圖、OCR 內容與紀錄都不會由發布腳本上傳。
 
 預覽版尚未使用程式碼簽章；正式公開散布前應配置受信任的 Windows 簽章憑證。Velopack 檢查更新套件雜湊；首次自動安裝另核對 GitHub Release 資產的 SHA-256，更新來源固定為本專案的 HTTPS GitHub URL。
@@ -117,7 +119,7 @@ dotnet run --project src/SnipFlow.csproj
 `build-release.ps1` 建立自含執行環境的 Windows x64 發布目錄與 Velopack 安裝包。它只打包本專案程式檔案，不打包使用者資料。`-Version` 決定應用程式與套件版本。產物在 `release/`；發布到 GitHub 後，已安裝的舊版才能取得更新。
 
 ```powershell
-./build-release.ps1 -Version 0.5.2
+./build-release.ps1 -Version 0.5.3
 ```
 
 ## 驗證範圍
