@@ -7,12 +7,16 @@ namespace SnipFlow.Services;
 /// <summary>Refreshes the window icon after showing the workspace or recreating its taskbar button.</summary>
 internal sealed class TaskbarIconService
 {
+    static readonly DependencyProperty AttachedProperty = DependencyProperty.RegisterAttached(
+        "Attached", typeof(bool), typeof(TaskbarIconService), new PropertyMetadata(false));
     readonly Window window;
+    readonly TaskbarIdentityService identity = new();
     readonly uint taskbarCreatedMessage;
     HwndSource? source;
     bool queued;
     bool closed;
     bool shellNotified;
+    bool identityApplied;
 
     TaskbarIconService(Window window)
     {
@@ -24,13 +28,20 @@ internal sealed class TaskbarIconService
         if (new WindowInteropHelper(window).Handle != IntPtr.Zero) SourceInitialized(window, EventArgs.Empty);
     }
 
-    internal static void Attach(Window window) => _ = new TaskbarIconService(window);
+    internal static void Attach(Window window)
+    {
+        window.VerifyAccess();
+        if ((bool)window.GetValue(AttachedProperty)) return;
+        window.SetValue(AttachedProperty, true);
+        _ = new TaskbarIconService(window);
+    }
 
     void SourceInitialized(object? sender, EventArgs args)
     {
         window.SourceInitialized -= SourceInitialized;
         source = HwndSource.FromHwnd(new WindowInteropHelper(window).Handle);
         source?.AddHook(WindowMessage);
+        if (source is { IsDisposed: false }) identityApplied = identity.TryApply(source.Handle);
         QueueRefresh();
     }
 
@@ -41,6 +52,11 @@ internal sealed class TaskbarIconService
 
     IntPtr WindowMessage(IntPtr handle, int message, IntPtr parameter, IntPtr data, ref bool handled)
     {
+        if (message == 0x0002 && identityApplied) // WM_DESTROY: clear only properties successfully owned by this service.
+        {
+            TaskbarIdentityService.Clear(handle);
+            identityApplied = false;
+        }
         if ((taskbarCreatedMessage != 0 && message == taskbarCreatedMessage) || message == 0x02E0)
             QueueRefresh();
         return IntPtr.Zero;
@@ -57,6 +73,7 @@ internal sealed class TaskbarIconService
     {
         queued = false;
         if (closed || !window.IsVisible || source is null || source.IsDisposed) return;
+        if (!identityApplied) identityApplied = identity.TryApply(source.Handle);
         try
         {
             // Use a new decoded ICO frame so WPF updates both native icon handles.
@@ -64,12 +81,9 @@ internal sealed class TaskbarIconService
                 BitmapCreateOptions.IgnoreImageCache, BitmapCacheOption.OnLoad);
             icon.Freeze();
             window.SetCurrentValue(Window.IconProperty, icon);
-            if (shellNotified) return;
+            if (shellNotified || !identityApplied) return;
             shellNotified = true;
-            NotifyIconItem(Path.Combine(AppContext.BaseDirectory, "Assets", "SnipFlow-v3.ico"));
-            if (Environment.ProcessPath is { } executable
-                && Path.GetFileName(executable).Equals("SnipFlow.exe", StringComparison.OrdinalIgnoreCase))
-                NotifyIconItem(executable);
+            foreach (var path in identity.NotificationPaths) NotifyIconItem(path);
         }
         catch (Exception exception)
         {

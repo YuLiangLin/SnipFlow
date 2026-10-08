@@ -22,7 +22,9 @@ public static class StartupService
         return new(value, kind, IsBackgroundCommand(value as string));
     }
 
-    public static string CreateCommand()
+    public static string CreateCommand() => $"\"{ResolveLauncher()}\" --background";
+
+    internal static string ResolveLauncher()
     {
         var executable = Environment.ProcessPath;
         if (string.IsNullOrWhiteSpace(executable) || !string.Equals(Path.GetFileName(executable), ExecutableName, StringComparison.OrdinalIgnoreCase))
@@ -42,7 +44,7 @@ public static class StartupService
         // to the same location outside an MSIX host's filesystem context.
         executable = ResolveExistingFile(executable);
         if (!File.Exists(executable)) throw MissingExecutable(executable);
-        return $"\"{executable}\" --background";
+        return executable;
     }
 
     public static void WriteCommand(string? command)
@@ -97,7 +99,7 @@ public static class StartupService
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { return false; }
     }
 
-    static string ResolveExistingFile(string path)
+    internal static string ResolveExistingFile(string path)
     {
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         var buffer = new StringBuilder(512);
