@@ -37,6 +37,7 @@
               <StackPanel>
               <Button Click="CaptureMenuClick" Tag="CaptureRight" ToolTip="{ui:Tr '截圖模式'}" AutomationProperties.Name="{ui:Tr '截圖模式'}"><TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="ScrollClick" ToolTip="{ui:Tr '長頁捲動截圖'}" AutomationProperties.Name="{ui:Tr '長頁捲動截圖'}"><TextBlock Text="&#xE8CB;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
+              <Button Click="CodeClick" ToolTip="{ui:Tr '程式碼長圖'}" AutomationProperties.Name="{ui:Tr '程式碼長圖'}"><TextBlock Text="&lt;/&gt;" FontFamily="Consolas" FontSize="15" FontWeight="SemiBold" /></Button>
               <Button Click="RecordClick" ToolTip="{ui:Tr '螢幕錄影'}" AutomationProperties.Name="{ui:Tr '螢幕錄影'}"><TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="OpenClick" ToolTip="{ui:Tr '開啟圖片'}" AutomationProperties.Name="{ui:Tr '開啟圖片'}"><TextBlock Text="&#xE8E5;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="CollageClick" ToolTip="{ui:Tr '多張合圖'}" AutomationProperties.Name="{ui:Tr '多張合圖'}"><TextBlock Text="&#xE8A9;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
@@ -157,13 +158,14 @@
         </Grid>
         <Button Grid.Column="1" Click="RecordClick" Height="48" Margin="6,0,0,0" Background="{StaticResource Raised}"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="18" Margin="0,0,8,0" /><TextBlock Text="{ui:Tr '螢幕錄影'}" FontSize="13" /></StackPanel></Button>
         <TextBlock Grid.Row="1" x:Name="CompactHotkeyHint" Text="Ctrl + Alt + S" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,9,0,0" />
-        <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Center">
+        <WrapPanel Grid.Row="3" Grid.ColumnSpan="2" HorizontalAlignment="Center" MaxWidth="378">
           <Button Content="{ui:Tr '長截圖'}" Click="ScrollClick" Padding="9,8" Margin="0,0,3,0" />
+          <Button Content="{ui:Tr '程式碼長圖'}" Click="CodeClick" Padding="9,8" Margin="0,0,3,0" />
           <Button Content="{ui:Tr '開啟圖片'}" Click="OpenClick" Padding="9,8" Margin="0,0,3,0" />
           <Button Content="{ui:Tr '合圖'}" Click="CollageClick" Padding="9,8" Margin="0,0,3,0" />
           <Button x:Name="ExpandButton" Content="{ui:Tr '編輯器'}" Click="ExpandClick" Padding="9,8" Margin="0,0,3,0" />
           <Button Click="SettingsClick" ToolTip="{ui:Tr '設定'}" Padding="10,8"><TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons" FontSize="16" /></Button>
-        </StackPanel>
+        </WrapPanel>
       </Grid>
       <Border Grid.Row="2" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Background="{StaticResource Bg}"><DockPanel Margin="16,0"><TextBlock DockPanel.Dock="Right" x:Name="ImageInfo" Foreground="{StaticResource Muted}" FontFamily="Consolas" FontSize="11" VerticalAlignment="Center" /><TextBlock x:Name="StatusText" Text="{ui:Tr '就緒'}" Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" /></DockPanel></Border>
     </Grid>

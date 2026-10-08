@@ -104,7 +104,6 @@ public partial class MainWindow : Window
     {
         if (busy || capturePending || !CanStartCapture) return;
         CloseColorPalette();
-        capturePending = true;
         try
         {
             bool appendToCollage = Editor.IsCollage;
@@ -115,6 +114,7 @@ public partial class MainWindow : Window
             }
             else if (!PrepareToDiscard()) return;
             int expectedGeneration = documentGeneration;
+            capturePending = true;
             busy = true; var wasVisible = IsVisible;
             RefreshDocumentState();
             Hide(); await Task.Delay(220);
@@ -590,6 +590,7 @@ public partial class MainWindow : Window
                             RefreshDocumentState();
                         }
                     }
+                    else if (Clipboard.ContainsText()) _ = StartCodeImageAsync();
                 }
                 catch (Exception ex) { ReportError(ex, "貼上失敗"); }
             }

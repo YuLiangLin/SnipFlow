@@ -93,6 +93,19 @@ internal sealed class ScrollCaptureTarget
         SetWindowPos(toolbar, IntPtr.Zero, location.Left, location.Top, 0, 0, 0x0001 | 0x0004 | 0x0010);
     }
 
+    internal static void KeepToolbarVisible(IntPtr toolbar)
+    {
+        if (!GetWindowRect(toolbar, out var bounds)) return;
+        var area = System.Windows.Forms.Screen.FromHandle(toolbar).WorkingArea;
+        var width = bounds.Right - bounds.Left;
+        var height = bounds.Bottom - bounds.Top;
+        var left = Math.Clamp(bounds.Left, area.Left, Math.Max(area.Left, area.Right - width));
+        var top = Math.Clamp(bounds.Top, area.Top, Math.Max(area.Top, area.Bottom - height));
+        if (left == bounds.Left && top == bounds.Top) return;
+        // Growing the preview or expanding controls moves only this toolbar, without activation.
+        SetWindowPos(toolbar, IntPtr.Zero, left, top, 0, 0, 0x0001 | 0x0004 | 0x0010);
+    }
+
     private static bool IsPointerDown() => (GetAsyncKeyState(1) & 0x8000) != 0
         || (GetAsyncKeyState(2) & 0x8000) != 0 || (GetAsyncKeyState(4) & 0x8000) != 0;
     private static bool IsCloaked(IntPtr handle) => DwmGetWindowAttribute(handle, 14, out var cloaked, sizeof(int)) == 0 && cloaked != 0;

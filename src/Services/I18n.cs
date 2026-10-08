@@ -3,7 +3,7 @@ using System.Globalization;
 namespace SnipFlow.Services;
 
 /// <summary>Application text only. OCR language selection and the Windows display language are independent.</summary>
-public static class I18n
+public static partial class I18n
 {
     private static string _languageTag = "zh-TW";
 
@@ -33,7 +33,11 @@ public static class I18n
     private static string Translate(string zhTwText, string languageTag)
     {
         ArgumentNullException.ThrowIfNull(zhTwText);
-        if (languageTag == "zh-TW" || !Translations.TryGetValue(zhTwText, out var translation))
+        if (languageTag == "zh-TW")
+            return zhTwText;
+        if (!Translations.TryGetValue(zhTwText, out var translation)
+            && !CodeCaptureTranslations.TryGetValue(zhTwText, out translation)
+            && !ScrollWorkflowTranslations.TryGetValue(zhTwText, out translation))
             return zhTwText;
         return languageTag == "en" ? translation.English : translation.Simplified;
     }

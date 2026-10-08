@@ -1,0 +1,42 @@
+namespace SnipFlow.Services;
+
+public static partial class I18n
+{
+    private static readonly Dictionary<string, (string English, string Simplified)> ScrollWorkflowTranslations = new(StringComparer.Ordinal)
+    {
+        ["已收集長圖預覽"] = ("Captured image preview", "已收集长图预览"),
+        ["已收集首張；在原視窗慢慢捲動。"] = ("First frame captured. Scroll slowly in the original window.", "已收集首张；在原窗口慢慢滚动。"),
+        ["已達 {0} 張上限；按「完成」保留已收集內容。"] = ("Frame limit ({0}) reached. Choose Done to keep captured content.", "已达 {0} 张上限；按「完成」保留已收集内容。"),
+        ["已達上限，新畫面未加入。可微調範圍，或只完成已收集內容。"] = ("Limit reached; the new frame was not added. Adjust the range or finish captured content only.", "已达上限，新画面未加入。可微调范围，或只完成已收集内容。"),
+        ["已達長圖大小上限；按「完成」保留已收集內容。"] = ("Image size limit reached. Choose Done to keep captured content.", "已达长图大小上限；按「完成」保留已收集内容。"),
+        ["已達記憶體上限；按「完成」保留已收集內容。"] = ("Memory limit reached. Choose Done to keep captured content.", "已达内存上限；按「完成」保留已收集内容。"),
+        ["已暫停；可繼續捲動或完成已收集內容。"] = ("Paused. Resume scrolling or finish captured content.", "已暂停；可继续滚动或完成已收集内容。"),
+        ["只完成已收集內容"] = ("Finish captured content only", "只完成已收集内容"),
+        ["只保留已收集內容到選定終點。"] = ("Keep captured content up to the selected end.", "只保留已收集内容到选定终点。"),
+        ["未調整範圍；保留所有已收集內容。"] = ("Keep all captured content unless adjusted.", "未调整范围；保留所有已收集内容。"),
+        ["末頁選終點"] = ("Set end on last frame", "末页选终点"),
+        ["目前內容已收集，可繼續捲動或完成。"] = ("Content captured. Keep scrolling or choose Done.", "当前内容已收集，可继续滚动或完成。"),
+        ["目前畫面已對齊，可繼續捲動或完成。"] = ("Frame aligned. Keep scrolling or choose Done.", "当前画面已对齐，可继续滚动或完成。"),
+        ["在原視窗慢慢捲動，完成後按「完成」。"] = ("Scroll slowly in the original window, then choose Done.", "在原窗口慢慢滚动，完成后按「完成」。"),
+        ["有畫面尚未對齊，不會加入長圖。請處理接縫，或只完成已收集內容。"] = ("An unaligned frame will be excluded. Resolve its join or finish captured content only.", "有画面尚未对齐，不会加入长图。请处理接缝，或只完成已收集内容。"),
+        ["自動收集中；慢慢捲動後按「完成」。"] = ("Capturing automatically. Scroll slowly, then choose Done.", "自动收集中；慢慢滚动后按「完成」。"),
+        ["固定列影響對齊；請在「微調範圍」略過頂部／底部。此畫面未加入。"] = ("Fixed bars prevent alignment. Trim the top or bottom under Adjust range. This frame was not added.", "固定栏影响对齐；请在「微调范围」略过顶部／底部。此画面未加入。"),
+        ["首頁選起點"] = ("Set start on first frame", "首页选起点"),
+        ["起點已調整；已收集內容會保留。"] = ("Start adjusted. Captured frames are retained.", "起点已调整；已收集内容会保留。"),
+        ["起點已調整；終點隨收集內容延伸。"] = ("Start adjusted; the end grows with captured content.", "起点已调整；终点随收集内容延伸。"),
+        ["起點須在終點之前，請重新選取。"] = ("The start must precede the end. Select it again.", "起点须在终点之前，请重新选择。"),
+        ["從已收集首頁選起點"] = ("Set start on the first captured frame", "从已收集首页选起点"),
+        ["從首頁選起點，再捲動對話。終點可從末頁選取。"] = ("Set the start on the first frame, then scroll. Set the end on the last frame.", "从首页选起点，再滚动对话。终点可从末页选择。"),
+        ["捲動對話後，從已收集末頁選終點。"] = ("After scrolling, set the end on the last captured frame.", "滚动对话后，从已收集末页选终点。"),
+        ["終點已選；只保留已收集內容到此處。按「完成」產生長圖。"] = ("End selected. Keep captured content up to this point. Choose Done to create the image.", "终点已选；只保留已收集内容到此处。按「完成」生成长图。"),
+        ["處理接縫"] = ("Resolve join", "处理接缝"),
+        ["部分畫面尚未加入；請確認後完成。"] = ("Some frames were not added. Confirm before finishing.", "部分画面尚未加入；请确认后完成。"),
+        ["最後畫面尚未對齊，未加入；請回捲一點或處理接縫。"] = ("The last frame was not aligned or added. Scroll back slightly or resolve its join.", "最后画面尚未对齐，未加入；请回滚一点或处理接缝。"),
+        ["等待原視窗；現有內容會保留。"] = ("Waiting for the original window. Captured content is retained.", "等待原窗口；现有内容会保留。"),
+        ["裁切會排除已選起點或終點，請減少裁切或重新選取範圍。"] = ("Trimming would exclude a selected boundary. Reduce the trim or adjust the range again.", "裁切会排除已选起点或终点，请减少裁切或重新选择范围。"),
+        ["微調範圍"] = ("Adjust range", "微调范围"),
+        ["新畫面超過上限，未加入；可微調範圍，或只完成已收集內容。"] = ("The new frame exceeds a limit and was not added. Adjust the range or finish captured content only.", "新画面超过上限，未加入；可微调范围，或只完成已收集内容。"),
+        ["範圍已選，按「完成」產生長圖。"] = ("Range selected. Choose Done to create the image.", "范围已选，按「完成」生成长图。"),
+        ["繼續收集會延伸終點。"] = ("Resuming capture will extend the end.", "继续收集会延伸终点。")
+    };
+}

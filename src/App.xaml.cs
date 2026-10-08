@@ -66,6 +66,8 @@ public partial class App : Application
         AddTrayAction("視窗截圖", () => _ = shell.StartCaptureAsync(CaptureMode.Window));
         AddTrayAction("單一螢幕截圖", () => _ = shell.StartCaptureAsync(CaptureMode.Monitor));
         AddTrayAction("全部螢幕截圖", () => _ = shell.StartCaptureAsync(CaptureMode.AllMonitors));
+        AddTrayAction("長截圖", () => _ = shell.StartCaptureAsync(scrolling: true));
+        AddTrayAction("程式碼長圖", () => { ShowShell(); _ = shell.StartCodeImageAsync(); });
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         AddTrayAction("螢幕錄影", () => _ = shell.StartRecordingAsync());
         AddTrayAction("開啟 SnipFlow", ShowShell);

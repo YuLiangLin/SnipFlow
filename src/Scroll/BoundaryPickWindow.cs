@@ -15,7 +15,7 @@ public sealed class BoundaryPickWindow : Window
 {
     private static readonly Brush MaskBrush = FrozenBrush(Color.FromArgb(142, 16, 16, 16));
     private static readonly Brush PanelBrush = FrozenBrush(Color.FromArgb(240, 32, 32, 32));
-    private static readonly Brush AccentBrush = FrozenBrush(Color.FromRgb(92, 224, 180));
+    private static readonly Brush AccentBrush = FrozenBrush(Color.FromRgb(232, 232, 232));
     private static readonly Brush MutedBrush = FrozenBrush(Color.FromRgb(201, 201, 201));
     private readonly DrawingRectangle _physicalBounds;
     private readonly BitmapSource _snapshot;
@@ -52,7 +52,7 @@ public sealed class BoundaryPickWindow : Window
         _pixel = Math.Clamp(initialPixel ?? physicalBounds.Height / 2, 0, _maximumPixel);
         _surface = new BoundarySurface(this) { Focusable = true, FocusVisualStyle = null };
 
-        Title = I18n.T(fromCollectedFrame ? "從已收集末頁選終點"
+        Title = I18n.T(fromCollectedFrame ? (isStart ? "從已收集首頁選起點" : "從已收集末頁選終點")
             : isStart ? "點選第一則訊息的上緣" : "點選最後一則訊息的下緣");
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;

@@ -12,7 +12,7 @@
     <StartupObject>SnipFlow.App</StartupObject>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets/SnipFlow-v3.ico</ApplicationIcon>
-    <Version>0.5.5</Version>
+    <Version>0.6.0</Version>
     <AssemblyName>SnipFlow</AssemblyName>
     <Product>SnipFlow</Product>
     <Description>SnipFlow 快剪 · 截圖與標註</Description>
@@ -23,6 +23,7 @@
   <ItemGroup>
     <PackageReference Include="Velopack" Version="1.2.161" />
     <PackageReference Include="ScreenRecorderLib" Version="7.0.1" />
+    <PackageReference Include="AvalonEdit" Version="6.3.1.120" />
     <ApplicationDefinition Remove="App.xaml" />
     <Page Include="App.xaml" />
     <Content Include="update-source.json" CopyToOutputDirectory="PreserveNewest" />
