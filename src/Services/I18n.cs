@@ -37,7 +37,8 @@ public static partial class I18n
             return zhTwText;
         if (!Translations.TryGetValue(zhTwText, out var translation)
             && !CodeCaptureTranslations.TryGetValue(zhTwText, out translation)
-            && !ScrollWorkflowTranslations.TryGetValue(zhTwText, out translation))
+            && !ScrollWorkflowTranslations.TryGetValue(zhTwText, out translation)
+            && !WindowCaptureTranslations.TryGetValue(zhTwText, out translation))
             return zhTwText;
         return languageTag == "en" ? translation.English : translation.Simplified;
     }
@@ -51,6 +52,11 @@ public static partial class I18n
 
     private static readonly Dictionary<string, (string English, string Simplified)> Translations = new(StringComparer.Ordinal)
     {
+        ["視窗長截圖"] = ("Window scrolling capture", "窗口长截图"),
+        ["框選長截圖"] = ("Region scrolling capture", "区域长截图"),
+        ["捲動截圖模式"] = ("Scrolling capture mode", "滚动截图模式"),
+        ["程式碼長截圖模式"] = ("Code capture mode", "代码长截图模式"),
+        ["選取的視窗資訊遺失，請重新選取。"] = ("The selected window information is missing. Select the window again.", "所选窗口信息缺失，请重新选择。"),
         // Shell, navigation, annotation tools, and common actions.
         ["SnipFlow · 快剪"] = ("SnipFlow · Capture", "SnipFlow · 快剪"),
         ["SnipFlow · 快剪 *"] = ("SnipFlow · Capture *", "SnipFlow · 快剪 *"),

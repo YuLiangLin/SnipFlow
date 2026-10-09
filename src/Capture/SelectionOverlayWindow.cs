@@ -25,6 +25,7 @@ internal sealed class SelectionOverlayWindow : Window
     private bool _closed;
 
     internal DrawingRectangle MonitorBounds { get; }
+    internal IntPtr Handle => _handle;
 
     internal SelectionOverlayWindow(CaptureSession session, CaptureMonitor monitor, BitmapSource snapshot)
     {
@@ -208,10 +209,11 @@ internal sealed class SelectionOverlayWindow : Window
     {
         var title = _session.Mode switch
         {
+            CaptureMode.Window when _session.SelectWindowOnly => I18n.T("先選取要捲動的視窗"),
             CaptureMode.Window => I18n.T("點選視窗"),
             CaptureMode.Monitor => I18n.T("點選要擷取的螢幕"),
             CaptureMode.AllMonitors => I18n.T("點一下擷取所有螢幕"),
-            _ => I18n.T("拖曳框選畫面")
+            _ => I18n.T(_session.RestrictsToWindow ? "在選定視窗內框選對話或程式碼區" : "拖曳框選畫面")
         };
         var caption = _session.StatusHint;
         if (caption is null && _session.Mode == CaptureMode.Window && _session.HoveredWindow is { } target)
@@ -219,7 +221,7 @@ internal sealed class SelectionOverlayWindow : Window
         if (caption is null && _session.Selection is { } bounds && _session.Mode != CaptureMode.Region)
             caption = I18n.F("{0:N0} × {1:N0} px", bounds.Width, bounds.Height);
 
-        var width = _session.AllowModeSwitch ? 430 : 310;
+        var width = _session.AllowModeSwitch || _session.RestrictsToWindow ? 430 : 310;
         var height = 70 + (_session.AllowModeSwitch ? 25 : 0) + (caption is not null ? 25 : 0);
         var panel = new Rect(Math.Max(12, (ActualWidth - width) / 2), Math.Min(38, ActualHeight / 8),
             Math.Min(width, Math.Max(1, ActualWidth - 24)), Math.Min(height, Math.Max(1, ActualHeight - 24)));

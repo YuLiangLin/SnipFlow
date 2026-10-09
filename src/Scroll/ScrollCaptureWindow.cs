@@ -60,7 +60,7 @@ public sealed partial class ScrollCaptureWindow : Window
     public BitmapSource? Result { get; private set; }
 
     public ScrollCaptureWindow(DrawingRectangle targetPhysicalBounds, BitmapSource? initialFrame = null,
-        ScrollCaptureWorkflow workflow = ScrollCaptureWorkflow.Quick)
+        ScrollCaptureWorkflow workflow = ScrollCaptureWorkflow.Quick, WindowCaptureTarget? selectedTarget = null)
     {
         if (targetPhysicalBounds.Width < 32 || targetPhysicalBounds.Height < 48)
             throw new ArgumentException(I18n.T("請選取至少 32 × 48 像素的捲動內容範圍。"), nameof(targetPhysicalBounds));
@@ -73,7 +73,7 @@ public sealed partial class ScrollCaptureWindow : Window
             throw new ArgumentOutOfRangeException(nameof(workflow));
 
         _targetBounds = targetPhysicalBounds;
-        _target = new ScrollCaptureTarget(_targetBounds);
+        _target = new ScrollCaptureTarget(_targetBounds, selectedTarget);
         _workflow = workflow;
         Title = I18n.T(workflow == ScrollCaptureWorkflow.Code ? "SnipFlow · 程式碼長截圖" : "SnipFlow · 對話長截圖");
         Width = 410;

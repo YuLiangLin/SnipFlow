@@ -12,7 +12,7 @@
     <StartupObject>SnipFlow.App</StartupObject>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets/SnipFlow-v3.ico</ApplicationIcon>
-    <Version>0.6.2</Version>
+    <Version>0.6.3</Version>
     <AssemblyName>SnipFlow</AssemblyName>
     <Product>SnipFlow</Product>
     <Description>SnipFlow 快剪 · 截圖與標註</Description>

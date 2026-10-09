@@ -12,6 +12,7 @@ internal sealed class CaptureSession : IDisposable
     private readonly DrawingRectangle _desktopBounds;
     private readonly BitmapSource _desktopImage;
     private readonly IReadOnlyList<CaptureWindow> _desktopWindows;
+    private readonly WindowCaptureTarget? _restrictedTarget;
     private readonly List<SelectionOverlayWindow> _windows = new();
     private readonly TaskCompletionSource<DrawingRectangle?> _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -27,20 +28,25 @@ internal sealed class CaptureSession : IDisposable
     internal DrawingRectangle? Selection { get; private set; }
     internal CaptureMode Mode { get; private set; }
     internal bool AllowModeSwitch { get; }
+    internal bool SelectWindowOnly { get; }
+    internal bool RestrictsToWindow => _restrictedTarget is not null;
     internal CaptureWindow? HoveredWindow { get; private set; }
     internal CaptureWindow? SelectedWindow { get; private set; }
     internal string? StatusHint { get; private set; }
 
     internal CaptureSession(IReadOnlyList<CaptureMonitor> monitors, DrawingRectangle desktopBounds,
         BitmapSource desktopImage, IReadOnlyList<CaptureWindow> desktopWindows, CaptureMode mode,
-        bool allowModeSwitch)
+        bool allowModeSwitch, bool selectWindowOnly = false, WindowCaptureTarget? restrictedTarget = null)
     {
         _monitors = monitors;
         _desktopBounds = desktopBounds;
         _desktopImage = desktopImage;
         _desktopWindows = desktopWindows;
+        _restrictedTarget = restrictedTarget;
+        Selection = restrictedTarget?.ClientBounds;
         Mode = mode;
         AllowModeSwitch = allowModeSwitch;
+        SelectWindowOnly = selectWindowOnly;
         Cursor = CaptureNative.CursorPosition();
         _cursorTimer = new DispatcherTimer(DispatcherPriority.Input)
         {
@@ -105,6 +111,13 @@ internal sealed class CaptureSession : IDisposable
                     Cancel();
                 return;
             }
+            if (_restrictedTarget is not null && !_restrictedTarget.ClientBounds.Contains(Cursor))
+            {
+                StatusHint = I18n.T("請在選定視窗的內容區內框選。");
+                RefreshSelection();
+                return;
+            }
+            StatusHint = null;
             _origin = Clamp(Cursor);
             _captureWindow = window;
             IsSelecting = true;
@@ -139,6 +152,26 @@ internal sealed class CaptureSession : IDisposable
                     _captureWindow.ReleaseMouseCapture();
                 _captureWindow = null;
                 ConfirmChoice();
+                return;
+            }
+            if (_restrictedTarget is not null && Selection is { } region)
+            {
+                var overlays = _windows.Select(window => window.Handle).ToArray();
+                var reason = "";
+                if (region.Width < 32 || region.Height < 48)
+                    reason = "請選取至少 32 × 48 像素的捲動內容範圍。";
+                else if (CaptureNative.CanCaptureWindowRegion(_restrictedTarget, region, _monitors,
+                             overlays, out reason))
+                {
+                    Complete(region);
+                    return;
+                }
+                IsSelecting = false;
+                if (_captureWindow?.IsMouseCaptured == true)
+                    _captureWindow.ReleaseMouseCapture();
+                _captureWindow = null;
+                StatusHint = I18n.T(reason);
+                RefreshSelection();
                 return;
             }
             Complete(Selection);
@@ -184,7 +217,7 @@ internal sealed class CaptureSession : IDisposable
         {
             if (Mode == CaptureMode.Window)
             {
-                if (!WindowScreenshotService.IsSupported)
+                if (!SelectWindowOnly && !WindowScreenshotService.IsSupported)
                 {
                     StatusHint = I18n.T("目前不支援視窗擷取，請按 R 改用框選。");
                     RefreshSelection();
@@ -192,7 +225,15 @@ internal sealed class CaptureSession : IDisposable
                 }
                 if (HoveredWindow is not { } target || !CaptureNative.IsCurrentWindow(target))
                 {
-                    StatusHint = I18n.T("視窗已改變，請選取其他視窗或按 R 框選。");
+                    StatusHint = I18n.T(AllowModeSwitch
+                        ? "視窗已改變，請選取其他視窗或按 R 框選。"
+                        : "視窗已改變，請選取其他視窗。");
+                    RefreshSelection();
+                    return;
+                }
+                if (SelectWindowOnly && CaptureNative.IsCaptureProtected(target.Handle))
+                {
+                    StatusHint = I18n.T("此視窗禁止擷取，請選取其他視窗。");
                     RefreshSelection();
                     return;
                 }
@@ -228,6 +269,11 @@ internal sealed class CaptureSession : IDisposable
             }
 
             var current = CaptureNative.CursorPosition();
+            if (_restrictedTarget is not null && !CaptureNative.IsCurrentTarget(_restrictedTarget))
+            {
+                Cancel();
+                return;
+            }
             if (Cursor != current)
             {
                 Cursor = current;
@@ -270,9 +316,12 @@ internal sealed class CaptureSession : IDisposable
             window.RefreshSelection();
     }
 
-    private DrawingPoint Clamp(DrawingPoint point) => new(
-        Math.Clamp(point.X, _desktopBounds.Left, _desktopBounds.Right),
-        Math.Clamp(point.Y, _desktopBounds.Top, _desktopBounds.Bottom));
+    private DrawingPoint Clamp(DrawingPoint point)
+    {
+        var bounds = _restrictedTarget?.ClientBounds ?? _desktopBounds;
+        return new DrawingPoint(Math.Clamp(point.X, bounds.Left, bounds.Right),
+            Math.Clamp(point.Y, bounds.Top, bounds.Bottom));
+    }
 
     private void Complete(DrawingRectangle? selection)
     {

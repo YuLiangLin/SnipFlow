@@ -98,12 +98,15 @@ public partial class MainWindow : Window
     {
         hotkeys?.Dispose(); hotkeys = null; RefreshHotkeyHint();
     }
-    public Task StartCaptureAsync(bool scrolling) => StartCaptureCoreAsync(CaptureMode.Region, scrolling);
+    public Task StartCaptureAsync(bool scrolling) => StartCaptureCoreAsync(scrolling ? CaptureMode.Window : CaptureMode.Region, scrolling);
     public Task StartCaptureAsync(CaptureMode mode) => StartCaptureCoreAsync(mode, scrolling: false);
-    public Task StartCodeCaptureAsync() => StartCaptureCoreAsync(CaptureMode.Region, scrolling: true, workflow: ScrollCaptureWorkflow.Code);
+    public Task StartScrollCaptureAsync(CaptureMode selectionMode = CaptureMode.Window) => StartCaptureCoreAsync(selectionMode, scrolling: true);
+    public Task StartCodeCaptureAsync(CaptureMode selectionMode = CaptureMode.Window) => StartCaptureCoreAsync(selectionMode, scrolling: true, workflow: ScrollCaptureWorkflow.Code);
     async Task StartCaptureCoreAsync(CaptureMode mode, bool scrolling, ScrollCaptureWorkflow workflow = ScrollCaptureWorkflow.Quick)
     {
         if (busy || capturePending || !CanStartCapture) return;
+        if (scrolling && mode is not CaptureMode.Window and not CaptureMode.Region)
+            throw new ArgumentOutOfRangeException(nameof(mode));
         CloseColorPalette();
         try
         {
@@ -119,14 +122,16 @@ public partial class MainWindow : Window
             busy = true; var wasVisible = IsVisible;
             RefreshDocumentState();
             Hide(); await Task.Delay(220);
-            var result = scrolling
-                ? await ScreenshotService.CaptureRegionAsync()
-                : await ScreenshotService.CaptureAsync(mode);
+            var result = scrolling && mode == CaptureMode.Window
+                ? await ScreenshotService.CaptureWindowRegionAsync()
+                : scrolling ? await ScreenshotService.CaptureRegionAsync() : await ScreenshotService.CaptureAsync(mode);
             if (result == null) { if (wasVisible) { Show(); Activate(); } return; }
+            if (scrolling && mode == CaptureMode.Window && result.Target == null)
+                throw new InvalidOperationException(I18n.T("選取的視窗資訊遺失，請重新選取。"));
             BitmapSource image = result.Image;
             if (scrolling)
             {
-                var window = new ScrollCaptureWindow(result.Bounds, result.Image, workflow);
+                var window = new ScrollCaptureWindow(result.Bounds, result.Image, workflow, selectedTarget: result.Target);
                 if (window.ShowDialog() != true || window.Result == null) { if (wasVisible) { Show(); Activate(); } return; }
                 image = window.Result;
             }

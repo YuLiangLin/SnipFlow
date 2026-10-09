@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using SnipFlow.Capture;
+using SnipFlow.Services;
 using DrawingRectangle = System.Drawing.Rectangle;
 
 namespace SnipFlow.Scroll;
@@ -10,10 +12,34 @@ internal sealed class ScrollCaptureTarget
     private readonly IntPtr window;
     private readonly uint processId;
     private readonly DrawingRectangle originalBounds;
+    private readonly DrawingRectangle originalClientBounds;
+    private readonly uint originalDpi;
+    private readonly bool hasSelectedTarget;
 
-    internal ScrollCaptureTarget(DrawingRectangle region)
+    internal ScrollCaptureTarget(DrawingRectangle region, WindowCaptureTarget? selectedTarget = null)
     {
         this.region = region;
+        if (selectedTarget is not null)
+        {
+            if (selectedTarget.Handle == IntPtr.Zero || selectedTarget.ProcessId == 0
+                || selectedTarget.ProcessId == Environment.ProcessId
+                || region.Width <= 0 || region.Height <= 0
+                || !selectedTarget.WindowBounds.Contains(region) || !selectedTarget.ClientBounds.Contains(region))
+                throw new ArgumentException(I18n.T("框選範圍必須位於指定視窗的內容區域內。"), nameof(selectedTarget));
+
+            // Bind the identity and physical geometry selected by the two-step capture.
+            // A stale target can still retain its validated initial frame; CanObserve
+            // rejects future captures instead of guessing another window at these pixels.
+            window = selectedTarget.Handle;
+            processId = selectedTarget.ProcessId;
+            originalBounds = selectedTarget.WindowBounds;
+            originalClientBounds = selectedTarget.ClientBounds;
+            originalDpi = selectedTarget.Dpi;
+            hasSelectedTarget = true;
+            return;
+        }
+
+        // Compatibility for callers that still select only a desktop region.
         var point = new NativePoint { X = region.Left + region.Width / 2, Y = region.Top + region.Height / 2 };
         window = GetAncestor(WindowFromPoint(point), 2); // GA_ROOT.
         if (window != IntPtr.Zero)
@@ -27,12 +53,19 @@ internal sealed class ScrollCaptureTarget
     {
         reason = "";
         if (window == IntPtr.Zero || processId == 0 || processId == Environment.ProcessId
-            || !IsWindow(window) || !IsWindowVisible(window) || IsIconic(window))
+            || !IsWindow(window) || !IsWindowVisible(window) || IsIconic(window) || IsCloaked(window))
         { reason = "目標視窗目前無法擷取，已保留現有內容。"; return false; }
         GetWindowThreadProcessId(window, out var currentProcess);
         if (currentProcess != processId || !GetWindowRect(window, out var rectangle)
             || rectangle.ToRectangle() != originalBounds || !originalBounds.Contains(region))
         { reason = "目標視窗位置或大小已改變，請完成後重新選取範圍。"; return false; }
+        if (hasSelectedTarget && (!TryGetClientBounds(window, out var clientBounds)
+            || clientBounds != originalClientBounds || !clientBounds.Contains(region)))
+        { reason = "目標視窗的內容範圍已改變，請完成後重新選取範圍。"; return false; }
+        if (originalDpi != 0 && GetDpiForWindow(window) != originalDpi)
+        { reason = "目標視窗的縮放比例已改變，請完成後重新選取範圍。"; return false; }
+        if (GetWindowDisplayAffinity(window, out var targetAffinity) && targetAffinity != 0)
+        { reason = "目標視窗已限制螢幕擷取，已保留現有內容。"; return false; }
         var foreground = GetAncestor(GetForegroundWindow(), 2);
         if (foreground != window && !(allowToolbarForeground && foreground == toolbar))
         { reason = "切回目標視窗即可繼續；已擷取內容會保留。"; return false; }
@@ -110,6 +143,17 @@ internal sealed class ScrollCaptureTarget
         || (GetAsyncKeyState(2) & 0x8000) != 0 || (GetAsyncKeyState(4) & 0x8000) != 0;
     private static bool IsCloaked(IntPtr handle) => DwmGetWindowAttribute(handle, 14, out var cloaked, sizeof(int)) == 0 && cloaked != 0;
 
+    private static bool TryGetClientBounds(IntPtr handle, out DrawingRectangle bounds)
+    {
+        bounds = default;
+        if (!GetClientRect(handle, out var rectangle)) return false;
+        var first = new NativePoint { X = rectangle.Left, Y = rectangle.Top };
+        var last = new NativePoint { X = rectangle.Right, Y = rectangle.Bottom };
+        if (!ClientToScreen(handle, ref first) || !ClientToScreen(handle, ref last)) return false;
+        bounds = DrawingRectangle.FromLTRB(first.X, first.Y, last.X, last.Y);
+        return bounds.Width > 0 && bounds.Height > 0;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct NativePoint { public int X; public int Y; }
     [StructLayout(LayoutKind.Sequential)]
@@ -127,6 +171,9 @@ internal sealed class ScrollCaptureTarget
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindowVisible(IntPtr handle);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsIconic(IntPtr handle);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(IntPtr handle, out NativeRectangle rectangle);
+    [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetClientRect(IntPtr handle, out NativeRectangle rectangle);
+    [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool ClientToScreen(IntPtr handle, ref NativePoint point);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr handle);
     [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetWindowDisplayAffinity(IntPtr handle, uint affinity);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowDisplayAffinity(IntPtr handle, out uint affinity);

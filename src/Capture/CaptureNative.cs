@@ -95,6 +95,123 @@ internal static class CaptureNative
         TryGetWindow(window.Handle, out var current) && current.CanSelect
         && current.ProcessId == window.ProcessId && current.Bounds == window.Bounds;
 
+    internal static WindowCaptureTarget GetWindowTarget(CaptureWindow selected)
+    {
+        if (!IsCurrentWindow(selected) || !TryGetWindowTarget(selected.Handle, out var target)
+            || target.ProcessId != selected.ProcessId)
+            throw new InvalidOperationException(I18n.T("選定視窗已關閉、隱藏或移動，請重新選取。"));
+        return target;
+    }
+
+    internal static bool IsCurrentTarget(WindowCaptureTarget target) =>
+        TryGetWindowTarget(target.Handle, out var current) && current.ProcessId == target.ProcessId
+        && current.WindowBounds == target.WindowBounds && current.ClientBounds == target.ClientBounds
+        && (target.Dpi == 0 || current.Dpi == target.Dpi);
+
+    private static bool TryGetWindowTarget(IntPtr window, out WindowCaptureTarget target)
+    {
+        target = null!;
+        if (!TryGetWindow(window, out var selected) || !selected.CanSelect
+            || GetAncestor(window, 2) != window || !GetWindowRect(window, out var frame)
+            || !GetClientRect(window, out var client))
+            return false;
+        var first = new NativePoint { X = client.Left, Y = client.Top };
+        var last = new NativePoint { X = client.Right, Y = client.Bottom };
+        if (!ClientToScreen(window, ref first) || !ClientToScreen(window, ref last))
+            return false;
+        var clientBounds = DrawingRectangle.FromLTRB(Math.Min(first.X, last.X), Math.Min(first.Y, last.Y),
+            Math.Max(first.X, last.X), Math.Max(first.Y, last.Y));
+        var windowBounds = frame.ToRectangle();
+        var dpi = GetDpiForWindow(window);
+        if (dpi == 0 || clientBounds.Width <= 0 || clientBounds.Height <= 0
+            || !windowBounds.Contains(clientBounds))
+            return false;
+        target = new WindowCaptureTarget(window, selected.ProcessId, windowBounds, clientBounds, dpi);
+        return true;
+    }
+
+    internal static bool ActivateSelectedWindow(WindowCaptureTarget target)
+    {
+        if (!IsCurrentTarget(target)) return false;
+        if (GetAncestor(GetForegroundWindow(), 2) == target.Handle) return true;
+        // Called only after a user picks this exact window. Do not attach input queues,
+        // synthesize input, restore minimized windows or activate any replacement HWND.
+        SetForegroundWindow(target.Handle);
+        return IsCurrentTarget(target) && GetAncestor(GetForegroundWindow(), 2) == target.Handle;
+    }
+
+    internal static bool IsForegroundTarget(WindowCaptureTarget target) =>
+        GetAncestor(GetForegroundWindow(), 2) == target.Handle;
+
+    internal static bool IsCaptureProtected(IntPtr window) =>
+        GetWindowDisplayAffinity(window, out var affinity) && affinity != 0;
+
+    internal static bool SameMonitorLayout(IReadOnlyList<CaptureMonitor> first,
+        IReadOnlyList<CaptureMonitor> second) => first.Count == second.Count
+        && first.OrderBy(monitor => monitor.Bounds.Left).ThenBy(monitor => monitor.Bounds.Top)
+            .ThenBy(monitor => monitor.Bounds.Width).ThenBy(monitor => monitor.Bounds.Height)
+            .ThenBy(monitor => monitor.IsPrimary)
+            .SequenceEqual(second.OrderBy(monitor => monitor.Bounds.Left).ThenBy(monitor => monitor.Bounds.Top)
+                .ThenBy(monitor => monitor.Bounds.Width).ThenBy(monitor => monitor.Bounds.Height)
+                .ThenBy(monitor => monitor.IsPrimary));
+
+    internal static bool CanCaptureWindowRegion(WindowCaptureTarget target, DrawingRectangle region,
+        IReadOnlyList<CaptureMonitor> monitors, IReadOnlyCollection<IntPtr>? excludedWindows, out string reason)
+    {
+        reason = "";
+        if (!IsCurrentTarget(target))
+        { reason = "選定視窗的位置、大小或縮放已改變，請重新選取。"; return false; }
+        if (IsCaptureProtected(target.Handle))
+        { reason = "此視窗禁止擷取，請選取其他視窗。"; return false; }
+        if (region.Width <= 0 || region.Height <= 0 || !target.ClientBounds.Contains(region))
+        { reason = "請在選定視窗的內容區內框選。"; return false; }
+        if (!SameMonitorLayout(monitors, GetMonitors()) || !IsOnMonitors(region, monitors))
+        { reason = "顯示器排列已改變，或範圍不在螢幕內，請重新選取。"; return false; }
+
+        var seen = new HashSet<IntPtr> { target.Handle };
+        for (var above = GetWindow(target.Handle, 3); above != IntPtr.Zero; above = GetWindow(above, 3))
+        {
+            if (seen.Count >= 4096 || !seen.Add(above))
+            { reason = "視窗狀態正在變更，請稍後重新選取。"; return false; }
+            if (excludedWindows?.Contains(above) == true || !IsWindowVisible(above) || IsIconic(above)
+                || (DwmGetWindowAttribute(above, 14, out int cloaked, sizeof(int)) == 0 && cloaked != 0))
+                continue;
+            if (!GetWindowRect(above, out var covering))
+            { reason = "視窗狀態正在變更，請稍後重新選取。"; return false; }
+            if (covering.ToRectangle().IntersectsWith(region))
+            { reason = "框選範圍被其他視窗遮住，請重新框選。"; return false; }
+        }
+        return true;
+    }
+
+    private static bool IsOnMonitors(DrawingRectangle region, IReadOnlyList<CaptureMonitor> monitors)
+    {
+        // A bounding union alone would accept the black gaps between staggered displays.
+        var uncovered = new List<DrawingRectangle> { region };
+        foreach (var monitor in monitors)
+        {
+            var remaining = new List<DrawingRectangle>();
+            foreach (var piece in uncovered)
+            {
+                var intersection = DrawingRectangle.Intersect(piece, monitor.Bounds);
+                if (intersection.Width <= 0 || intersection.Height <= 0) { remaining.Add(piece); continue; }
+                if (piece.Top < intersection.Top)
+                    remaining.Add(DrawingRectangle.FromLTRB(piece.Left, piece.Top, piece.Right, intersection.Top));
+                if (intersection.Bottom < piece.Bottom)
+                    remaining.Add(DrawingRectangle.FromLTRB(piece.Left, intersection.Bottom, piece.Right, piece.Bottom));
+                if (piece.Left < intersection.Left)
+                    remaining.Add(DrawingRectangle.FromLTRB(piece.Left, intersection.Top, intersection.Left, intersection.Bottom));
+                if (intersection.Right < piece.Right)
+                    remaining.Add(DrawingRectangle.FromLTRB(intersection.Right, intersection.Top, piece.Right, intersection.Bottom));
+            }
+            uncovered = remaining;
+            if (uncovered.Count == 0) return true;
+        }
+        return false;
+    }
+
+    internal static void FlushDesktopChanges() => Marshal.ThrowExceptionForHR(DwmFlush());
+
     private static bool TryGetWindow(IntPtr window, out CaptureWindow item)
     {
         item = null!;
@@ -183,6 +300,34 @@ internal static class CaptureNative
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr window, uint command);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr window, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetClientRect(IntPtr window, out NativeRectangle rectangle);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ClientToScreen(IntPtr window, ref NativePoint point);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowDisplayAffinity(IntPtr window, out uint affinity);
+
     [DllImport("user32.dll", EntryPoint = "GetWindowTextW", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr window, StringBuilder text, int maximumCount);
 
@@ -195,6 +340,9 @@ internal static class CaptureNative
     [DllImport("dwmapi.dll")]
     private static extern int DwmGetWindowAttribute(IntPtr window, uint attribute,
         out NativeRectangle value, int size);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmFlush();
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

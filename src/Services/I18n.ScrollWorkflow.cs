@@ -4,6 +4,10 @@ public static partial class I18n
 {
     private static readonly Dictionary<string, (string English, string Simplified)> ScrollWorkflowTranslations = new(StringComparer.Ordinal)
     {
+        ["框選範圍必須位於指定視窗的內容區域內。"] = ("The capture region must lie within the selected window's content area.", "框选范围必须位于指定窗口的内容区域内。"),
+        ["目標視窗的內容範圍已改變，請完成後重新選取範圍。"] = ("The target window's content bounds changed. Finish captured content and select the region again.", "目标窗口的内容范围已改变，请完成后重新选择范围。"),
+        ["目標視窗的縮放比例已改變，請完成後重新選取範圍。"] = ("The target window's display scale changed. Finish captured content and select the region again.", "目标窗口的缩放比例已改变，请完成后重新选择范围。"),
+        ["目標視窗已限制螢幕擷取，已保留現有內容。"] = ("The target window restricts screen capture. Captured content is retained.", "目标窗口已限制屏幕截图，已保留现有内容。"),
         ["在原視窗慢慢捲動，保留重疊；按「完成」產生長圖。"] = ("Scroll slowly in the original window, keeping overlap. Choose Done to create the image.", "在原窗口慢慢滚动，保留重叠；按「完成」生成长图。"),
         ["已開始收集程式碼畫面；自行捲動後按「完成」。"] = ("Capturing the code window. Scroll manually, then choose Done.", "已开始收集代码画面；自行滚动后按「完成」。"),
         ["起點"] = ("Start", "起点"),
