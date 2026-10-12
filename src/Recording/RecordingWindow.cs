@@ -15,6 +15,7 @@ public sealed class RecordingWindow : Window
 {
     private readonly Func<string, string> _translate;
     private readonly ScreenRecordingService _service;
+    private readonly RecordingRegionHighlight _highlight;
     private readonly DrawingRectangle _bounds;
     private readonly string? _suggestedPath;
     private readonly CancellationTokenSource _lifetime = new();
@@ -33,6 +34,11 @@ public sealed class RecordingWindow : Window
     private bool _allowClose;
     private bool _closingRequested;
     private bool _excludedFromCapture;
+    private bool _savePending;
+    private bool _rangeInvalidated;
+    private RecordingDraft? _draft;
+    private Task<string>? _exportTask;
+    private DateTime _startedAt;
 
     public string? ResultPath { get; private set; }
     public DrawingRectangle CaptureBounds => _bounds;
@@ -43,6 +49,7 @@ public sealed class RecordingWindow : Window
         _bounds = ScreenRecordingService.NormalizeBounds(targetPhysicalBounds, _translate);
         _suggestedPath = outputPath;
         _service = new ScreenRecordingService(_translate);
+        _highlight = new RecordingRegionHighlight(_bounds);
         Title = "SnipFlow · " + T("螢幕錄影");
         Width = 444;
         SizeToContent = SizeToContent.Height;
@@ -113,7 +120,8 @@ public sealed class RecordingWindow : Window
         _recordButton = MakeButton(T("開始錄影"), primary: true);
         _recordButton.Click += async (_, _) =>
         {
-            if (_recordingStarted) await StopAndSaveAsync();
+            if (_savePending) await SaveCompletedRecordingAsync();
+            else if (_recordingStarted) await StopAndSaveAsync();
             else await StartRecordingAsync();
         };
         _cancelButton = MakeButton(T("取消"), primary: false);
@@ -127,20 +135,42 @@ public sealed class RecordingWindow : Window
         _pathLabel = new TextBlock
         {
             Foreground = ColorBrush("#A3A3A3"), FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis,
-            Margin = new Thickness(0, 12, 0, 0), Text = T("儲存位置在開始錄影前選擇")
+            Margin = new Thickness(0, 12, 0, 0), Text = T("停止錄影後再選擇儲存位置")
         };
         layout.Children.Add(_pathLabel);
 
         _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(250) };
-        _timer.Tick += (_, _) => _clock.Text = _service.Elapsed.ToString(@"hh\:mm\:ss");
+        _timer.Tick += async (_, _) =>
+        {
+            _clock.Text = _service.Elapsed.ToString(@"hh\:mm\:ss");
+            if (_recordingStarted && !_busy && !_highlight.IsExcludedFromCapture)
+                await HandleRangeInvalidatedAsync();
+        };
         _service.StateChanged += (_, state) =>
         {
             if (!Dispatcher.HasShutdownStarted)
                 _ = Dispatcher.BeginInvoke(() => ShowState(state));
         };
         SourceInitialized += (_, _) => { WindowAppearance.Apply(this); ConfigureToolbarWindow(); };
+        Loaded += (_, _) =>
+        {
+            try { _highlight.Show(this); }
+            catch (Exception exception)
+            {
+                _rangeInvalidated = true;
+                _highlight.Hide();
+                SetStatus(T("無法顯示錄影範圍，請關閉後重新框選。") + " " + exception.Message, error: true);
+            }
+            if (!_highlight.IsExcludedFromCapture)
+            {
+                _rangeInvalidated = true;
+                SetStatus(T("無法顯示或排除錄影範圍提示，請關閉後重新框選。"), error: true);
+            }
+            SetBusy(false);
+        };
+        _highlight.Invalidated += async (_, _) => await HandleRangeInvalidatedAsync();
         Closing += OnClosing;
-        Closed += (_, _) => { _timer.Stop(); _lifetime.Cancel(); };
+        Closed += (_, _) => { _timer.Stop(); _highlight.Dispose(); _lifetime.Cancel(); _lifetime.Dispose(); };
         PreviewKeyDown += async (_, args) =>
         {
             if (args.Key == Key.Escape)
@@ -155,53 +185,43 @@ public sealed class RecordingWindow : Window
     {
         if (_busy || _closingRequested)
             return;
-        if (!_excludedFromCapture)
+        if (!_excludedFromCapture || !_highlight.IsExcludedFromCapture || _rangeInvalidated)
         {
-            SetStatus(T("無法排除錄影操作條，請重新開啟 SnipFlow 後再試。"), error: true);
+            SetStatus(T("無法顯示或排除錄影範圍提示，請關閉後重新框選。"), error: true);
             return;
         }
 
         SetBusy(true);
         try
         {
-            var defaultFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
-            if (string.IsNullOrWhiteSpace(defaultFolder))
-                defaultFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-            var dialog = new SaveFileDialog
-            {
-                Title = T("儲存錄影"), Filter = T("MP4 影片") + "|*.mp4", DefaultExt = ".mp4", AddExtension = true,
-                FileName = _suggestedPath is null ? $"SnipFlow-{DateTime.Now:yyyyMMdd-HHmmss}.mp4" : Path.GetFileName(_suggestedPath),
-                InitialDirectory = _suggestedPath is null ? defaultFolder : Path.GetDirectoryName(Path.GetFullPath(_suggestedPath)),
-                OverwritePrompt = true, CheckPathExists = true
-            };
-            var path = _suggestedPath;
-            var overwrite = false;
-            if (path is null)
-            {
-                if (dialog.ShowDialog(this) != true)
-                    return;
-                path = dialog.FileName;
-                overwrite = File.Exists(path); // SaveFileDialog has already requested overwrite confirmation.
-            }
-            _pathLabel.Text = path;
-            _pathLabel.ToolTip = path;
+            await CleanupDraftAsync();
+            _draft = new RecordingDraft(Path.Combine(SettingsStore.DataRoot, "Recordings"), _translate);
+            _startedAt = DateTime.Now;
             SetStatus(T("正在啟動錄影…"));
             var options = new RecordingOptions
             {
                 SystemAudio = _systemAudio.IsChecked == true,
                 Microphone = _microphone.IsChecked == true,
-                CaptureCursor = _cursor.IsChecked == true,
-                OverwriteExisting = overwrite
+                CaptureCursor = _cursor.IsChecked == true
             };
-            await _service.StartAsync(_bounds, path, options, _lifetime.Token);
+            await _service.StartAsync(_bounds, _draft.OutputPath, options, _lifetime.Token);
             if (_closingRequested)
                 return;
             _recordingStarted = true;
-            _recordButton.Content = T("停止並儲存");
+            if (_rangeInvalidated || !_highlight.IsExcludedFromCapture)
+            {
+                SetBusy(false);
+                await FinishRecordingAsync(showSaveDialog: false);
+                if (!_closingRequested && _savePending)
+                    SetStatus(T("錄影範圍已失效，已停止收集；可儲存已錄影片。"), error: true);
+                return;
+            }
+            _highlight.SetRecording(true);
+            _recordButton.Content = T("停止錄影");
             _recordButton.Background = ColorBrush("#F17B82");
             _cancelButton.Content = T("放棄錄影");
             _timer.Start();
-            SetStatus(T("正在錄製所選範圍。停止後即可播放影片。"));
+            SetStatus(T("紅色外框內為錄影範圍；停止後選擇儲存位置。"));
             _ = ObserveCompletionAsync();
         }
         catch (OperationCanceledException) when (_closingRequested) { }
@@ -213,7 +233,9 @@ public sealed class RecordingWindow : Window
         finally { if (!_closingRequested) SetBusy(false); }
     }
 
-    private async Task StopAndSaveAsync()
+    private Task StopAndSaveAsync() => FinishRecordingAsync(showSaveDialog: true);
+
+    private async Task FinishRecordingAsync(bool showSaveDialog)
     {
         if (_busy || !_recordingStarted || _closingRequested)
             return;
@@ -224,10 +246,20 @@ public sealed class RecordingWindow : Window
             var result = await _service.StopAsync();
             if (_closingRequested)
                 return;
-            ResultPath = result;
-            _allowClose = true;
-            try { DialogResult = true; }
-            catch (InvalidOperationException) { Close(); }
+            if (_draft is null) throw new InvalidOperationException(T("影片暫存資料遺失，請重新錄影。"));
+            _draft.MarkReady(result);
+            _recordingStarted = false;
+            _savePending = true;
+            _timer.Stop();
+            _clock.Text = _service.Elapsed.ToString(@"hh\:mm\:ss");
+            _highlight.Hide();
+            _recordButton.Content = T("儲存影片");
+            _recordButton.Background = ColorBrush("#E8E8E8");
+            _cancelButton.Content = T("放棄影片");
+            _pathLabel.Text = T("影片尚未儲存");
+            _pathLabel.ToolTip = null;
+            SetStatus(T("影片已保留，按「儲存影片」可選擇位置。"));
+            if (showSaveDialog) await SaveCompletedRecordingCoreAsync();
         }
         catch (Exception exception)
         {
@@ -240,9 +272,101 @@ public sealed class RecordingWindow : Window
         finally { if (!_closingRequested) SetBusy(false); }
     }
 
+    private async Task SaveCompletedRecordingAsync()
+    {
+        if (_busy || !_savePending || _closingRequested) return;
+        SetBusy(true);
+        try { await SaveCompletedRecordingCoreAsync(); }
+        finally { if (!_closingRequested) SetBusy(false); }
+    }
+
+    private async Task SaveCompletedRecordingCoreAsync()
+    {
+        if (_draft is null || !_savePending || _closingRequested) return;
+        try
+        {
+            var path = _suggestedPath;
+            var overwrite = false;
+            if (path is null)
+            {
+                var folder = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
+                if (string.IsNullOrWhiteSpace(folder)) folder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                var dialog = new SaveFileDialog
+                {
+                    Title = T("儲存錄影"), Filter = T("MP4 影片") + "|*.mp4", DefaultExt = ".mp4", AddExtension = true,
+                    FileName = $"SnipFlow-{_startedAt:yyyyMMdd-HHmmss}.mp4", InitialDirectory = folder,
+                    OverwritePrompt = true, CheckPathExists = true
+                };
+                if (dialog.ShowDialog(this) != true)
+                {
+                    SetStatus(T("影片已保留，按「儲存影片」可選擇位置。"));
+                    return;
+                }
+                path = dialog.FileName;
+                overwrite = File.Exists(path); // The dialog confirms replacement before export.
+            }
+            if (_closingRequested) return;
+            SetStatus(T("正在儲存影片…"));
+            _exportTask = _draft.SaveAsync(path, overwrite, _lifetime.Token);
+            var savedPath = await _exportTask;
+            ResultPath = savedPath;
+            _savePending = false;
+            _pathLabel.Text = savedPath;
+            _pathLabel.ToolTip = savedPath;
+            try { await CleanupDraftAsync(); }
+            catch (Exception exception) { SettingsStore.Log(exception); }
+            if (_closingRequested) return;
+            _allowClose = true;
+            try { DialogResult = true; }
+            catch (InvalidOperationException) { Close(); }
+        }
+        catch (OperationCanceledException) when (_closingRequested) { }
+        catch (Exception exception)
+        {
+            if (!_closingRequested)
+                SetStatus(T("影片已保留，可重試儲存。") + " " + exception.Message, error: true);
+        }
+    }
+
+    private async Task HandleRangeInvalidatedAsync()
+    {
+        if (_closingRequested || _allowClose || _savePending) return;
+        _rangeInvalidated = true;
+        if (_busy) return;
+        if (_recordingStarted)
+        {
+            await FinishRecordingAsync(showSaveDialog: false);
+            if (!_closingRequested && _savePending)
+                SetStatus(T("錄影範圍已失效，已停止收集；可儲存已錄影片。"), error: true);
+        }
+        else
+        {
+            SetStatus(T("無法顯示或排除錄影範圍提示，請關閉後重新框選。"), error: true);
+            SetBusy(false);
+        }
+    }
+
+    private async Task CleanupDraftAsync()
+    {
+        var draft = _draft;
+        if (draft is null) return;
+        if (_service.IsActive) throw new InvalidOperationException(T("已有錄影正在進行。"));
+        await draft.DisposeAsync();
+        if (ReferenceEquals(_draft, draft)) _draft = null;
+    }
+
     private async Task ObserveCompletionAsync()
     {
-        try { await _service.Completion; }
+        try
+        {
+            await _service.Completion;
+            if (!_busy && !_closingRequested && !_allowClose && !_savePending && _recordingStarted)
+            {
+                SetStatus(T("錄影已結束，請重新開始。"), error: true);
+                ResetStartControls();
+                SetBusy(false);
+            }
+        }
         catch (Exception exception)
         {
             if (!_closingRequested && !_allowClose)
@@ -266,7 +390,12 @@ public sealed class RecordingWindow : Window
         try
         {
             await _service.CancelAsync();
-            ResultPath = null;
+            if (_exportTask is { } export)
+            {
+                try { ResultPath = await export; }
+                catch (Exception) { }
+            }
+            await CleanupDraftAsync();
             _allowClose = true;
             Close();
         }
@@ -278,12 +407,14 @@ public sealed class RecordingWindow : Window
         }
     }
 
-    private async void OnClosing(object? sender, CancelEventArgs args)
+    private void OnClosing(object? sender, CancelEventArgs args)
     {
         if (_allowClose)
             return;
         args.Cancel = true;
-        await DiscardAndCloseAsync();
+        // A ready/completed service can finish cleanup synchronously. Defer it until
+        // this Closing event returns so Close does not reenter WPF while it is closing.
+        Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(async () => await DiscardAndCloseAsync()));
     }
 
     private void ShowState(RecordingState state)
@@ -293,7 +424,7 @@ public sealed class RecordingWindow : Window
             RecordingState.Starting => T("正在啟動"),
             RecordingState.Recording => "● " + T("錄影中"),
             RecordingState.Finishing => T("正在完成影片"),
-            RecordingState.Completed => T("已儲存"),
+            RecordingState.Completed => T("錄影完成"),
             RecordingState.Cancelled => T("已取消"),
             RecordingState.Failed => T("錄影失敗"),
             _ => T("準備錄影")
@@ -305,6 +436,7 @@ public sealed class RecordingWindow : Window
     {
         _recordingStarted = false;
         _timer.Stop();
+        _highlight.SetRecording(false);
         _recordButton.Content = T("開始錄影");
         _recordButton.Background = ColorBrush("#E8E8E8");
         _cancelButton.Content = T("取消");
@@ -313,10 +445,11 @@ public sealed class RecordingWindow : Window
     private void SetBusy(bool busy)
     {
         _busy = busy;
-        _recordButton.IsEnabled = !busy && !_closingRequested;
-        _systemAudio.IsEnabled = !busy && !_recordingStarted;
-        _microphone.IsEnabled = !busy && !_recordingStarted;
-        _cursor.IsEnabled = !busy && !_recordingStarted;
+        _recordButton.IsEnabled = !busy && !_closingRequested
+            && (_recordingStarted || _savePending || (!_rangeInvalidated && _excludedFromCapture));
+        _systemAudio.IsEnabled = !busy && !_recordingStarted && !_savePending;
+        _microphone.IsEnabled = !busy && !_recordingStarted && !_savePending;
+        _cursor.IsEnabled = !busy && !_recordingStarted && !_savePending;
     }
 
     private void SetStatus(string text, bool error = false)
@@ -328,7 +461,8 @@ public sealed class RecordingWindow : Window
     private void ConfigureToolbarWindow()
     {
         var handle = new WindowInteropHelper(this).Handle;
-        _excludedFromCapture = SetWindowDisplayAffinity(handle, 0x11);
+        _excludedFromCapture = SetWindowDisplayAffinity(handle, 0x11)
+            && GetWindowDisplayAffinity(handle, out var affinity) && affinity == 0x11;
         var area = System.Windows.Forms.Screen.FromRectangle(_bounds).WorkingArea;
         var dpi = GetDpiForWindow(handle);
         var scale = dpi == 0 ? 1d : dpi / 96d;
@@ -385,6 +519,10 @@ public sealed class RecordingWindow : Window
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetWindowDisplayAffinity(IntPtr windowHandle, uint affinity);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowDisplayAffinity(IntPtr windowHandle, out uint affinity);
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr windowHandle);
