@@ -50,6 +50,7 @@ public partial class MainWindow
         if (!Editor.IsCollage || busy || capturePending || historyDragInProgress || e.ClickCount != 1) return;
         if (e.OriginalSource is not DependencyObject source || IsHistoryDragControl(source)) return;
         if (ItemsControl.ContainerFromElement(HistoryList, source) is not ListBoxItem { Content: HistoryItem item }) return;
+        if (item.IsRecording) return;
         historyDragCandidate = item;
         historyDragStart = e.GetPosition(HistoryList);
         historyDragGeneration = documentGeneration;
@@ -71,6 +72,7 @@ public partial class MainWindow
 
         HistoryItem item = historyDragCandidate;
         historyDragCandidate = null;
+        if (item.IsRecording) return;
         e.Handled = true;
         historyDragInProgress = true;
         try

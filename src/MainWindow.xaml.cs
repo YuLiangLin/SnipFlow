@@ -50,6 +50,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent(); ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
         InitializeHistoryDrag();
+        InitializeHistoryLifecycle();
         TaskbarIconService.Attach(this);
         Editor.Changed += (_, _) => { RefreshDocumentState(); QueueAutoSave(); };
         Editor.SelectionChanged += (_, _) => RefreshProperties();
@@ -165,7 +166,12 @@ public partial class MainWindow : Window
             if (region == null) return;
             var recording = new RecordingWindow(region.Bounds, translate: I18n.T);
             recording.ShowDialog();
-            if (recording.ResultPath != null) SetStatus("錄影已儲存：{0}", recording.ResultPath);
+            if (recording.ResultPath != null)
+            {
+                await AddRecordingHistoryAsync(recording.ResultPath);
+                ApplyWindowMode(false);
+                SetStatus("錄影已儲存：{0}", recording.ResultPath);
+            }
         }
         catch (Exception ex) { Show(); Activate(); ReportError(ex, "錄影未完成"); }
         finally
@@ -177,8 +183,9 @@ public partial class MainWindow : Window
     }
     public void OpenImage(string path)
     {
+        if (IsVideoPath(path)) { _ = OpenVideoEditorAsync(path); return; }
         if (Path.GetExtension(path).Equals(".snipflow", StringComparison.OrdinalIgnoreCase)) { OpenProject(path); return; }
-        if (busy || !PrepareToDiscard()) return;
+        if (busy || capturePending || historyDragInProgress || !CanStartCapture || !PrepareToDiscard()) return;
         try { var image = HistoryStore.Read(path); LoadDocument(image); ApplyWindowMode(false); ImageInfo.Text = $"{image.PixelWidth:N0} × {image.PixelHeight:N0} px"; SetStatus("已開啟 {0}", Path.GetFileName(path)); RefreshDocumentState(); }
         catch (Exception ex) { ReportError(ex, "圖片無法開啟"); }
     }
@@ -361,6 +368,7 @@ public partial class MainWindow : Window
     void LanguageChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(() =>
     {
         RefreshDocumentState();
+        RefreshHistory();
         RefreshHotkeyHint();
         StatusText.Text = showingUpdateStatus ? Updates.Status : I18n.F(statusKey, statusValues);
         StatusText.ToolTip = StatusText.Text;
@@ -429,18 +437,6 @@ public partial class MainWindow : Window
     }
     static string ToolKey(AnnotationTool tool) => tool switch { AnnotationTool.Select => "選取／移動", AnnotationTool.Arrow => "箭頭", AnnotationTool.Rectangle => "矩形", AnnotationTool.Ellipse => "橢圓", AnnotationTool.Pen => "畫筆", AnnotationTool.Highlight => "螢光筆", AnnotationTool.Text => "文字", AnnotationTool.Image => "圖片", _ => "馬賽克" };
     static string ToolName(AnnotationTool tool) => I18n.T(ToolKey(tool));
-    void RefreshHistory()
-    {
-        selectingHistory = true;
-        try { var items = HistoryStore.Load(); HistoryList.ItemsSource = items; HistoryCount.Text = items.Count.ToString(); HistoryEmpty.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed; HistoryClearButton.IsEnabled = !busy && !capturePending && !historyDragInProgress && items.Count > 0; }
-        catch (Exception ex) { ReportError(ex, "歷史讀取失敗"); }
-        finally { selectingHistory = false; }
-    }
-    async Task AddHistoryAsync(BitmapSource image)
-    {
-        try { await Task.Run(() => HistoryStore.Add(image)); RefreshHistory(); RefreshDocumentState(); }
-        catch (Exception ex) { ReportError(ex, "截圖已完成，但歷史儲存失敗"); }
-    }
     async Task CopyImageAsync(BitmapSource image)
     {
         for (var attempt = 0; ; attempt++)
@@ -494,19 +490,25 @@ public partial class MainWindow : Window
         var result = MessageBox.Show(this, I18n.T(Editor.IsCollage ? "合圖尚未儲存，要先儲存可編輯專案嗎？" : hasUnsavedEdits ? "目前的標註尚未儲存，要先存成 PNG 嗎？" : "自動儲存未完成，要改為手動儲存嗎？"), I18n.T("保留標註"), MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         return result == MessageBoxResult.No || result == MessageBoxResult.Yes && SaveDocument();
     }
-    void OpenClick(object sender, RoutedEventArgs e)
+    async void OpenClick(object sender, RoutedEventArgs e)
     {
-        if (busy || capturePending) return;
-        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = I18n.T("圖片與 SnipFlow 專案|*.snipflow;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff|所有檔案|*.*") };
-        if (dialog.ShowDialog(this) == true) OpenImage(dialog.FileName);
+        if (!CanChangeHistory) return;
+        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = I18n.T("圖片、影片與 SnipFlow 專案|*.snipflow;*.snipvideo;*.mp4;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff|影片與影片專案|*.mp4;*.snipvideo|所有檔案|*.*") };
+        if (dialog.ShowDialog(this) == true) await OpenFileAsync(dialog.FileName);
     }
-    void ImageDropped(object sender, DragEventArgs e)
+    async void ImageDropped(object sender, DragEventArgs e)
     {
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] files || files.Length == 0) return;
+        e.Handled = true;
+        if (files.Any(IsVideoPath))
+        {
+            if (files.Length == 1) await OpenVideoEditorAsync(files[0]);
+            else SetStatus("請一次開啟一部影片；影片不能加入合圖。");
+            return;
+        }
         if (files.Length == 1 && Path.GetExtension(files[0]).Equals(".snipflow", StringComparison.OrdinalIgnoreCase)) OpenProject(files[0]);
         else if (Editor.IsCollage || files.Length > 1) AddImageFiles(files);
         else OpenImage(files[0]);
-        e.Handled = true;
     }
     void ToolClick(object sender, RoutedEventArgs e)
     {
@@ -534,11 +536,12 @@ public partial class MainWindow : Window
     }
     void UndoClick(object sender, RoutedEventArgs e) { if (!busy && !capturePending) Editor.Undo(); }
     void RedoClick(object sender, RoutedEventArgs e) { if (!busy && !capturePending) Editor.Redo(); }
-    void HistorySelected(object sender, SelectionChangedEventArgs e)
+    async void HistorySelected(object sender, SelectionChangedEventArgs e)
     {
-        if (!selectingHistory && HistoryList.SelectedItem is HistoryItem item)
+        if (!selectingHistory && CanChangeHistory && HistoryList.SelectedItem is HistoryItem item)
         {
-            if (!Editor.IsCollage) OpenImage(item.Path);
+            if (item.IsRecording) await OpenVideoEditorAsync(item.Path);
+            else if (!Editor.IsCollage) OpenImage(item.Path);
         }
     }
     async void OcrClick(object sender, RoutedEventArgs e)

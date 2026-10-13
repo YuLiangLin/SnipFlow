@@ -38,7 +38,8 @@ public static partial class I18n
         if (!Translations.TryGetValue(zhTwText, out var translation)
             && !CodeCaptureTranslations.TryGetValue(zhTwText, out translation)
             && !ScrollWorkflowTranslations.TryGetValue(zhTwText, out translation)
-            && !WindowCaptureTranslations.TryGetValue(zhTwText, out translation))
+            && !WindowCaptureTranslations.TryGetValue(zhTwText, out translation)
+            && !VideoTranslations.TryGetValue(zhTwText, out translation))
             return zhTwText;
         return languageTag == "en" ? translation.English : translation.Simplified;
     }

@@ -1,7 +1,15 @@
 using System.Globalization;
 
 namespace SnipFlow.Services;
-public sealed record HistoryItem(string Path, string Title, string Detail, BitmapSource Thumbnail);
+public enum HistoryKind { Screenshot, Recording }
+public sealed record HistoryItem(string Path, string Title, string Detail, BitmapSource Thumbnail)
+{
+    public HistoryKind Kind { get; init; }
+    public bool IsRecording => Kind == HistoryKind.Recording;
+    public DateTimeOffset RecordedAtUtc { get; init; }
+    public string? RecordingId { get; init; }
+    public TimeSpan? Duration { get; init; }
+}
 public sealed record HistoryClearResult(int DeletedCount, int FailedCount);
 
 public static class HistoryStore
@@ -24,7 +32,8 @@ public static class HistoryStore
                 if ((file.Attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0) continue;
                 var thumb = new BitmapImage(); thumb.BeginInit(); thumb.CacheOption = BitmapCacheOption.OnLoad;
                 thumb.DecodePixelWidth = 240; thumb.UriSource = new Uri(file.FullName); thumb.EndInit(); thumb.Freeze();
-                items.Add(new(file.FullName, file.LastWriteTime.ToString("MM/dd  HH:mm:ss"), $"{Math.Max(1, file.Length / 1024):N0} KB · PNG", thumb));
+                items.Add(new(file.FullName, file.LastWriteTime.ToString("MM/dd  HH:mm:ss"), $"{Math.Max(1, file.Length / 1024):N0} KB · PNG", thumb)
+                { RecordedAtUtc = new DateTimeOffset(file.LastWriteTimeUtc, TimeSpan.Zero) });
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or FileFormatException) { SettingsStore.Log(ex); }
         }
@@ -56,6 +65,7 @@ public static class HistoryStore
     public static bool Delete(HistoryItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
+        if (item.IsRecording) throw new IOException(I18n.T("錄影紀錄只能從影片歷史中移除。"));
         lock (Gate) return DeleteFile(GetSafeDirectory(create: false), item.Path);
     }
 
@@ -140,6 +150,10 @@ public static class HistoryStore
         or ArgumentException or NotSupportedException or System.Security.SecurityException;
     public static BitmapSource Read(string path)
     {
+        var extension = Path.GetExtension(path);
+        if (extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".snipvideo", StringComparison.OrdinalIgnoreCase))
+            throw new FileFormatException(I18n.T("影片不能以圖片方式開啟。"));
         var image = new BitmapImage(); image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad;
         image.UriSource = new Uri(Path.GetFullPath(path)); image.EndInit(); image.Freeze(); return image;
     }

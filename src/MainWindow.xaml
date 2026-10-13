@@ -45,7 +45,10 @@
                 <TextBlock Text="&lt;/&gt;" FontFamily="Consolas" FontSize="15" FontWeight="SemiBold" />
               </Button>
               <Button Click="RecordClick" ToolTip="{ui:Tr '螢幕錄影'}" AutomationProperties.Name="{ui:Tr '螢幕錄影'}"><TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
-              <Button Click="OpenClick" ToolTip="{ui:Tr '開啟圖片'}" AutomationProperties.Name="{ui:Tr '開啟圖片'}"><TextBlock Text="&#xE8E5;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
+              <Button Click="OpenClick" ToolTip="{ui:Tr '開啟檔案'}" AutomationProperties.Name="{ui:Tr '開啟檔案'}">
+                <Button.ContextMenu><ContextMenu><MenuItem Header="{ui:Tr '開啟檔案'}" Click="OpenClick" /><MenuItem Header="{ui:Tr '開啟影片'}" Click="OpenVideoClick" /></ContextMenu></Button.ContextMenu>
+                <TextBlock Text="&#xE8E5;" FontFamily="Segoe Fluent Icons" FontSize="20" />
+              </Button>
               <Button Click="CollageClick" ToolTip="{ui:Tr '多張合圖'}" AutomationProperties.Name="{ui:Tr '多張合圖'}"><TextBlock Text="&#xE8A9;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               </StackPanel>
             </ScrollViewer>
@@ -126,7 +129,7 @@
                 <Button Style="{StaticResource Primary}" Click="CaptureMenuClick" Width="32" Padding="0" Margin="6,0,0,0" ToolTip="{ui:Tr '截圖模式'}" AutomationProperties.Name="{ui:Tr '截圖模式'}"><TextBlock Text="&#xE70D;" FontFamily="Segoe Fluent Icons" FontSize="12" /></Button>
               </StackPanel>
               <TextBlock x:Name="HotkeyHint" Text="Ctrl + Alt + S" FontFamily="Cascadia Code, Consolas" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,16,0,18" />
-              <Button Content="{ui:Tr '開啟圖片'}" Click="OpenClick" Width="180" BorderThickness="1" />
+              <Button Content="{ui:Tr '開啟檔案'}" Click="OpenClick" Width="180" BorderThickness="1" />
               <TextBlock Text="Ctrl + O ／ Ctrl + V" Foreground="{StaticResource Muted}" FontSize="12" HorizontalAlignment="Center" Margin="0,12,0,0" />
             </StackPanel>
           </Grid>
@@ -136,22 +139,29 @@
           <Grid><Grid.RowDefinitions><RowDefinition Height="48" /><RowDefinition /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <Grid Margin="16,0,10,0">
               <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-              <TextBlock Text="{ui:Tr '最近截圖'}" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <TextBlock Text="{ui:Tr '最近擷取'}" FontWeight="SemiBold" VerticalAlignment="Center" />
               <TextBlock Grid.Column="1" x:Name="HistoryCount" Text="0" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="6,0" />
-              <Button Grid.Column="2" x:Name="HistoryClearButton" Click="ClearHistoryClick" Width="28" Height="28" MinHeight="0" Padding="0" ToolTip="{ui:Tr '清空截圖歷史'}" AutomationProperties.Name="{ui:Tr '清空截圖歷史'}"><TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons" FontSize="15" /></Button>
+              <Button Grid.Column="2" x:Name="HistoryClearButton" Click="ClearHistoryClick" Width="28" Height="28" MinHeight="0" Padding="0" ToolTip="{ui:Tr '清空擷取歷史'}" AutomationProperties.Name="{ui:Tr '清空擷取歷史'}"><TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons" FontSize="15" /></Button>
             </Grid>
             <ListBox x:Name="HistoryList" Grid.Row="1" Background="Transparent" Foreground="{StaticResource Ink}" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="HistorySelected" PreviewMouseLeftButtonDown="HistoryDragMouseDown" PreviewMouseMove="HistoryDragMouseMove" Padding="10,0">
               <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="Padding" Value="0" /><Setter Property="Margin" Value="0,0,0,10" /><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Background" Value="Transparent" /><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border x:Name="Card" CornerRadius="9" BorderBrush="{StaticResource Line}" BorderThickness="1" Background="{StaticResource Soft}" Padding="8"><ContentPresenter /></Border><ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Muted}" /><Setter TargetName="Card" Property="Background" Value="{StaticResource Selected}" /></Trigger><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Card" Property="Background" Value="{StaticResource Raised}" /></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
-              <ListBox.ItemTemplate><DataTemplate><StackPanel PreviewMouseRightButtonDown="HistoryPreviewRightButtonDown">
-                <StackPanel.ContextMenu><ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"><MenuItem Header="{ui:Tr '刪除此截圖紀錄'}" Tag="{Binding}" Click="DeleteHistoryClick" /></ContextMenu></StackPanel.ContextMenu>
-                <Border Background="{StaticResource Bg}" CornerRadius="5" ClipToBounds="True"><Image Source="{Binding Thumbnail}" Height="104" Stretch="Uniform" /></Border>
+              <ListBox.ItemTemplate><DataTemplate><StackPanel PreviewMouseRightButtonDown="HistoryPreviewRightButtonDown" ToolTip="{Binding Path}">
+                <StackPanel.ContextMenu><ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"><MenuItem Header="{ui:Tr '移除此擷取紀錄'}" Tag="{Binding}" Click="DeleteHistoryClick" /></ContextMenu></StackPanel.ContextMenu>
+                <Border Background="{StaticResource Bg}" CornerRadius="5" ClipToBounds="True">
+                  <Grid>
+                    <Image Source="{Binding Thumbnail}" Height="104" Stretch="Uniform" />
+                    <Border x:Name="VideoBadge" Visibility="Collapsed" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="6" Padding="6,3" Background="{StaticResource Panel}" CornerRadius="4">
+                      <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="11" Foreground="{StaticResource Ink}" Margin="0,0,4,0" /><TextBlock Text="{ui:Tr '影片'}" FontSize="10" Foreground="{StaticResource Ink}" /></StackPanel>
+                    </Border>
+                  </Grid>
+                </Border>
                 <Grid Margin="2,5,0,0"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                  <StackPanel VerticalAlignment="Center"><TextBlock Text="{Binding Title}" Foreground="{StaticResource Ink}" FontSize="12" Margin="0,0,0,3" /><TextBlock Text="{Binding Detail}" Foreground="{StaticResource Muted}" FontSize="10" /></StackPanel>
-                  <Button Grid.Column="1" Tag="{Binding}" Click="DeleteHistoryClick" Focusable="False" Width="26" Height="28" MinHeight="0" Padding="0" ToolTip="{ui:Tr '刪除此截圖紀錄'}" AutomationProperties.Name="{ui:Tr '刪除此截圖紀錄'}"><TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons" FontSize="14" Foreground="{StaticResource Muted}" /></Button>
+                  <StackPanel VerticalAlignment="Center"><TextBlock Text="{Binding Title}" Foreground="{StaticResource Ink}" FontSize="12" Margin="0,0,4,3" TextTrimming="CharacterEllipsis" /><TextBlock Text="{Binding Detail}" Foreground="{StaticResource Muted}" FontSize="10" /></StackPanel>
+                  <Button Grid.Column="1" Tag="{Binding}" Click="DeleteHistoryClick" Focusable="False" Width="26" Height="28" MinHeight="0" Padding="0" ToolTip="{ui:Tr '移除此擷取紀錄'}" AutomationProperties.Name="{ui:Tr '移除此擷取紀錄'}"><TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons" FontSize="14" Foreground="{StaticResource Muted}" /></Button>
                 </Grid>
-              </StackPanel></DataTemplate></ListBox.ItemTemplate>
+              </StackPanel><DataTemplate.Triggers><DataTrigger Binding="{Binding IsRecording}" Value="True"><Setter TargetName="VideoBadge" Property="Visibility" Value="Visible" /></DataTrigger></DataTemplate.Triggers></DataTemplate></ListBox.ItemTemplate>
             </ListBox>
-            <TextBlock x:Name="HistoryEmpty" Grid.Row="1" Text="{ui:Tr '尚無截圖'}" Foreground="{StaticResource Muted}" FontSize="12" TextAlignment="Center" Margin="10,38" VerticalAlignment="Top" />
+            <TextBlock x:Name="HistoryEmpty" Grid.Row="1" Text="{ui:Tr '尚無擷取紀錄'}" Foreground="{StaticResource Muted}" FontSize="12" TextAlignment="Center" Margin="10,38" VerticalAlignment="Top" />
           </Grid>
         </Border>
       </Grid>
