@@ -9,7 +9,7 @@ sealed class TrayMenuColors : Forms.ProfessionalColorTable
 
     internal static DrawingColor Color(string key)
     {
-        var color = ((SolidColorBrush)ThemeService.Brush(key)).Color;
+        var color = ThemeService.Colors[key];
         return DrawingColor.FromArgb(color.R, color.G, color.B);
     }
 

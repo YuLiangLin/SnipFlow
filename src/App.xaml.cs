@@ -13,6 +13,7 @@ public partial class App : Application
     System.Drawing.Icon? trayIcon;
     readonly DispatcherTimer updateTimer = new() { Interval = TimeSpan.FromHours(4) };
     MainWindow? shell;
+    bool reportingUnhandledException;
     [STAThread]
     public static void Main(string[] args)
     {
@@ -53,7 +54,27 @@ public partial class App : Application
         DispatcherUnhandledException += (_, error) =>
         {
             SettingsStore.Log(error.Exception); error.Handled = true;
-            MessageBox.Show(I18n.T("這個操作未完成，詳細資訊已寫入本機紀錄。\n") + error.Exception.Message, "SnipFlow", MessageBoxButton.OK, MessageBoxImage.Warning);
+            // A modal error dialog pumps the Dispatcher; do not recursively open another one.
+            if (reportingUnhandledException) return;
+            reportingUnhandledException = true;
+            try
+            {
+                var message = I18n.T("這個操作未完成，詳細資訊已寫入本機紀錄。\n") + error.Exception.Message;
+                try
+                {
+                    MessageBox.Show(message, "SnipFlow", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                catch (Exception dialogError)
+                {
+                    SettingsStore.Log(dialogError);
+                    try
+                    {
+                        System.Windows.MessageBox.Show(message, "SnipFlow", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                    catch (Exception fallbackError) { SettingsStore.Log(fallbackError); }
+                }
+            }
+            finally { reportingUnhandledException = false; }
         };
         ThemeService.Initialize();
         shell = new MainWindow(); MainWindow = shell;

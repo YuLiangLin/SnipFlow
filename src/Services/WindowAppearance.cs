@@ -2,7 +2,6 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
-using System.Windows.Media;
 
 namespace SnipFlow.Services;
 
@@ -27,22 +26,19 @@ public static class WindowAppearance
 
         var roundedCorners = 2;
         DwmSetWindowAttribute(handle, 33, ref roundedCorners, sizeof(int));
-        var border = ResourceColorRef(window, "Line", dark ? Color.FromRgb(56, 56, 56) : Color.FromRgb(218, 218, 218));
-        var caption = ResourceColorRef(window, "Panel", dark ? Color.FromRgb(32, 32, 32) : Color.FromRgb(248, 248, 248));
-        var text = ResourceColorRef(window, "Ink", dark ? Color.FromRgb(236, 236, 236) : Color.FromRgb(31, 31, 31));
+        var border = ResourceColorRef("Line");
+        var caption = ResourceColorRef("Panel");
+        var text = ResourceColorRef("Ink");
         DwmSetWindowAttribute(handle, 34, ref border, sizeof(int));
         DwmSetWindowAttribute(handle, 35, ref caption, sizeof(int));
         DwmSetWindowAttribute(handle, 36, ref text, sizeof(int));
     }
 
-    private static int ResourceColorRef(Window window, string key, Color fallback)
+    private static int ResourceColorRef(string key)
     {
-        var color = window.TryFindResource(key) switch
-        {
-            SolidColorBrush brush => brush.Color,
-            Color value => value,
-            _ => fallback
-        };
+        // Read the published palette directly; WPF bindings may still be queued
+        // when native caption colors are applied during a theme change.
+        var color = ThemeService.Colors[key];
         // DWM takes COLORREF (0x00BBGGRR), not WPF's ARGB representation.
         return color.R | (color.G << 8) | (color.B << 16);
     }

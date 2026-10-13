@@ -1,42 +1,42 @@
 <Application x:Class="SnipFlow.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:SnipFlow.Services"
              ShutdownMode="OnExplicitShutdown">
   <Application.Resources>
-    <!-- Both XAML styles and code-built views retain these brush instances.
-         Dynamic color expressions prevent freezing; ThemeService updates their
-         current values explicitly when the application palette changes. -->
-    <SolidColorBrush x:Key="Bg" Color="{DynamicResource ThemeBgColor}" />
-    <SolidColorBrush x:Key="Panel" Color="{DynamicResource ThemePanelColor}" />
-    <SolidColorBrush x:Key="Raised" Color="{DynamicResource ThemeRaisedColor}" />
-    <SolidColorBrush x:Key="Line" Color="{DynamicResource ThemeLineColor}" />
-    <SolidColorBrush x:Key="Ink" Color="{DynamicResource ThemeInkColor}" />
-    <SolidColorBrush x:Key="Muted" Color="{DynamicResource ThemeMutedColor}" />
-    <SolidColorBrush x:Key="Accent" Color="{DynamicResource ThemeAccentColor}" />
-    <SolidColorBrush x:Key="AccentInk" Color="{DynamicResource ThemeAccentInkColor}" />
-    <SolidColorBrush x:Key="Hover" Color="{DynamicResource ThemeHoverColor}" />
-    <SolidColorBrush x:Key="Selected" Color="{DynamicResource ThemeSelectedColor}" />
-    <SolidColorBrush x:Key="Soft" Color="{DynamicResource ThemeSoftColor}" />
-    <SolidColorBrush x:Key="PrimaryHover" Color="{DynamicResource ThemePrimaryHoverColor}" />
-    <SolidColorBrush x:Key="PrimaryPressed" Color="{DynamicResource ThemePrimaryPressedColor}" />
-    <SolidColorBrush x:Key="TextSelection" Color="{DynamicResource ThemeTextSelectionColor}" />
-    <SolidColorBrush x:Key="ControlBorder" Color="{DynamicResource ThemeControlBorderColor}" />
-    <SolidColorBrush x:Key="SwitchOff" Color="{DynamicResource ThemeSwitchOffColor}" />
-    <SolidColorBrush x:Key="ScrollGrip" Color="{DynamicResource ThemeScrollGripColor}" />
-    <SolidColorBrush x:Key="ScrollGripHover" Color="{DynamicResource ThemeScrollGripHoverColor}" />
-    <SolidColorBrush x:Key="ScrollGripActive" Color="{DynamicResource ThemeScrollGripActiveColor}" />
-    <SolidColorBrush x:Key="TrackFilled" Color="{DynamicResource ThemeTrackFilledColor}" />
-    <SolidColorBrush x:Key="TrackEmpty" Color="{DynamicResource ThemeTrackEmptyColor}" />
-    <SolidColorBrush x:Key="Error" Color="{DynamicResource ThemeErrorColor}" />
-    <SolidColorBrush x:Key="Warning" Color="{DynamicResource ThemeWarningColor}" />
-    <SolidColorBrush x:Key="SelectionBorder" Color="{DynamicResource ThemeSelectionBorderColor}" />
-    <SolidColorBrush x:Key="SelectionHandle" Color="{DynamicResource ThemeSelectionHandleColor}" />
-    <SolidColorBrush x:Key="SelectionFill" Color="{DynamicResource ThemeSelectionFillColor}" />
-    <SolidColorBrush x:Key="Badge" Color="{DynamicResource ThemeBadgeColor}" />
-    <SolidColorBrush x:Key="OverlayPanel" Color="{DynamicResource ThemeOverlayPanelColor}" />
-    <SolidColorBrush x:Key="OverlayInk" Color="{DynamicResource ThemeOverlayInkColor}" />
-    <SolidColorBrush x:Key="OverlayMuted" Color="{DynamicResource ThemeOverlayMutedColor}" />
-    <SolidColorBrush x:Key="OverlayLine" Color="{DynamicResource ThemeOverlayLineColor}" />
+    <!-- Explicit shared binding sources work for both the original brushes held by
+         code-built views and the per-control brush copies made by WPF styles. -->
+    <SolidColorBrush x:Key="Bg" Color="{Binding [Bg], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Panel" Color="{Binding [Panel], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Raised" Color="{Binding [Raised], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Line" Color="{Binding [Line], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Ink" Color="{Binding [Ink], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Muted" Color="{Binding [Muted], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Accent" Color="{Binding [Accent], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="AccentInk" Color="{Binding [AccentInk], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Hover" Color="{Binding [Hover], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Selected" Color="{Binding [Selected], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Soft" Color="{Binding [Soft], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="PrimaryHover" Color="{Binding [PrimaryHover], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="PrimaryPressed" Color="{Binding [PrimaryPressed], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="TextSelection" Color="{Binding [TextSelection], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="ControlBorder" Color="{Binding [ControlBorder], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="SwitchOff" Color="{Binding [SwitchOff], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="ScrollGrip" Color="{Binding [ScrollGrip], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="ScrollGripHover" Color="{Binding [ScrollGripHover], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="ScrollGripActive" Color="{Binding [ScrollGripActive], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="TrackFilled" Color="{Binding [TrackFilled], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="TrackEmpty" Color="{Binding [TrackEmpty], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Error" Color="{Binding [Error], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Warning" Color="{Binding [Warning], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="SelectionBorder" Color="{Binding [SelectionBorder], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="SelectionHandle" Color="{Binding [SelectionHandle], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="SelectionFill" Color="{Binding [SelectionFill], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="Badge" Color="{Binding [Badge], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="OverlayPanel" Color="{Binding [OverlayPanel], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="OverlayInk" Color="{Binding [OverlayInk], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="OverlayMuted" Color="{Binding [OverlayMuted], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
+    <SolidColorBrush x:Key="OverlayLine" Color="{Binding [OverlayLine], Source={x:Static services:ThemeService.Colors}, Mode=OneWay}" />
 
     <Style TargetType="ContextMenu">
       <Setter Property="Background" Value="{StaticResource Panel}" />

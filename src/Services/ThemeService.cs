@@ -1,5 +1,7 @@
 using Microsoft.Win32;
+using System.ComponentModel;
 using System.Security;
+using System.Windows.Data;
 using System.Windows.Interop;
 
 namespace SnipFlow.Services;
@@ -7,9 +9,8 @@ namespace SnipFlow.Services;
 /// <summary>UI colors only. Captured pixels, annotation colors and export palettes are independent.</summary>
 public static class ThemeService
 {
-    // Dynamic color expressions keep these shared brushes unfrozen. Publish colors
-    // into the existing instances as well: application-owned Freezables can have a
-    // sealed resource inheritance context that does not forward resource changes.
+    // Every brush, including copies made by WPF styles, binds to the same explicit
+    // source. Update that source rather than coercing expression-backed brush values.
     static readonly (string Key, string Dark, string Light)[] Palette =
     [
         ("Bg", "#181818", "#F7F7F5"),
@@ -44,6 +45,7 @@ public static class ThemeService
         ("OverlayMuted", "#A3A3A3", "#60605C"),
         ("OverlayLine", "#949494", "#9D9D97"),
     ];
+    public static ThemePalette Colors { get; } = new(CreateColors(dark: true));
     static bool initialized;
     static bool observingSystem;
     static bool hasPalette;
@@ -114,16 +116,7 @@ public static class ThemeService
         var dark = mode == "dark" || (mode == "system" && SystemUsesDarkAppTheme());
         if (hasPalette && IsDark == dark) return;
         IsDark = dark;
-        var resources = Application.Current.Resources;
-        foreach (var entry in Palette)
-        {
-            var color = (Color)ColorConverter.ConvertFromString(dark ? entry.Dark : entry.Light);
-            resources["Theme" + entry.Key + "Color"] = color;
-            var brush = (SolidColorBrush)resources[entry.Key];
-            // Keep the expression (and brush identity), while notifying all controls
-            // and DrawingVisuals that already hold this brush of the actual color.
-            brush.SetCurrentValue(SolidColorBrush.ColorProperty, color);
-        }
+        Colors.Update(CreateColors(dark));
         hasPalette = true;
 
         foreach (Window window in Application.Current.Windows)
@@ -134,6 +127,11 @@ public static class ThemeService
                 try { listener(null, EventArgs.Empty); }
                 catch (Exception ex) { SettingsStore.Log(ex); }
     }
+
+    static Dictionary<string, Color> CreateColors(bool dark) => Palette.ToDictionary(
+        entry => entry.Key,
+        entry => (Color)ColorConverter.ConvertFromString(dark ? entry.Dark : entry.Light),
+        StringComparer.Ordinal);
 
     static bool SystemUsesDarkAppTheme()
     {
@@ -147,5 +145,23 @@ public static class ThemeService
             SettingsStore.Log(ex);
             return true;
         }
+    }
+}
+
+/// <summary>Explicit binding source shared by application brushes and their style clones.</summary>
+public sealed class ThemePalette : INotifyPropertyChanged
+{
+    IReadOnlyDictionary<string, Color> colors;
+
+    internal ThemePalette(IReadOnlyDictionary<string, Color> initialColors) => colors = initialColors;
+    public Color this[string key] => colors[key];
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    internal void Update(IReadOnlyDictionary<string, Color> newColors)
+    {
+        // Publish a complete palette before any binding reads it, so notifications
+        // never expose a mixture of the old and new theme.
+        colors = newColors;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(Binding.IndexerName));
     }
 }
