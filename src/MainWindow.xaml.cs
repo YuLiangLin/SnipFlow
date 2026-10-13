@@ -314,7 +314,7 @@ public partial class MainWindow : Window
         CopyButton.IsEnabled = SaveButton.IsEnabled = OcrButton.IsEnabled = Editor.HasImage && !busy;
         Editor.IsEnabled = !busy;
         CollageBar.Visibility = Editor.IsCollage ? Visibility.Visible : Visibility.Collapsed;
-        AddImagesButton.IsEnabled = ProjectButton.IsEnabled = !busy;
+        AddImagesButton.IsEnabled = PasteImagesButton.IsEnabled = ProjectButton.IsEnabled = !busy;
         ImageInfo.Text = Editor.HasImage ? $"{Editor.PixelWidth:N0} × {Editor.PixelHeight:N0} px" : "";
         UndoButton.IsEnabled = Editor.CanUndo && !busy && !capturePending;
         RedoButton.IsEnabled = Editor.CanRedo && !busy && !capturePending;
@@ -618,26 +618,7 @@ public partial class MainWindow : Window
             else if (e.Key == Key.Y) Editor.Redo();
             else if (e.Key == Key.A) Editor.SelectAll();
             else if (e.Key == Key.D) RunObjectCommand(Editor.DuplicateSelection);
-            else if (e.Key == Key.V)
-            {
-                try
-                {
-                    if (Clipboard.ContainsImage())
-                    {
-                        var image = Clipboard.GetImage();
-                        if (image != null)
-                        {
-                            image.Freeze();
-                            if (Editor.IsCollage) Editor.AddImages(new[] { image });
-                            else if (PrepareToDiscard()) LoadDocument(image);
-                            ApplyWindowMode(false);
-                            RefreshDocumentState();
-                        }
-                    }
-                    else if (Clipboard.ContainsText()) _ = StartCodeImageAsync();
-                }
-                catch (Exception ex) { ReportError(ex, "貼上失敗"); }
-            }
+            else if (e.Key == Key.V) _ = PasteClipboardImagesAsync(allowTextFallback: true);
             else return;
             e.Handled = true; return;
         }

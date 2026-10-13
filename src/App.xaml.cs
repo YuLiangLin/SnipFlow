@@ -71,6 +71,8 @@ public partial class App : Application
         AddTrayAction("程式碼長截圖", () => _ = shell.StartCodeCaptureAsync());
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         AddTrayAction("螢幕錄影", () => _ = shell.StartRecordingAsync());
+        AddTrayAction("空白畫布", shell.OpenBlankCanvas);
+        AddTrayAction("開啟剪貼簿圖片", () => _ = shell.OpenClipboardImageAsync());
         AddTrayAction("開啟 SnipFlow", ShowShell);
         AddTrayAction("結束", ExitRequested);
         I18n.Changed += TrayLanguageChanged;

@@ -121,16 +121,30 @@ public partial class MainWindow
     void SaveProjectClick(object sender, RoutedEventArgs e) => SaveProjectCurrent();
     bool SaveDocument() => Editor.IsCollage ? SaveProjectCurrent() : SaveCurrent();
 
-    void NewCollageDocument()
+    void NewCanvasClick(object sender, RoutedEventArgs e) => OpenBlankCanvas();
+
+    void NewCollageDocument() => OpenBlankCanvas();
+
+    public void OpenBlankCanvas()
     {
-        if (busy || capturePending || historyDragInProgress) return;
+        if (!CanChangeHistory) return;
         if (!PrepareToDiscard()) return;
-        ResetDocumentStorage();
-        Editor.NewCollage();
-        activeColor = Color.FromRgb(17, 24, 39);
-        ToolClick(new Button { Tag = "Select" }, new());
-        RefreshDocumentState();
-        SetStatus("合圖已開啟，可拖入最近截圖或加入圖片。");
+        try
+        {
+            FinishAutoSaveWrite();
+            ResetDocumentStorage();
+            Editor.NewCollage();
+            activeColor = Color.FromRgb(17, 24, 39);
+            Editor.SetColor(activeColor);
+            ToolClick(new Button { Tag = "Select" }, new());
+            ApplyWindowMode(false);
+            ShowMainWindow();
+            RefreshDocumentState();
+            QueueAutoSave();
+            SetStatus("空白畫布已開啟，Ctrl + V 貼上圖片。");
+            Editor.Focus();
+        }
+        catch (Exception error) { ReportError(error, "無法建立合圖"); }
     }
 
     void RunObjectCommand(Action action)

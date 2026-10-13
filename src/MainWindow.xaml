@@ -46,8 +46,12 @@
               </Button>
               <Button Click="RecordClick" ToolTip="{ui:Tr '螢幕錄影'}" AutomationProperties.Name="{ui:Tr '螢幕錄影'}"><TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               <Button Click="OpenClick" ToolTip="{ui:Tr '開啟檔案'}" AutomationProperties.Name="{ui:Tr '開啟檔案'}">
-                <Button.ContextMenu><ContextMenu><MenuItem Header="{ui:Tr '開啟檔案'}" Click="OpenClick" /><MenuItem Header="{ui:Tr '開啟影片'}" Click="OpenVideoClick" /></ContextMenu></Button.ContextMenu>
+                <Button.ContextMenu><ContextMenu><MenuItem Header="{ui:Tr '開啟檔案'}" Click="OpenClick" /><MenuItem Header="{ui:Tr '開啟剪貼簿圖片'}" Click="OpenClipboardClick" /><MenuItem Header="{ui:Tr '空白畫布'}" Click="NewCanvasClick" /><MenuItem Header="{ui:Tr '開啟影片'}" Click="OpenVideoClick" /></ContextMenu></Button.ContextMenu>
                 <TextBlock Text="&#xE8E5;" FontFamily="Segoe Fluent Icons" FontSize="20" />
+              </Button>
+              <Button Click="OpenClipboardClick" ToolTip="{ui:Tr '開啟剪貼簿圖片'}" AutomationProperties.Name="{ui:Tr '開啟剪貼簿圖片'}"><TextBlock Text="&#xE77F;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
+              <Button Click="NewCanvasClick" ToolTip="{ui:Tr '空白畫布'}" AutomationProperties.Name="{ui:Tr '空白畫布'}">
+                <Grid Width="20" Height="20" UseLayoutRounding="True" SnapsToDevicePixels="True"><Rectangle Width="18" Height="16" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" /><Path Data="M6,10 H14 M10,6 V14" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.5" /></Grid>
               </Button>
               <Button Click="CollageClick" ToolTip="{ui:Tr '多張合圖'}" AutomationProperties.Name="{ui:Tr '多張合圖'}"><TextBlock Text="&#xE8A9;" FontFamily="Segoe Fluent Icons" FontSize="20" /></Button>
               </StackPanel>
@@ -113,6 +117,7 @@
             <WrapPanel Margin="12,6">
               <WrapPanel.Resources><Style TargetType="Button" BasedOn="{StaticResource QuietButton}"><Setter Property="Padding" Value="10,5" /><Setter Property="Margin" Value="0,0,4,0" /></Style></WrapPanel.Resources>
               <Button x:Name="AddImagesButton" Content="{ui:Tr '加入圖片'}" Click="AddImagesClick" ToolTip="{ui:Tr '多選檔案、拖入圖片或 Ctrl + V'}" />
+              <Button x:Name="PasteImagesButton" Content="{ui:Tr '貼上圖片'}" Click="PasteImagesClick" ToolTip="Ctrl + V" AutomationProperties.Name="{ui:Tr '貼上圖片'}" />
               <Button Content="{ui:Tr '排列 ▾'}" Click="ArrangeMenuClick" />
               <Button Content="{ui:Tr '對齊 ▾'}" Click="AlignmentMenuClick" />
               <Button Content="{ui:Tr '圖層 ▾'}" Click="OrderMenuClick" />
@@ -130,6 +135,10 @@
               </StackPanel>
               <TextBlock x:Name="HotkeyHint" Text="Ctrl + Alt + S" FontFamily="Cascadia Code, Consolas" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,16,0,18" />
               <Button Content="{ui:Tr '開啟檔案'}" Click="OpenClick" Width="180" BorderThickness="1" />
+              <WrapPanel HorizontalAlignment="Center" Margin="0,10,0,0">
+                <Button Content="{ui:Tr '空白畫布'}" Click="NewCanvasClick" Margin="0,0,8,0" />
+                <Button Content="{ui:Tr '剪貼簿圖片'}" Click="OpenClipboardClick" ToolTip="{ui:Tr '開啟剪貼簿圖片'}" />
+              </WrapPanel>
               <TextBlock Text="Ctrl + O ／ Ctrl + V" Foreground="{StaticResource Muted}" FontSize="12" HorizontalAlignment="Center" Margin="0,12,0,0" />
             </StackPanel>
           </Grid>
@@ -183,7 +192,9 @@
             <Button Content="{ui:Tr '程式碼長截圖'}" Click="CodeClick" Padding="9,8" />
             <Button Click="CodeMenuClick" Width="24" Padding="0" Margin="2,0,0,0" ToolTip="{ui:Tr '程式碼長截圖模式'}" AutomationProperties.Name="{ui:Tr '程式碼長截圖模式'}"><TextBlock Text="&#xE70D;" FontFamily="Segoe Fluent Icons" FontSize="10" /></Button>
           </StackPanel>
-          <Button Content="{ui:Tr '開啟圖片'}" Click="OpenClick" Padding="9,8" Margin="0,0,3,0" />
+          <Button Content="{ui:Tr '開啟檔案'}" Click="OpenClick" Padding="9,8" Margin="0,0,3,0" />
+          <Button Content="{ui:Tr '空白畫布'}" Click="NewCanvasClick" Padding="9,8" Margin="0,0,3,0" />
+          <Button Click="OpenClipboardClick" Width="32" Padding="0" Margin="0,0,3,0" ToolTip="{ui:Tr '開啟剪貼簿圖片'}" AutomationProperties.Name="{ui:Tr '開啟剪貼簿圖片'}"><TextBlock Text="&#xE77F;" FontFamily="Segoe Fluent Icons" FontSize="16" /></Button>
           <Button Content="{ui:Tr '合圖'}" Click="CollageClick" Padding="9,8" Margin="0,0,3,0" />
           <Button x:Name="ExpandButton" Content="{ui:Tr '編輯器'}" Click="ExpandClick" Padding="9,8" Margin="0,0,3,0" />
           <Button Click="SettingsClick" ToolTip="{ui:Tr '設定'}" Padding="10,8"><TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons" FontSize="16" /></Button>
