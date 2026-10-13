@@ -14,9 +14,9 @@ namespace SnipFlow.Scroll;
 public sealed class BoundaryPickWindow : Window
 {
     private static readonly Brush MaskBrush = FrozenBrush(Color.FromArgb(142, 16, 16, 16));
-    private static readonly Brush PanelBrush = FrozenBrush(Color.FromArgb(240, 32, 32, 32));
-    private static readonly Brush AccentBrush = FrozenBrush(Color.FromRgb(232, 232, 232));
-    private static readonly Brush MutedBrush = FrozenBrush(Color.FromRgb(201, 201, 201));
+    private static Brush PanelBrush => ThemeService.Brush("OverlayPanel");
+    private static Brush AccentBrush => ThemeService.Brush("SelectionHandle");
+    private static Brush MutedBrush => ThemeService.Brush("OverlayMuted");
     private readonly DrawingRectangle _physicalBounds;
     private readonly BitmapSource _snapshot;
     private readonly bool _isStart;
@@ -73,6 +73,11 @@ public sealed class BoundaryPickWindow : Window
         Content = _surface;
         RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.NearestNeighbor);
         SourceInitialized += OnSourceInitialized;
+        Loaded += (_, _) =>
+        {
+            ThemeService.Changed -= OnThemeChanged;
+            ThemeService.Changed += OnThemeChanged;
+        };
         ContentRendered += (_, _) =>
         {
             PositionPhysical();
@@ -151,6 +156,7 @@ public sealed class BoundaryPickWindow : Window
     protected override void OnClosed(EventArgs args)
     {
         _closed = true;
+        ThemeService.Changed -= OnThemeChanged;
         if (!_confirmed || DialogResult != true)
             SelectedPixel = null;
         _source?.RemoveHook(WindowMessage);
@@ -235,6 +241,13 @@ public sealed class BoundaryPickWindow : Window
         }
     }
 
+    private void OnThemeChanged(object? sender, EventArgs args)
+    {
+        void Redraw() { if (!_closed) _surface.InvalidateVisual(); }
+        if (Dispatcher.CheckAccess()) Redraw();
+        else Dispatcher.BeginInvoke(new Action(Redraw));
+    }
+
     private void ConfirmSelection()
     {
         if (_closing || _closed)
@@ -280,7 +293,7 @@ public sealed class BoundaryPickWindow : Window
         var margin = Math.Min(10, Math.Min(viewport.Width, viewport.Height) / 4);
         var width = Math.Min(550, Math.Max(1, viewport.Width - margin * 2));
         var innerWidth = Math.Max(1, width - 20);
-        var heading = Text(Title, 14, Brushes.White);
+        var heading = Text(Title, 14, ThemeService.Brush("OverlayInk"));
         heading.MaxTextWidth = innerWidth;
         var help = Text(I18n.T("↑↓ 微調 1 px · Shift 10 px · Enter 確認 · Esc／右鍵取消"), 11, MutedBrush);
         help.MaxTextWidth = innerWidth;

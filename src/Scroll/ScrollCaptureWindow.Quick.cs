@@ -18,7 +18,7 @@ public sealed partial class ScrollCaptureWindow
         var panel = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 10, 0, 0) };
         _finishNoticeText = new TextBlock
         {
-            Foreground = Brush("#EAC88D"), TextWrapping = TextWrapping.Wrap,
+            Foreground = Brush("Warning"), TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 8), LineHeight = 17
         };
         panel.Children.Add(_finishNoticeText);

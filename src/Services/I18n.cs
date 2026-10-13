@@ -53,6 +53,11 @@ public static partial class I18n
 
     private static readonly Dictionary<string, (string English, string Simplified)> Translations = new(StringComparer.Ordinal)
     {
+        ["主題"] = ("Theme", "主题"),
+        ["亮色"] = ("Light", "浅色"),
+        ["暗色"] = ("Dark", "深色"),
+        ["跟隨系統"] = ("Follow system", "跟随系统"),
+        ["套用 Windows 的應用程式色彩設定。"] = ("Use the Windows app color setting.", "使用 Windows 的应用颜色设置。"),
         ["視窗長截圖"] = ("Window scrolling capture", "窗口长截图"),
         ["框選長截圖"] = ("Region scrolling capture", "区域长截图"),
         ["捲動截圖模式"] = ("Scrolling capture mode", "滚动截图模式"),

@@ -1,3 +1,4 @@
+using SnipFlow.Services;
 using WpfPoint = System.Windows.Point;
 using WpfRect = System.Windows.Rect;
 
@@ -81,7 +82,7 @@ public sealed partial class EditorView
             context.PushOpacity(0.45);
             context.DrawImage(_image, _bounds);
             context.Pop();
-            context.DrawRectangle(null, new Pen(BrushFor("#4AA5FF"), 1.5 / editor._zoom) { DashStyle = DashStyles.Dash }, _bounds);
+            context.DrawRectangle(null, new Pen(ThemeService.Brush("SelectionBorder"), 1.5 / editor._zoom) { DashStyle = DashStyles.Dash }, _bounds);
         }
     }
 }

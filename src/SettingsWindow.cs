@@ -16,6 +16,8 @@ public sealed class SettingsWindow : Window
     readonly List<FrameworkElement> panes = new();
     readonly ScrollViewer paneScroll = new();
     readonly ComboBox language = new() { Width = 184, MinHeight = 34, HorizontalAlignment = HorizontalAlignment.Right };
+    readonly ComboBox theme = new() { Width = 184, MinHeight = 34, HorizontalAlignment = HorizontalAlignment.Right };
+    readonly TextBlock themeNote = new();
     readonly CheckBox copy = new(), history = new(), startup = new(), autoSave = new(), autoCheck = new(), autoDownload = new();
     readonly TextBox captureFolder = new() { IsReadOnly = true, MinHeight = 34, VerticalContentAlignment = VerticalAlignment.Center };
     readonly HotkeyInputBox shortcut = new(SettingsStore.Current.Hotkey);
@@ -140,6 +142,10 @@ public sealed class SettingsWindow : Window
         language.Items.Add(new ComboBoxItem { Content = "简体中文", Tag = "zh-CN" });
         SynchronizeLanguageChoice(); language.SelectionChanged += LanguageSelectionChanged;
         AddValueRow(pane, "介面語言", "切換後立即套用並儲存。", language);
+        theme.Items.Add(BindContent(new ComboBoxItem { Tag = "dark" }, "暗色"));
+        theme.Items.Add(BindContent(new ComboBoxItem { Tag = "light" }, "亮色"));
+        theme.Items.Add(BindContent(new ComboBoxItem { Tag = "system" }, "跟隨系統"));
+        AddValueRow(pane, "主題", "套用 Windows 的應用程式色彩設定。", theme, themeNote);
         AddDivider(pane);
         AddToggleRow(pane, "自動複製", "截圖完成後複製到剪貼簿。", copy, SettingsStore.Current.CopyAfterCapture);
         AddToggleRow(pane, "自動儲存截圖", "截圖存為 PNG；標註修改會更新同一個檔案。", autoSave, SettingsStore.Current.AutoSaveCaptures);
@@ -243,7 +249,7 @@ public sealed class SettingsWindow : Window
         footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var status = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) };
         status.Children.Add(BindText(new TextBlock { FontSize = 12, Foreground = Resource<Brush>("Muted"), TextWrapping = TextWrapping.Wrap }, "變更會立即套用並自動儲存。"));
-        feedback.Foreground = ErrorBrush; feedback.FontSize = 12; feedback.TextWrapping = TextWrapping.Wrap; feedback.Margin = new Thickness(0, 5, 0, 0); feedback.Visibility = Visibility.Collapsed; status.Children.Add(feedback); footer.Children.Add(status);
+        feedback.Foreground = Resource<Brush>("Error"); feedback.FontSize = 12; feedback.TextWrapping = TextWrapping.Wrap; feedback.Margin = new Thickness(0, 5, 0, 0); feedback.Visibility = Visibility.Collapsed; status.Children.Add(feedback); footer.Children.Add(status);
         var close = BindContent(new Button { IsCancel = true, Style = Resource<Style>("Primary"), MinWidth = 84, Height = 36 }, "關閉");
         close.Click += (_, _) => Close(); Grid.SetColumn(close, 1); footer.Children.Add(close);
         return new Border { BorderBrush = Resource<Brush>("Line"), BorderThickness = new Thickness(0, 1, 0, 0), Child = footer };
@@ -257,6 +263,7 @@ public sealed class SettingsWindow : Window
         BindOption(autoCheck, settings => settings.AutoCheckUpdates, (settings, value) => settings.AutoCheckUpdates = value);
         BindOption(autoDownload, settings => settings.AutoDownloadUpdates, (settings, value) => settings.AutoDownloadUpdates = value);
         startup.Checked += StartupChanged; startup.Unchecked += StartupChanged;
+        theme.SelectionChanged += ThemeSelectionChanged;
         shortcut.TextChanged += (_, _) =>
         {
             if (!synchronizingOptions && !isClosed) ApplyHotkey(shortcut.Shortcut);
@@ -433,6 +440,9 @@ public sealed class SettingsWindow : Window
         try
         {
             var settings = SettingsStore.Current;
+            var mode = ThemeService.NormalizeMode(settings.Theme);
+            theme.SelectedItem = theme.Items.OfType<ComboBoxItem>().First(item => item.Tag as string == mode);
+            themeNote.Visibility = mode == "system" ? Visibility.Visible : Visibility.Collapsed;
             copy.IsChecked = settings.CopyAfterCapture; history.IsChecked = settings.KeepHistory;
             autoSave.IsChecked = settings.AutoSaveCaptures;
             try
@@ -454,7 +464,7 @@ public sealed class SettingsWindow : Window
 
     static UserSettings SnapshotSettings() => new()
     {
-        Language = SettingsStore.Current.Language, CopyAfterCapture = SettingsStore.Current.CopyAfterCapture,
+        Language = SettingsStore.Current.Language, Theme = SettingsStore.Current.Theme, CopyAfterCapture = SettingsStore.Current.CopyAfterCapture,
         AutoSaveCaptures = SettingsStore.Current.AutoSaveCaptures, CaptureSaveDirectory = SettingsStore.Current.CaptureSaveDirectory,
         KeepHistory = SettingsStore.Current.KeepHistory, StartWithWindows = SettingsStore.Current.StartWithWindows,
         Hotkey = SettingsStore.Current.Hotkey, AutoCheckUpdates = SettingsStore.Current.AutoCheckUpdates,
@@ -465,6 +475,7 @@ public sealed class SettingsWindow : Window
     static void RestoreSettings(UserSettings previous)
     {
         SettingsStore.Current.Language = previous.Language;
+        SettingsStore.Current.Theme = previous.Theme;
         SettingsStore.Current.CopyAfterCapture = previous.CopyAfterCapture;
         SettingsStore.Current.AutoSaveCaptures = previous.AutoSaveCaptures;
         SettingsStore.Current.CaptureSaveDirectory = previous.CaptureSaveDirectory;
@@ -475,6 +486,24 @@ public sealed class SettingsWindow : Window
         SettingsStore.Current.AutoDownloadUpdates = previous.AutoDownloadUpdates;
         SettingsStore.Current.HistoryLimit = previous.HistoryLimit;
         SettingsStore.Current.RecentColors = new List<string>(previous.RecentColors);
+    }
+
+    void ThemeSelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (synchronizingOptions || isClosed || theme.SelectedItem is not ComboBoxItem item
+            || item.Tag is not string tag || tag == ThemeService.NormalizeMode(SettingsStore.Current.Theme)) return;
+        var previous = SnapshotSettings();
+        try
+        {
+            SettingsStore.Current.Theme = tag;
+            // ThemeService listens to the successful SettingsStore notification.
+            SettingsStore.Save(); SynchronizeOptions(); SetFeedback("設定已自動儲存。", false);
+        }
+        catch (Exception ex)
+        {
+            RestoreSettings(previous); SettingsStore.Log(ex); SynchronizeOptions();
+            SetFeedback("設定未儲存，請再試一次。");
+        }
     }
 
     void LanguageSelectionChanged(object sender, SelectionChangedEventArgs args)
@@ -520,7 +549,7 @@ public sealed class SettingsWindow : Window
         foreach (var entry in localizedContent) entry.Element.Content = I18n.T(entry.Key);
         foreach (var entry in localizedNames) AutomationProperties.SetName(entry.Element, I18n.T(entry.Key));
         feedback.Text = feedbackKey == null ? "" : I18n.T(feedbackKey);
-        feedback.Foreground = feedbackIsError ? ErrorBrush : Resource<Brush>("Muted");
+        feedback.Foreground = feedbackIsError ? Resource<Brush>("Error") : Resource<Brush>("Muted");
         SynchronizeLanguageChoice(); RefreshUpdates(); RefreshHotkeyStatus();
     }
 
@@ -528,7 +557,7 @@ public sealed class SettingsWindow : Window
     {
         var active = shell.ActiveHotkey is { } key ? I18n.F("目前啟用：{0}", key) : I18n.T("全域快捷鍵未啟用");
         hotkeyStatus.Text = hotkeyFailure ? $"{shell.HotkeyError}\n{active}" : active;
-        hotkeyStatus.Foreground = hotkeyFailure ? ErrorBrush : Resource<Brush>("Ink");
+        hotkeyStatus.Foreground = hotkeyFailure ? Resource<Brush>("Error") : Resource<Brush>("Ink");
     }
 
     void OnUpdateChanged(object? sender, EventArgs args) => Dispatcher.BeginInvoke(() => { if (!isClosed) RefreshUpdates(); });
@@ -539,8 +568,8 @@ public sealed class SettingsWindow : Window
         currentVersion.Text = updates.CurrentVersion;
         latestVersion.Text = updates.LatestVersion ?? (updates.State == UpdateState.UpToDate ? updates.CurrentVersion : I18n.T("尚未檢查"));
         updateStatus.Text = updates.Status;
-        updateStatus.Foreground = updates.State == UpdateState.Error ? ErrorBrush : Resource<Brush>("Ink");
-        updateCard.BorderBrush = updates.State == UpdateState.Error ? ErrorBrush : Resource<Brush>("Line");
+        updateStatus.Foreground = updates.State == UpdateState.Error ? Resource<Brush>("Error") : Resource<Brush>("Ink");
+        updateCard.BorderBrush = updates.State == UpdateState.Error ? Resource<Brush>("Error") : Resource<Brush>("Line");
         updateDetail.Text = updates.State == UpdateState.Error ? updates.ErrorMessage ?? ""
             : updates.State == UpdateState.Available && updates.CanUpdateNow ? I18n.T("按一下即可下載並重啟更新。")
             : updates.LastCheckedAt is { } checkedAt ? I18n.F("上次檢查：{0:t}", checkedAt.LocalDateTime) : "";
@@ -561,11 +590,9 @@ public sealed class SettingsWindow : Window
     {
         feedbackKey = key; feedbackIsError = isError;
         feedback.Text = key == null ? "" : I18n.T(key);
-        feedback.Foreground = isError ? ErrorBrush : Resource<Brush>("Muted");
+        feedback.Foreground = isError ? Resource<Brush>("Error") : Resource<Brush>("Muted");
         feedback.Visibility = key == null ? Visibility.Collapsed : Visibility.Visible;
     }
-    static Brush ErrorBrush { get; } = CreateErrorBrush();
-    static Brush CreateErrorBrush() { var brush = new SolidColorBrush(Color.FromRgb(242, 157, 152)); brush.Freeze(); return brush; }
     T Resource<T>(string key) where T : class => (T)FindResource(key);
     TextBlock BindText(TextBlock element, string key) { element.Text = I18n.T(key); localizedText.Add((element, key)); return element; }
     T BindContent<T>(T element, string key) where T : ContentControl { element.Content = I18n.T(key); localizedContent.Add((element, key)); return element; }
@@ -574,13 +601,16 @@ public sealed class SettingsWindow : Window
     void AddHeading(Panel panel, string key) => panel.Children.Add(BindText(new TextBlock { FontSize = 23, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 24) }, key));
     void AddDivider(Panel panel) => panel.Children.Add(new Border { Height = 1, Background = Resource<Brush>("Line"), Margin = new Thickness(0, 10, 0, 22) });
 
-    void AddValueRow(Panel panel, string key, string note, FrameworkElement value)
+    void AddValueRow(Panel panel, string key, string note, FrameworkElement value, TextBlock? noteElement = null)
     {
         var row = new Grid { Margin = new Thickness(0, 0, 0, 14) };
         row.ColumnDefinitions.Add(new ColumnDefinition()); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var label = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 20, 0) };
         label.Children.Add(BindText(new TextBlock { FontSize = 13 }, key));
-        label.Children.Add(BindText(new TextBlock { Foreground = Resource<Brush>("Muted"), FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 0), LineHeight = 18 }, note));
+        var detail = noteElement ?? new TextBlock();
+        detail.Foreground = Resource<Brush>("Muted"); detail.FontSize = 12; detail.TextWrapping = TextWrapping.Wrap;
+        detail.Margin = new Thickness(0, 5, 0, 0); detail.LineHeight = 18;
+        label.Children.Add(BindText(detail, note));
         row.Children.Add(label); value.VerticalAlignment = VerticalAlignment.Center; Grid.SetColumn(value, 1); row.Children.Add(value); BindName(value, key); panel.Children.Add(row);
     }
 

@@ -127,10 +127,10 @@ public sealed partial class EditorView : WpfUserControl
     {
         Focusable = true;
         ClipToBounds = true;
-        Background = BrushFor("#181818");
+        Background = ThemeService.Brush("Bg");
         _viewport = new WpfCanvas
         {
-            Background = BrushFor("#181818"),
+            Background = ThemeService.Brush("Bg"),
             ClipToBounds = true
         };
         _documentLayer = new WpfCanvas
@@ -152,7 +152,7 @@ public sealed partial class EditorView : WpfUserControl
             VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
             Background = Brushes.Transparent,
             Foreground = new SolidColorBrush(_color),
-            SelectionBrush = BrushFor("#B8B8B8"),
+            SelectionBrush = ThemeService.Brush("SelectionBorder"),
             SelectionOpacity = 0.35,
             BorderThickness = new Thickness(0),
             Padding = new Thickness(0),
@@ -179,7 +179,7 @@ public sealed partial class EditorView : WpfUserControl
         _textEditBorder = new Border
         {
             Child = _textEditor,
-            BorderBrush = BrushFor("#B8B8B8"),
+            BorderBrush = ThemeService.Brush("SelectionBorder"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(2),
             Visibility = Visibility.Collapsed
@@ -198,10 +198,10 @@ public sealed partial class EditorView : WpfUserControl
         _emptyState = CreateEmptyState();
         layout.Children.Add(_emptyState);
 
-        _imageLabel = new TextBlock { FontSize = 11, Foreground = BrushFor("#A3A3A3") };
+        _imageLabel = new TextBlock { FontSize = 11, Foreground = ThemeService.Brush("Muted") };
         _imageBadge = CreateBadge(_imageLabel, HorizontalAlignment.Left);
         layout.Children.Add(_imageBadge);
-        _zoomLabel = new TextBlock { FontSize = 11, Foreground = BrushFor("#ECECEC") };
+        _zoomLabel = new TextBlock { FontSize = 11, Foreground = ThemeService.Brush("Ink") };
         _zoomBadge = CreateBadge(_zoomLabel, HorizontalAlignment.Right);
         layout.Children.Add(_zoomBadge);
 
@@ -209,7 +209,7 @@ public sealed partial class EditorView : WpfUserControl
         {
             Text = I18n.T(CanvasHint),
             FontSize = 12,
-            Foreground = BrushFor("#A3A3A3"),
+            Foreground = ThemeService.Brush("Muted"),
             Margin = new Thickness(20, 0, 20, 15),
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Bottom,
@@ -245,6 +245,7 @@ public sealed partial class EditorView : WpfUserControl
             if (!_languageSubscribed)
             {
                 I18n.Changed += OnLanguageChanged;
+                ThemeService.Changed += OnThemeChanged;
                 _languageSubscribed = true;
             }
             RefreshLanguage();
@@ -257,6 +258,7 @@ public sealed partial class EditorView : WpfUserControl
             if (_languageSubscribed)
             {
                 I18n.Changed -= OnLanguageChanged;
+                ThemeService.Changed -= OnThemeChanged;
                 _languageSubscribed = false;
             }
         };
@@ -1393,26 +1395,26 @@ public sealed partial class EditorView : WpfUserControl
                 WpfRect bounds = _pending.Bounds;
                 if (_pending.TextWidth == 0)
                     bounds = new WpfRect(_pending.Start, new Size(Math.Min(360, Math.Max(1, _image.PixelWidth - _pending.Start.X)), _pending.FontSize * 1.4));
-                context.DrawRectangle(null, new Pen(BrushFor("#B8B8B8"), 1 / _zoom), bounds);
+                context.DrawRectangle(null, new Pen(ThemeService.Brush("SelectionBorder"), 1 / _zoom), bounds);
             }
             else
                 _pending?.Draw(context, pixelsPerDip);
             if (!IsTextEditing)
                 foreach (AnnotationItem item in _selection) DrawSelection(context, item);
             if (_marquee is not null)
-                context.DrawRectangle(BrushFor("#204AA5FF"), new Pen(BrushFor("#4AA5FF"), 1 / _zoom), _marquee.Value);
+                context.DrawRectangle(ThemeService.Brush("SelectionFill"), new Pen(ThemeService.Brush("SelectionBorder"), 1 / _zoom), _marquee.Value);
         }
     }
 
     private void DrawSelection(DrawingContext context, AnnotationItem item)
     {
-        var outline = new Pen(BrushFor("#B8B8B8"), 1 / _zoom) { DashStyle = DashStyles.Dash };
+        var outline = new Pen(ThemeService.Brush("SelectionBorder"), 1 / _zoom) { DashStyle = DashStyles.Dash };
         if (item.Tool != AnnotationTool.Arrow)
             context.DrawRectangle(null, outline, EditableBounds(item));
-        var handlePen = new Pen(BrushFor("#B8B8B8"), 1.5 / _zoom);
+        var handlePen = new Pen(ThemeService.Brush("SelectionBorder"), 1.5 / _zoom);
         if (_selection.Count == 1)
             foreach (var handle in HandlePoints(item))
-                context.DrawEllipse(BrushFor("#ECECEC"), handlePen, handle.Position, 4 / _zoom, 4 / _zoom);
+                context.DrawEllipse(ThemeService.Brush("SelectionHandle"), handlePen, handle.Position, 4 / _zoom, 4 / _zoom);
     }
 
     private void ZoomFromCenter(double factor)
@@ -1501,20 +1503,25 @@ public sealed partial class EditorView : WpfUserControl
             Dispatcher.BeginInvoke(new Action(RefreshLanguage));
     }
 
-    private void RefreshLanguage() => _hintLabel.Text = I18n.T(IsTextEditing ? TextHint : IsCollage ? "Ctrl / Shift 多選 · 拖曳空白處框選 · 方向鍵微調 · 右鍵排列" : CanvasHint);
-
-    private static SolidColorBrush BrushFor(string value)
+    private void OnThemeChanged(object? sender, EventArgs e)
     {
-        var brush = new SolidColorBrush((WpfColor)ColorConverter.ConvertFromString(value));
-        brush.Freeze();
-        return brush;
+        void Redraw()
+        {
+            if (!IsLoaded) return;
+            _surface.InvalidateVisual();
+            _imageDropPreview?.InvalidateVisual();
+        }
+        if (Dispatcher.CheckAccess()) Redraw();
+        else Dispatcher.BeginInvoke(new Action(Redraw));
     }
+
+    private void RefreshLanguage() => _hintLabel.Text = I18n.T(IsTextEditing ? TextHint : IsCollage ? "Ctrl / Shift 多選 · 拖曳空白處框選 · 方向鍵微調 · 右鍵排列" : CanvasHint);
 
     private static Border CreateBadge(TextBlock label, HorizontalAlignment alignment) => new()
     {
         Child = label,
-        Background = BrushFor("#D9242424"),
-        BorderBrush = BrushFor("#383838"),
+        Background = ThemeService.Brush("Badge"),
+        BorderBrush = ThemeService.Brush("Line"),
         BorderThickness = new Thickness(1),
         CornerRadius = new CornerRadius(7),
         Padding = new Thickness(10, 6, 10, 6),

@@ -117,7 +117,7 @@ public sealed partial class VideoEditorWindow
 
         var selectedActions = new DockPanel { LastChildFill = false, Margin = new Thickness(0, 0, 0, 12) };
         ConfigureButton(editText, "編輯文字"); editText.Click += (_, _) => BeginInlineText();
-        ConfigureButton(delete, "刪除物件"); delete.Foreground = new SolidColorBrush(Color.FromRgb(245, 183, 186));
+        ConfigureButton(delete, "刪除物件"); delete.Foreground = Resource<Brush>("Error");
         delete.Click += (_, _) => DeleteSelection(); DockPanel.SetDock(delete, Dock.Right);
         selectedActions.Children.Add(delete); selectedActions.Children.Add(editText); properties.Children.Add(selectedActions);
         AddPair(properties, "位置 X", x, "位置 Y", y);

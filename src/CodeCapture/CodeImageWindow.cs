@@ -436,12 +436,12 @@ public sealed class CodeImageWindow : Window
     void ShowStatus(string key, bool error = false, params object?[] values)
     {
         statusKey = key; statusValues = values;
-        status.Text = I18n.F(key, values); status.Foreground = error ? Brushes.LightSalmon : Resource<Brush>("Muted");
+        status.Text = I18n.F(key, values); status.Foreground = error ? Resource<Brush>("Error") : Resource<Brush>("Muted");
     }
 
     void ShowRawError(string text)
     {
-        statusKey = null; status.Text = text; status.Foreground = Brushes.LightSalmon;
+        statusKey = null; status.Text = text; status.Foreground = Resource<Brush>("Error");
     }
 
     void LanguageChanged(object? sender, EventArgs e)

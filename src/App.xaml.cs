@@ -55,8 +55,12 @@ public partial class App : Application
             SettingsStore.Log(error.Exception); error.Handled = true;
             MessageBox.Show(I18n.T("這個操作未完成，詳細資訊已寫入本機紀錄。\n") + error.Exception.Message, "SnipFlow", MessageBoxButton.OK, MessageBoxImage.Warning);
         };
+        ThemeService.Initialize();
         shell = new MainWindow(); MainWindow = shell;
-        var menu = new System.Windows.Forms.ContextMenuStrip();
+        var menu = new System.Windows.Forms.ContextMenuStrip
+        {
+            Renderer = new System.Windows.Forms.ToolStripProfessionalRenderer(new TrayMenuColors()),
+        };
         void AddTrayAction(string key, Action action)
         {
             var item = menu.Items.Add(I18n.T(key), null, (_, _) => Dispatcher.BeginInvoke(action));
@@ -78,6 +82,8 @@ public partial class App : Application
         I18n.Changed += TrayLanguageChanged;
         trayIcon = new System.Drawing.Icon(Path.Combine(AppContext.BaseDirectory, "Assets", "SnipFlow-v3.ico"), 32, 32);
         tray = new System.Windows.Forms.NotifyIcon { Icon = trayIcon, Text = "SnipFlow", Visible = true, ContextMenuStrip = menu };
+        ThemeService.Changed += TrayThemeChanged;
+        TrayThemeChanged(null, EventArgs.Empty);
         tray.DoubleClick += (_, _) => Dispatcher.BeginInvoke(ShowShell);
         shell.Show();
         if (e.Args.Contains("--background")) shell.Hide();
@@ -96,6 +102,14 @@ public partial class App : Application
         foreach (System.Windows.Forms.ToolStripItem item in menu.Items)
             if (item.Tag is string key) item.Text = I18n.T(key);
     });
+    void TrayThemeChanged(object? sender, EventArgs e)
+    {
+        if (tray?.ContextMenuStrip is not { } menu) return;
+        menu.BackColor = TrayMenuColors.Color("Panel");
+        menu.ForeColor = TrayMenuColors.Color("Ink");
+        foreach (System.Windows.Forms.ToolStripItem item in menu.Items) item.ForeColor = menu.ForeColor;
+        menu.Invalidate();
+    }
     async Task CheckUpdatesAsync()
     {
         if (shell != null && SettingsStore.Current.AutoCheckUpdates) await shell.Updates.CheckAsync(SettingsStore.Current.AutoDownloadUpdates);
@@ -127,6 +141,6 @@ public partial class App : Application
     }
     protected override void OnExit(ExitEventArgs e)
     {
-        shutdown.Cancel(); updateTimer.Stop(); I18n.Changed -= TrayLanguageChanged; tray?.Dispose(); trayIcon?.Dispose(); shell?.ReleaseHotkey(); shutdown.Dispose(); base.OnExit(e);
+        shutdown.Cancel(); updateTimer.Stop(); ThemeService.Changed -= TrayThemeChanged; ThemeService.Shutdown(); I18n.Changed -= TrayLanguageChanged; tray?.Dispose(); trayIcon?.Dispose(); shell?.ReleaseHotkey(); shutdown.Dispose(); base.OnExit(e);
     }
 }

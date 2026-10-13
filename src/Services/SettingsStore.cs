@@ -4,6 +4,7 @@ namespace SnipFlow.Services;
 public sealed class UserSettings
 {
     public string Language { get; set; } = "zh-TW";
+    public string Theme { get; set; } = "dark";
     public bool AutoCheckUpdates { get; set; } = true;
     public bool AutoDownloadUpdates { get; set; } = true;
     public bool CopyAfterCapture { get; set; } = true;
@@ -38,6 +39,7 @@ public static class SettingsStore
         try
         {
             var settings = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(Path.Combine(DataRoot, "settings.json"))) ?? new();
+            settings.Theme = ThemeService.NormalizeMode(settings.Theme);
             settings.RecentColors = (settings.RecentColors ?? new()).Where(value =>
                 value is { Length: 7 } && value[0] == '#' && value.Skip(1).All(Uri.IsHexDigit))
                 .Select(value => value.ToUpperInvariant()).Distinct(StringComparer.Ordinal).Take(8).ToList();

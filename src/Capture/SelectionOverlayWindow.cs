@@ -11,11 +11,11 @@ namespace SnipFlow.Capture;
 internal sealed class SelectionOverlayWindow : Window
 {
     private static readonly Brush MaskBrush = FrozenBrush(Color.FromArgb(152, 7, 12, 20));
-    private static readonly Brush PanelBrush = FrozenBrush(Color.FromArgb(244, 18, 24, 34));
-    private static readonly Brush MutedBrush = FrozenBrush(Color.FromRgb(163, 163, 163));
-    private static readonly Brush AccentBrush = FrozenBrush(Color.FromRgb(232, 232, 232));
-    private static readonly Pen SelectionPen = FrozenPen(AccentBrush, 1.5);
-    private static readonly Pen PanelPen = FrozenPen(FrozenBrush(Color.FromArgb(180, 73, 92, 116)), 1);
+    private static Brush PanelBrush => ThemeService.Brush("OverlayPanel");
+    private static Brush MutedBrush => ThemeService.Brush("OverlayMuted");
+    private static Brush InkBrush => ThemeService.Brush("OverlayInk");
+    private static Pen SelectionPen => new(ThemeService.Brush("SelectionHandle"), 1.5);
+    private static Pen PanelPen => new(ThemeService.Brush("OverlayLine"), 1);
     private readonly CaptureSession _session;
     private readonly BitmapSource _snapshot;
     private readonly OverlaySurface _surface;
@@ -52,6 +52,11 @@ internal sealed class SelectionOverlayWindow : Window
         RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.NearestNeighbor);
         SourceInitialized += OnSourceInitialized;
         ContentRendered += (_, _) => PositionPhysical();
+        Loaded += (_, _) =>
+        {
+            ThemeService.Changed -= OnThemeChanged;
+            ThemeService.Changed += OnThemeChanged;
+        };
         Closed += OnClosed;
     }
 
@@ -91,6 +96,7 @@ internal sealed class SelectionOverlayWindow : Window
     private void OnClosed(object? sender, EventArgs args)
     {
         _closed = true;
+        ThemeService.Changed -= OnThemeChanged;
         _source?.RemoveHook(WindowMessage);
         _source = null;
         _handle = IntPtr.Zero;
@@ -98,6 +104,13 @@ internal sealed class SelectionOverlayWindow : Window
     }
 
     internal void RefreshSelection() => _surface.InvalidateVisual();
+
+    private void OnThemeChanged(object? sender, EventArgs args)
+    {
+        void Redraw() { if (!_closed) _surface.InvalidateVisual(); }
+        if (Dispatcher.CheckAccess()) Redraw();
+        else Dispatcher.BeginInvoke(new Action(Redraw));
+    }
 
     internal void CloseOverlay()
     {
@@ -236,11 +249,11 @@ internal sealed class SelectionOverlayWindow : Window
             text.Trimming = TextTrimming.CharacterEllipsis;
             drawing.DrawText(text, new WpfPoint(panel.Left + 20, top));
         }
-        Line(title, 16, Brushes.White, panel.Top + 13);
+        Line(title, 16, InkBrush, panel.Top + 13);
         var lineY = panel.Top + 39;
         if (caption is not null)
         {
-            Line(caption, 12, _session.StatusHint is null ? MutedBrush : Brushes.White, lineY);
+            Line(caption, 12, _session.StatusHint is null ? MutedBrush : InkBrush, lineY);
             lineY += 25;
         }
         if (_session.AllowModeSwitch)
@@ -256,7 +269,7 @@ internal sealed class SelectionOverlayWindow : Window
     {
         var selection = _session.Selection;
         var label = selection is DrawingRectangle bounds ? I18n.F("{0:N0} × {1:N0} px", bounds.Width, bounds.Height) : I18n.T("拖曳選取範圍");
-        var text = Text(label, 13, Brushes.White);
+        var text = Text(label, 13, InkBrush);
         var width = Math.Max(146, text.Width + 28);
         const double height = 36;
         var cursorX = (_session.Cursor.X - MonitorBounds.X) * ActualWidth / MonitorBounds.Width;
@@ -271,12 +284,13 @@ internal sealed class SelectionOverlayWindow : Window
     private static void DrawCorners(DrawingContext drawing, Rect rectangle)
     {
         var length = Math.Min(12, Math.Min(rectangle.Width, rectangle.Height) / 3);
+        var pen = SelectionPen;
         foreach (var corner in new[] { rectangle.TopLeft, rectangle.TopRight, rectangle.BottomLeft, rectangle.BottomRight })
         {
             var dx = corner.X == rectangle.Left ? length : -length;
             var dy = corner.Y == rectangle.Top ? length : -length;
-            drawing.DrawLine(SelectionPen, corner, new WpfPoint(corner.X + dx, corner.Y));
-            drawing.DrawLine(SelectionPen, corner, new WpfPoint(corner.X, corner.Y + dy));
+            drawing.DrawLine(pen, corner, new WpfPoint(corner.X + dx, corner.Y));
+            drawing.DrawLine(pen, corner, new WpfPoint(corner.X, corner.Y + dy));
         }
     }
 
@@ -289,13 +303,6 @@ internal sealed class SelectionOverlayWindow : Window
         var brush = new SolidColorBrush(color);
         brush.Freeze();
         return brush;
-    }
-
-    private static Pen FrozenPen(Brush brush, double width)
-    {
-        var pen = new Pen(brush, width);
-        pen.Freeze();
-        return pen;
     }
 
     private sealed class OverlaySurface(SelectionOverlayWindow owner) : FrameworkElement

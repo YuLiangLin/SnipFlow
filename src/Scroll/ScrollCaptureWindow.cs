@@ -80,19 +80,19 @@ public sealed partial class ScrollCaptureWindow : Window
         SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
-        Background = Brush("#202020");
+        Background = Brush("Panel");
         ShowActivated = false;
         Topmost = true;
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.Manual;
         FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI");
         FontSize = 12;
-        Foreground = Brush("#ECECEC");
+        Foreground = Brush("Ink");
 
         var shell = new Border
         {
-            BorderBrush = Brush("#383838"), BorderThickness = new Thickness(1),
-            Background = Brush("#202020"), Padding = new Thickness(14)
+            BorderBrush = Brush("Line"), BorderThickness = new Thickness(1),
+            Background = Brush("Panel"), Padding = new Thickness(14)
         };
         var layout = new StackPanel();
         shell.Child = layout;
@@ -126,7 +126,7 @@ public sealed partial class ScrollCaptureWindow : Window
             Text = I18n.T(workflow == ScrollCaptureWorkflow.Code
                 ? "在原視窗慢慢捲動，保留重疊；按「完成」產生長圖。"
                 : "在原視窗慢慢捲動，完成後按「完成」。"),
-            Foreground = Brush("#A3A3A3"), TextWrapping = TextWrapping.Wrap,
+            Foreground = Brush("Muted"), TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 8)
         };
         layout.Children.Add(_instruction);
@@ -138,18 +138,18 @@ public sealed partial class ScrollCaptureWindow : Window
         RenderOptions.SetBitmapScalingMode(_preview, BitmapScalingMode.HighQuality);
         _previewBorder = new Border
         {
-            Height = 58, Background = Brush("#181818"), BorderBrush = Brush("#383838"),
+            Height = 58, Background = Brush("Bg"), BorderBrush = Brush("Line"),
             BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5),
             ClipToBounds = true, Child = _preview, ToolTip = I18n.T("已收集長圖預覽")
         };
         previewRow.Children.Add(_previewBorder);
         var information = new StackPanel { Margin = new Thickness(11, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         Grid.SetColumn(information, 1);
-        _dimensions = new TextBlock { Foreground = Brush("#A3A3A3"), FontSize = 11 };
+        _dimensions = new TextBlock { Foreground = Brush("Muted"), FontSize = 11 };
         _status = new TextBlock
         {
             Text = I18n.T("等待原視窗；現有內容會保留。"), TextWrapping = TextWrapping.Wrap,
-            Foreground = Brush("#ECECEC"), LineHeight = 17, Margin = new Thickness(0, 5, 0, 0)
+            Foreground = Brush("Ink"), LineHeight = 17, Margin = new Thickness(0, 5, 0, 0)
         };
         information.Children.Add(_dimensions);
         information.Children.Add(_status);
@@ -180,24 +180,24 @@ public sealed partial class ScrollCaptureWindow : Window
         _manualPanel.Children.Add(new TextBlock
         {
             Text = I18n.T("只接到已擷取內容的最上端或最下端。請確認接縫。"),
-            TextWrapping = TextWrapping.Wrap, Foreground = Brush("#EAC88D")
+            TextWrapping = TextWrapping.Wrap, Foreground = Brush("Warning")
         });
         _joinPreview = new System.Windows.Controls.Image { Stretch = Stretch.None, SnapsToDevicePixels = true };
         _manualPanel.Children.Add(new ScrollViewer
         {
             Content = _joinPreview, Height = 160, Margin = new Thickness(0, 7, 0, 0),
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = Brush("#181818")
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = Brush("Bg")
         });
         _direction = new ComboBox
         {
-            Background = Brush("#2B2B2B"), Foreground = Brush("#ECECEC"),
+            Background = Brush("Raised"), Foreground = Brush("Ink"),
             Margin = new Thickness(0, 7, 0, 0), Padding = new Thickness(7, 4, 7, 4),
             ItemsSource = new[] { I18n.T("向上補較早內容"), I18n.T("向下加入新內容") }, SelectedIndex = 1
         };
         _direction.SelectionChanged += (_, _) => UpdateJoinPreview();
         _manualPanel.Children.Add(_direction);
-        _overlapLabel = new TextBlock { Margin = new Thickness(0, 7, 0, 0), Foreground = Brush("#A3A3A3") };
+        _overlapLabel = new TextBlock { Margin = new Thickness(0, 7, 0, 0), Foreground = Brush("Muted") };
         _manualPanel.Children.Add(_overlapLabel);
         _overlapSlider = new Slider
         {
@@ -224,14 +224,14 @@ public sealed partial class ScrollCaptureWindow : Window
 
         _trimExpander = new Expander
         {
-            Header = I18n.T("略過固定頂部列／底部輸入框"), Foreground = Brush("#A3A3A3"),
+            Header = I18n.T("略過固定頂部列／底部輸入框"), Foreground = Brush("Muted"),
             Margin = new Thickness(0, 10, 0, 0)
         };
         var trimContent = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
         trimContent.Children.Add(new TextBlock
         {
             Text = I18n.T("手動設定要略過的像素；至少保留 48 px。"),
-            TextWrapping = TextWrapping.Wrap, Foreground = Brush("#A3A3A3"), FontSize = 11
+            TextWrapping = TextWrapping.Wrap, Foreground = Brush("Muted"), FontSize = 11
         });
         var trimActions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 7, 0, 0) };
         trimActions.Children.Add(new TextBlock { Text = I18n.T("頂部"), VerticalAlignment = VerticalAlignment.Center });
@@ -254,7 +254,7 @@ public sealed partial class ScrollCaptureWindow : Window
         {
             Header = I18n.T("微調範圍"), Content = adjustments,
             IsExpanded = workflow == ScrollCaptureWorkflow.Precise,
-            Foreground = Brush("#B4B4B4"), Margin = new Thickness(0, 10, 0, 0)
+            Foreground = Brush("Muted"), Margin = new Thickness(0, 10, 0, 0)
         };
         layout.Children.Add(_rangeExpander);
 
@@ -731,14 +731,14 @@ public sealed partial class ScrollCaptureWindow : Window
     private void SetStatus(string text, bool warning = false)
     {
         _status.Text = I18n.T(text);
-        _status.Foreground = Brush(warning ? "#EAC88D" : "#ECECEC");
+        _status.Foreground = Brush(warning ? "Warning" : "Ink");
     }
 
     private static TextBox MakeTrimBox() => new()
     {
         Text = "0", Width = 48, Margin = new Thickness(7, 0, 10, 0), Padding = new Thickness(6),
-        Background = Brush("#181818"), Foreground = Brush("#ECECEC"),
-        BorderBrush = Brush("#484848"), CaretBrush = Brush("#ECECEC")
+        Background = Brush("Bg"), Foreground = Brush("Ink"),
+        BorderBrush = Brush("Line"), CaretBrush = Brush("Ink")
     };
 
     private static Button MakeButton(string label, bool accent = false)
@@ -747,8 +747,8 @@ public sealed partial class ScrollCaptureWindow : Window
         {
             Content = new TextBlock { Text = I18n.T(label) }, Padding = new Thickness(12, 8, 12, 8),
             Margin = new Thickness(0, 0, 7, 0), FontSize = 12,
-            Background = Brush(accent ? "#E8E8E8" : "#2B2B2B"),
-            Foreground = Brush(accent ? "#191919" : "#ECECEC"),
+            Background = Brush(accent ? "Accent" : "Raised"),
+            Foreground = Brush(accent ? "AccentInk" : "Ink"),
             BorderThickness = new Thickness(0), Cursor = Cursors.Hand, FontWeight = FontWeights.SemiBold
         };
         var border = new FrameworkElementFactory(typeof(Border));
@@ -776,12 +776,7 @@ public sealed partial class ScrollCaptureWindow : Window
         return button;
     }
 
-    private static SolidColorBrush Brush(string color)
-    {
-        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color));
-        brush.Freeze();
-        return brush;
-    }
+    private static Brush Brush(string key) => ThemeService.Brush(key);
 
     private enum FrameKind { Known, New, Unreliable }
     private sealed record FrameAnalysis(FrameKind Kind, int Position = 0, bool AtTop = false, bool FixedEdge = false);

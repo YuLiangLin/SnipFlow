@@ -32,7 +32,7 @@ public sealed partial class ScrollCaptureWindow
         panel.Children.Add(actions);
         _rangeSummary = new TextBlock
         {
-            Foreground = Brush("#A3A3A3"), FontSize = 11,
+            Foreground = Brush("Muted"), FontSize = 11,
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0)
         };
         panel.Children.Add(_rangeSummary);

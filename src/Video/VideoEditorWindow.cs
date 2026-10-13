@@ -633,7 +633,7 @@ public sealed partial class VideoEditorWindow : Window
     {
         statusKey = key; statusValues = values; statusError = error;
         status.Text = values.Length == 0 ? I18n.T(key) : I18n.F(key, values);
-        status.Foreground = error ? new SolidColorBrush(Color.FromRgb(245, 183, 186)) : Resource<Brush>("Muted");
+        status.Foreground = error ? Resource<Brush>("Error") : Resource<Brush>("Muted");
     }
 
     void LanguageChanged(object? sender, EventArgs args)
