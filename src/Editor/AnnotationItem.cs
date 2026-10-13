@@ -21,6 +21,7 @@ internal sealed class AnnotationItem
     internal double FontSize { get; set; } = 26;
     internal double TextWidth { get; set; }
     internal double TextBoxHeight { get; set; }
+    internal int TextOrientation { get; set; }
     internal BitmapSource? Mosaic { get; set; }
     internal BitmapSource? Image { get; set; }
 
@@ -36,6 +37,7 @@ internal sealed class AnnotationItem
         FontSize = FontSize,
         TextWidth = TextWidth,
         TextBoxHeight = TextBoxHeight,
+        TextOrientation = TextOrientation,
         // BitmapSource instances are frozen before they are stored.
         Mosaic = Mosaic,
         Image = Image
@@ -47,8 +49,9 @@ internal sealed class AnnotationItem
         {
             if (Tool == AnnotationTool.Text)
             {
-                FormattedText text = FormatText();
-                return new WpfRect(Start, new Size(TextWidth > 0 ? TextWidth : Math.Max(1, text.WidthIncludingTrailingWhitespace), Math.Max(TextBoxHeight, Math.Max(1, text.Height))));
+                var size = TextLayoutSize;
+                return new WpfRect(Start, ImageOrientation.SwapsAxes(TextOrientation)
+                    ? new Size(size.Height, size.Width) : size);
             }
 
             if (Points.Count != 0)
@@ -68,6 +71,27 @@ internal sealed class AnnotationItem
             }
 
             return new WpfRect(Start, End);
+        }
+    }
+
+    internal Size TextLayoutSize
+    {
+        get
+        {
+            var text = FormatText();
+            return new Size(TextWidth > 0 ? TextWidth : Math.Max(1, text.WidthIncludingTrailingWhitespace),
+                Math.Max(TextBoxHeight, Math.Max(1, text.Height)));
+        }
+    }
+
+    internal Matrix TextToDocumentMatrix
+    {
+        get
+        {
+            var size = TextLayoutSize;
+            var matrix = ImageOrientation.InFrame(TextOrientation, size.Width, size.Height);
+            matrix.Translate(Start.X, Start.Y);
+            return matrix;
         }
     }
 
@@ -91,6 +115,7 @@ internal sealed class AnnotationItem
         FontSize = source.FontSize;
         TextWidth = source.TextWidth;
         TextBoxHeight = source.TextBoxHeight;
+        TextOrientation = source.TextOrientation;
         Mosaic = source.Mosaic;
         Image = source.Image;
         Points.Clear();
@@ -104,6 +129,7 @@ internal sealed class AnnotationItem
         return Tool == other.Tool && SamePoint(Start, other.Start) && SamePoint(End, other.End)
             && Color == other.Color && Near(Width, other.Width) && Near(FontSize, other.FontSize)
             && Near(TextWidth, other.TextWidth) && Near(TextBoxHeight, other.TextBoxHeight)
+            && TextOrientation == other.TextOrientation
             && ReferenceEquals(Image, other.Image)
             && Text.Replace("\r\n", "\n", StringComparison.Ordinal) == other.Text.Replace("\r\n", "\n", StringComparison.Ordinal)
             && Points.Count == other.Points.Count && Points.Zip(other.Points).All(pair => SamePoint(pair.First, pair.Second));
@@ -142,7 +168,9 @@ internal sealed class AnnotationItem
                 DrawStroke(context, brush);
                 break;
             case AnnotationTool.Text:
-                context.DrawText(FormatText(pixelsPerDip), Start);
+                context.PushTransform(new MatrixTransform(TextToDocumentMatrix));
+                context.DrawText(FormatText(pixelsPerDip), new WpfPoint(0, 0));
+                context.Pop();
                 break;
             case AnnotationTool.Mosaic:
                 if (Mosaic is not null)

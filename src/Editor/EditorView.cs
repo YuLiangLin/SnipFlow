@@ -858,7 +858,7 @@ public sealed partial class EditorView : WpfUserControl
     {
         if (_textDraft is null)
             return;
-        WpfRect bounds = _textDraft.Bounds;
+        Size size = _textDraft.TextLayoutSize;
         double border = 1 / _zoom;
         _textEditBorder.BorderThickness = new Thickness(border);
         _textEditor.Language = System.Windows.Markup.XmlLanguage.GetLanguage(AnnotationItem.TextCulture.IetfLanguageTag);
@@ -871,11 +871,17 @@ public sealed partial class EditorView : WpfUserControl
         _textEditor.ApplyTemplate();
         Thickness inset = (_textEditor.Template?.FindName("PART_ContentHost", _textEditor) as ScrollViewer)?.Content is FrameworkElement textView
             ? textView.Margin : new Thickness(0);
-        _textEditor.Width = Math.Max(1, bounds.Width) + inset.Left + inset.Right;
+        _textEditor.Width = Math.Max(1, size.Width) + inset.Left + inset.Right;
         // The input viewport grows with all lines. Its extra caret room is UI only.
-        _textEditor.Height = Math.Max(bounds.Height, _textDraft.FontSize * 1.4) + _textDraft.FontSize * 0.2 + inset.Top + inset.Bottom;
-        WpfCanvas.SetLeft(_textEditBorder, _textDraft.Start.X - inset.Left - border);
-        WpfCanvas.SetTop(_textEditBorder, _textDraft.Start.Y - inset.Top - border);
+        _textEditor.Height = Math.Max(size.Height, _textDraft.FontSize * 1.4) + _textDraft.FontSize * 0.2 + inset.Top + inset.Bottom;
+        // Apply the same glyph transform as DrawText, keeping caret/border room outside its origin.
+        var matrix = _textDraft.TextToDocumentMatrix;
+        var origin = matrix.Transform(new WpfPoint(-inset.Left - border, -inset.Top - border));
+        matrix.OffsetX = origin.X;
+        matrix.OffsetY = origin.Y;
+        WpfCanvas.SetLeft(_textEditBorder, 0);
+        WpfCanvas.SetTop(_textEditBorder, 0);
+        _textEditBorder.RenderTransform = new MatrixTransform(matrix);
     }
 
     private void AttachHostWindow()
@@ -1095,8 +1101,9 @@ public sealed partial class EditorView : WpfUserControl
         {
             item.Start = resized.TopLeft;
             item.End = resized.TopLeft;
-            item.TextWidth = resized.Width;
-            item.TextBoxHeight = resized.Height;
+            var swapsAxes = ImageOrientation.SwapsAxes(item.TextOrientation);
+            item.TextWidth = swapsAxes ? resized.Height : resized.Width;
+            item.TextBoxHeight = swapsAxes ? resized.Width : resized.Height;
         }
         else if (item.Tool is AnnotationTool.Pen or AnnotationTool.Highlight)
         {
@@ -1278,20 +1285,24 @@ public sealed partial class EditorView : WpfUserControl
 
     private void PrepareMosaic(AnnotationItem item)
     {
-        if (_image is null)
-            return;
+        if (_image is not null) PrepareMosaic(item, _image, _annotations, ref _pixelSource);
+    }
+
+    private static void PrepareMosaic(AnnotationItem item, BitmapSource image, IReadOnlyList<AnnotationItem> annotations,
+        ref BitmapSource? pixelCache)
+    {
         WpfRect bounds = item.Bounds;
-        int left = Math.Clamp((int)Math.Floor(bounds.Left), 0, _image.PixelWidth - 1);
-        int top = Math.Clamp((int)Math.Floor(bounds.Top), 0, _image.PixelHeight - 1);
-        int right = Math.Clamp((int)Math.Ceiling(bounds.Right), left + 1, _image.PixelWidth);
-        int bottom = Math.Clamp((int)Math.Ceiling(bounds.Bottom), top + 1, _image.PixelHeight);
+        int left = Math.Clamp((int)Math.Floor(bounds.Left), 0, image.PixelWidth - 1);
+        int top = Math.Clamp((int)Math.Floor(bounds.Top), 0, image.PixelHeight - 1);
+        int right = Math.Clamp((int)Math.Ceiling(bounds.Right), left + 1, image.PixelWidth);
+        int bottom = Math.Clamp((int)Math.Ceiling(bounds.Bottom), top + 1, image.PixelHeight);
         int width = right - left;
         int height = bottom - top;
         item.Start = new WpfPoint(left, top);
         item.End = new WpfPoint(right, bottom);
 
         BitmapSource pixelSource;
-        bool composite = _annotations.Any(annotation => annotation.Tool == AnnotationTool.Image);
+        bool composite = annotations.Any(annotation => annotation.Tool == AnnotationTool.Image);
         if (composite)
         {
             var visual = new DrawingVisual();
@@ -1299,8 +1310,8 @@ public sealed partial class EditorView : WpfUserControl
             {
                 context.PushTransform(new TranslateTransform(-left, -top));
                 context.PushClip(new RectangleGeometry(new WpfRect(left, top, width, height)));
-                context.DrawImage(_image, new WpfRect(0, 0, PixelWidth, PixelHeight));
-                foreach (AnnotationItem annotation in _annotations)
+                context.DrawImage(image, new WpfRect(0, 0, image.PixelWidth, image.PixelHeight));
+                foreach (AnnotationItem annotation in annotations)
                 {
                     if (ReferenceEquals(annotation, item)) break;
                     annotation.Draw(context);
@@ -1315,13 +1326,13 @@ public sealed partial class EditorView : WpfUserControl
         }
         else
         {
-            if (_pixelSource is null)
+            if (pixelCache is null)
             {
-                var source = new FormatConvertedBitmap(_image, PixelFormats.Pbgra32, null, 0);
+                var source = new FormatConvertedBitmap(image, PixelFormats.Pbgra32, null, 0);
                 source.Freeze();
-                _pixelSource = source;
+                pixelCache = source;
             }
-            pixelSource = _pixelSource;
+            pixelSource = pixelCache;
         }
         int stride = checked(width * 4);
         var pixels = new byte[checked(stride * height)];

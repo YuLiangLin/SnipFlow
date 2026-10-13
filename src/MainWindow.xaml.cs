@@ -312,6 +312,7 @@ public partial class MainWindow : Window
         if (busy || capturePending) CloseColorPalette();
         EmptyState.Visibility = Editor.HasImage ? Visibility.Collapsed : Visibility.Visible;
         CopyButton.IsEnabled = SaveButton.IsEnabled = OcrButton.IsEnabled = Editor.HasImage && !busy;
+        ImageTransformButton.IsEnabled = Editor.HasImage && !busy && !capturePending;
         Editor.IsEnabled = !busy;
         CollageBar.Visibility = Editor.IsCollage ? Visibility.Visible : Visibility.Collapsed;
         AddImagesButton.IsEnabled = PasteImagesButton.IsEnabled = ProjectButton.IsEnabled = !busy;

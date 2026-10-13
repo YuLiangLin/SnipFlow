@@ -10,7 +10,7 @@ namespace SnipFlow.Services;
 internal static class EditorSessionStore
 {
     private const string SessionKind = "SnipFlow.UpdateSession";
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
     private const long MaxManifestBytes = 64 * 1024 * 1024;
     private const long MaxImageBytes = 512 * 1024 * 1024;
     private const long MaxProjectBytes = 1024L * 1024 * 1024;
@@ -231,6 +231,8 @@ internal static class EditorSessionStore
         {
             if (item is null || (item.Mosaic is not null && !item.Mosaic.IsFrozen) || (item.Image is not null && !item.Image.IsFrozen))
                 throw InvalidCheckpoint();
+            if (!ImageOrientation.IsValid(item.TextOrientation) || (item.Tool != AnnotationTool.Text && item.TextOrientation != 0))
+                throw InvalidCheckpoint();
             if (item.Tool == AnnotationTool.Mosaic)
                 pixels += FrozenImagePixels(item.Mosaic ?? throw InvalidCheckpoint());
             else if (item.Tool == AnnotationTool.Image)
@@ -285,12 +287,14 @@ internal static class EditorSessionStore
 
     private static void ValidateManifest(SessionManifest manifest)
     {
-        if (manifest.SchemaVersion is not (1 or SchemaVersion) || manifest.Kind != SessionKind
+        if (manifest.SchemaVersion is not (1 or 2 or SchemaVersion) || manifest.Kind != SessionKind
             || !Guid.TryParseExact(manifest.SessionId, "N", out _) || manifest.Annotations is null
             || manifest.Annotations.Count > MaxAnnotations)
             throw InvalidCheckpoint();
         ValidateImageSize(manifest.PixelWidth, manifest.PixelHeight);
         ValidateAnnotations(manifest.Annotations);
+        if (manifest.SchemaVersion < 3 && manifest.Annotations.Any(data => data.TextOrientation != 0))
+            throw InvalidCheckpoint();
         if (manifest.SchemaVersion == 1 && (manifest.IsCollage
             || manifest.Annotations.Any(data => data.Tool == AnnotationTool.Image.ToString() || data.ImageFile is not null)))
             throw InvalidCheckpoint();
@@ -424,7 +428,8 @@ internal static class EditorSessionStore
                 || data.Start is null || data.End is null || data.Points is null || data.Text is null
                 || data.Text.Length > MaxPoints || !double.IsFinite(data.Width) || data.Width is < 1 or > 32
                 || !double.IsFinite(data.FontSize) || data.FontSize is < 12 or > 240
-                || !ValidExtent(data.TextWidth) || !ValidExtent(data.TextBoxHeight))
+                || !ValidExtent(data.TextWidth) || !ValidExtent(data.TextBoxHeight)
+                || !ImageOrientation.IsValid(data.TextOrientation) || (tool != AnnotationTool.Text && data.TextOrientation != 0))
                 throw InvalidCheckpoint();
             ValidatePoint(data.Start);
             ValidatePoint(data.End);
@@ -551,7 +556,7 @@ internal static class EditorSessionStore
         Tool = item.Tool.ToString(), Start = ToData(item.Start), End = ToData(item.End),
         Argb = ((uint)item.Color.A << 24) | ((uint)item.Color.R << 16) | ((uint)item.Color.G << 8) | item.Color.B,
         Width = item.Width, Points = item.Points.Select(ToData).ToList(), Text = item.Text,
-        FontSize = item.FontSize, TextWidth = item.TextWidth, TextBoxHeight = item.TextBoxHeight,
+        FontSize = item.FontSize, TextWidth = item.TextWidth, TextBoxHeight = item.TextBoxHeight, TextOrientation = item.TextOrientation,
         MosaicFile = item.Tool == AnnotationTool.Mosaic ? MosaicFileName(index) : null,
         ImageFile = item.Tool == AnnotationTool.Image ? ImageFileName(index) : null
     };
@@ -561,7 +566,7 @@ internal static class EditorSessionStore
         Tool = Enum.Parse<AnnotationTool>(data.Tool), Start = FromData(data.Start), End = FromData(data.End),
         Color = Color.FromArgb((byte)(data.Argb >> 24), (byte)(data.Argb >> 16), (byte)(data.Argb >> 8), (byte)data.Argb),
         Width = data.Width, Points = data.Points.Select(FromData).ToList(), Text = data.Text,
-        FontSize = data.FontSize, TextWidth = data.TextWidth, TextBoxHeight = data.TextBoxHeight
+        FontSize = data.FontSize, TextWidth = data.TextWidth, TextBoxHeight = data.TextBoxHeight, TextOrientation = data.TextOrientation
     };
     private static Point FromData(PointData point) => new(point.X, point.Y);
     private static string MosaicFileName(int index) => $"mosaic-{index:D4}.png";
@@ -592,6 +597,8 @@ internal static class EditorSessionStore
         public required double FontSize { get; init; }
         public required double TextWidth { get; init; }
         public required double TextBoxHeight { get; init; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int TextOrientation { get; init; }
         public required string? MosaicFile { get; set; }
         public string? ImageFile { get; set; }
     }

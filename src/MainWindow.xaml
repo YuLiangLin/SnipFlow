@@ -82,6 +82,7 @@
                 <Button Tag="Highlight" Click="ToolClick" ToolTip="{ui:Tr '螢光筆 (H)'}"><TextBlock Text="&#xE7E6;" FontFamily="Segoe Fluent Icons" /></Button>
                 <Button Tag="Text" Click="ToolClick" ToolTip="{ui:Tr '文字 (T)'}" Content="T" FontWeight="Bold" />
                 <Button Tag="Mosaic" Click="ToolClick" ToolTip="{ui:Tr '馬賽克 (M)'}" Content="▦" FontSize="19" />
+                <Button x:Name="ImageTransformButton" Click="ImageTransformMenuClick" ToolTip="{ui:Tr '旋轉／翻轉'}" AutomationProperties.Name="{ui:Tr '旋轉／翻轉'}" Content="⟳" FontSize="20" />
                 <Border Width="1" Height="22" Background="{StaticResource Line}" Margin="6,0" />
                 <Button x:Name="UndoButton" Content="↶" FontSize="20" Click="UndoClick" ToolTip="{ui:Tr '復原 · Ctrl + Z'}" /><Button x:Name="RedoButton" Content="↷" FontSize="20" Click="RedoClick" ToolTip="{ui:Tr '重做 · Ctrl + Y'}" />
               </StackPanel>
