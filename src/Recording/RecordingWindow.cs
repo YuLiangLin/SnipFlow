@@ -118,6 +118,7 @@ public sealed class RecordingWindow : Window
         actions.ColumnDefinitions.Add(new ColumnDefinition());
         actions.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         _recordButton = MakeButton(T("開始錄影"), primary: true);
+        _recordButton.IsEnabled = false;
         _recordButton.Click += async (_, _) =>
         {
             if (_savePending) await SaveCompletedRecordingAsync();
@@ -151,7 +152,13 @@ public sealed class RecordingWindow : Window
             if (!Dispatcher.HasShutdownStarted)
                 _ = Dispatcher.BeginInvoke(() => ShowState(state));
         };
-        SourceInitialized += (_, _) => { WindowAppearance.Apply(this); ConfigureToolbarWindow(); };
+        SourceInitialized += (_, _) =>
+        {
+            // Native appearance calls can dispatch Loaded before this handler returns.
+            // Establish capture exclusion first; refresh readiness when setup completes.
+            ConfigureToolbarWindow();
+            WindowAppearance.Apply(this);
+        };
         Loaded += (_, _) =>
         {
             try { _highlight.Show(this); }
@@ -446,7 +453,7 @@ public sealed class RecordingWindow : Window
     {
         _busy = busy;
         _recordButton.IsEnabled = !busy && !_closingRequested
-            && (_recordingStarted || _savePending || (!_rangeInvalidated && _excludedFromCapture));
+            && (_recordingStarted || _savePending || (IsLoaded && !_rangeInvalidated && _excludedFromCapture));
         _systemAudio.IsEnabled = !busy && !_recordingStarted && !_savePending;
         _microphone.IsEnabled = !busy && !_recordingStarted && !_savePending;
         _cursor.IsEnabled = !busy && !_recordingStarted && !_savePending;
@@ -470,6 +477,8 @@ public sealed class RecordingWindow : Window
         var x = Math.Max(area.Left, area.Right - physicalWidth - 16);
         var y = area.Top + 16;
         _ = SetWindowPos(handle, IntPtr.Zero, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010);
+        // Loaded may already have disabled Start while exclusion was still being initialized.
+        SetBusy(_busy);
     }
 
     private static CheckBox MakeToggle(string label, bool selected) => new()

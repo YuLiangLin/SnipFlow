@@ -150,9 +150,8 @@ public sealed partial class EditorView : WpfUserControl
             TextWrapping = TextWrapping.Wrap,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
-            Background = BrushFor("#F2202020"),
+            Background = Brushes.Transparent,
             Foreground = new SolidColorBrush(_color),
-            CaretBrush = BrushFor("#ECECEC"),
             SelectionBrush = BrushFor("#B8B8B8"),
             SelectionOpacity = 0.35,
             BorderThickness = new Thickness(0),
@@ -173,6 +172,7 @@ public sealed partial class EditorView : WpfUserControl
             UndoLimit = 100,
             SpellCheck = { IsEnabled = false }
         };
+        _textEditor.CaretBrush = _textEditor.Foreground;
         TextOptions.SetTextFormattingMode(_textEditor, TextFormattingMode.Ideal);
         TextBlock.SetLineHeight(_textEditor, double.NaN);
         TextBlock.SetLineStackingStrategy(_textEditor, LineStackingStrategy.MaxHeight);
@@ -864,9 +864,8 @@ public sealed partial class EditorView : WpfUserControl
         _textEditor.Language = System.Windows.Markup.XmlLanguage.GetLanguage(AnnotationItem.TextCulture.IetfLanguageTag);
         _textEditor.FontSize = _textDraft.FontSize;
         _textEditor.Foreground = new SolidColorBrush(_textDraft.Color);
-        bool lightInput = RelativeLuminance(_textDraft.Color) < 0.23;
-        _textEditor.Background = BrushFor(lightInput ? "#F2FFFFFF" : "#F2202020");
-        _textEditor.CaretBrush = BrushFor(lightInput ? "#181818" : "#ECECEC");
+        _textEditor.Background = Brushes.Transparent;
+        _textEditor.CaretBrush = _textEditor.Foreground;
         // TextBoxView reserves caret space in its content margin, even with zero
         // Padding. Keep that UI inset outside the annotation's text origin/width.
         _textEditor.ApplyTemplate();
@@ -1492,16 +1491,6 @@ public sealed partial class EditorView : WpfUserControl
     }
 
     private void RefreshLanguage() => _hintLabel.Text = I18n.T(IsTextEditing ? TextHint : IsCollage ? "Ctrl / Shift 多選 · 拖曳空白處框選 · 方向鍵微調 · 右鍵排列" : CanvasHint);
-
-    private static double RelativeLuminance(WpfColor color)
-    {
-        static double Channel(byte value)
-        {
-            double fraction = value / 255.0;
-            return fraction <= 0.04045 ? fraction / 12.92 : Math.Pow((fraction + 0.055) / 1.055, 2.4);
-        }
-        return 0.2126 * Channel(color.R) + 0.7152 * Channel(color.G) + 0.0722 * Channel(color.B);
-    }
 
     private static SolidColorBrush BrushFor(string value)
     {
