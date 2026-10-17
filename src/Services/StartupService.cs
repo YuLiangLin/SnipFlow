@@ -1,125 +1,24 @@
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Text;
-using Microsoft.Win32;
-using Microsoft.Win32.SafeHandles;
-
 namespace SnipFlow.Services;
 
-public sealed record StartupRegistration(object? Value, RegistryValueKind ValueKind, bool IsEnabled);
+/// <summary>A snapshot of the current login-start entry. <see cref="Value"/>/<see cref="Kind"/> are platform data for <see cref="StartupService.Restore"/>.</summary>
+public sealed record StartupRegistration(object? Value, object? Kind, bool IsEnabled);
 
-public static class StartupService
+/// <summary>
+/// Start SnipFlow at login with <c>--background</c>. Windows uses the per-user Run registry value;
+/// Linux uses an XDG autostart entry (<c>~/.config/autostart/snipflow.desktop</c>).
+/// </summary>
+public static partial class StartupService
 {
-    const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    const string ValueName = "SnipFlow";
-    const string ExecutableName = "SnipFlow.exe";
+    public static StartupRegistration ReadRegistration() => ReadRegistrationCore();
 
-    public static StartupRegistration ReadRegistration()
-    {
-        using var run = Registry.CurrentUser.OpenSubKey(RunKey, writable: false);
-        var value = run?.GetValue(ValueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
-        var kind = value == null ? RegistryValueKind.String : run!.GetValueKind(ValueName);
-        return new(value, kind, IsBackgroundCommand(value as string));
-    }
+    /// <summary>The command written to the login entry.</summary>
+    public static string CreateCommand() => CreateCommandCore(ResolveLauncher());
 
-    public static string CreateCommand() => $"\"{ResolveLauncher()}\" --background";
+    /// <summary>Writes the command, or removes SnipFlow's entry when <paramref name="command"/> is null.</summary>
+    public static void WriteCommand(string? command) => WriteCommandCore(command);
 
-    internal static string ResolveLauncher()
-    {
-        var executable = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(executable) || !string.Equals(Path.GetFileName(executable), ExecutableName, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException(I18n.T("目前執行的是預覽程式，無法設定登入啟動。"));
-        if (!File.Exists(executable)) throw MissingExecutable(executable);
-
-        var directory = Path.GetDirectoryName(executable)!;
-        if (string.Equals(Path.GetFileName(directory), "current", StringComparison.OrdinalIgnoreCase))
-        {
-            var root = Directory.GetParent(directory)?.FullName;
-            var launcher = root == null ? null : Path.Combine(root, ExecutableName);
-            if (launcher == null || !File.Exists(launcher)) throw MissingExecutable(launcher ?? executable);
-            executable = launcher;
-        }
-
-        // Resolve the opened file rather than assuming a LocalAppData alias points
-        // to the same location outside an MSIX host's filesystem context.
-        executable = ResolveExistingFile(executable);
-        if (!File.Exists(executable)) throw MissingExecutable(executable);
-        return executable;
-    }
-
-    public static void WriteCommand(string? command)
-    {
-        if (command == null)
-        {
-            using var run = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
-            run?.DeleteValue(ValueName, throwOnMissingValue: false);
-        }
-        else
-        {
-            using var run = Registry.CurrentUser.CreateSubKey(RunKey);
-            run.SetValue(ValueName, command, RegistryValueKind.String);
-        }
-    }
-
-    public static void Restore(StartupRegistration previous)
-    {
-        if (previous.Value == null) WriteCommand(null);
-        else
-        {
-            using var run = Registry.CurrentUser.CreateSubKey(RunKey);
-            run.SetValue(ValueName, previous.Value, previous.ValueKind);
-        }
-    }
-
-    static bool IsBackgroundCommand(string? command)
-    {
-        if (string.IsNullOrWhiteSpace(command)) return false;
-        var text = command.Trim();
-        string executable, arguments;
-        if (text[0] == '"')
-        {
-            int quote = text.IndexOf('"', 1);
-            if (quote < 2) return false;
-            executable = text[1..quote]; arguments = text[(quote + 1)..].Trim();
-        }
-        else
-        {
-            int space = text.IndexOfAny(new[] { ' ', '\t' });
-            if (space < 1) return false;
-            executable = text[..space]; arguments = text[space..].Trim();
-        }
-        try
-        {
-            executable = Environment.ExpandEnvironmentVariables(executable);
-            return arguments.Equals("--background", StringComparison.OrdinalIgnoreCase)
-                && Path.IsPathFullyQualified(executable)
-                && string.Equals(Path.GetFileName(executable), ExecutableName, StringComparison.OrdinalIgnoreCase)
-                && File.Exists(executable);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { return false; }
-    }
-
-    internal static string ResolveExistingFile(string path)
-    {
-        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        var buffer = new StringBuilder(512);
-        while (true)
-        {
-            uint length = GetFinalPathNameByHandle(file.SafeFileHandle, buffer, (uint)buffer.Capacity, 0);
-            if (length == 0) throw new Win32Exception(Marshal.GetLastWin32Error());
-            if (length >= buffer.Capacity)
-            {
-                buffer = new StringBuilder(checked((int)length + 1)); continue;
-            }
-            var resolved = buffer.ToString();
-            if (resolved.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) resolved = @"\\" + resolved[8..];
-            else if (resolved.StartsWith(@"\\?\", StringComparison.Ordinal)) resolved = resolved[4..];
-            return Path.GetFullPath(resolved);
-        }
-    }
+    /// <summary>Restores a snapshot from <see cref="ReadRegistration"/> after a failed change.</summary>
+    public static void Restore(StartupRegistration previous) => RestoreCore(previous);
 
     static FileNotFoundException MissingExecutable(string path) => new(I18n.T("找不到可啟動的 SnipFlow 程式，登入啟動未變更。"), path);
-
-    [DllImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW", CharSet = CharSet.Unicode, SetLastError = true)]
-    static extern uint GetFinalPathNameByHandle(SafeFileHandle file, StringBuilder path, uint capacity, uint flags);
 }

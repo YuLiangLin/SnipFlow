@@ -39,9 +39,30 @@ public static partial class I18n
             && !CodeCaptureTranslations.TryGetValue(zhTwText, out translation)
             && !ScrollWorkflowTranslations.TryGetValue(zhTwText, out translation)
             && !WindowCaptureTranslations.TryGetValue(zhTwText, out translation)
-            && !VideoTranslations.TryGetValue(zhTwText, out translation))
+            && !VideoTranslations.TryGetValue(zhTwText, out translation)
+            && !TryFindRegistered(zhTwText, out translation))
             return zhTwText;
         return languageTag == "en" ? translation.English : translation.Simplified;
+    }
+
+    private static volatile IReadOnlyDictionary<string, (string English, string Simplified)>[] _registered = [];
+
+    /// <summary>
+    /// Adds a module's translation table, keyed by the Traditional Chinese source text. Modules
+    /// call this from a <c>[ModuleInitializer]</c> in their own <c>I18n.Area.cs</c> file.
+    /// </summary>
+    public static void Register(IReadOnlyDictionary<string, (string English, string Simplified)> table)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        lock (Translations) _registered = [.. _registered, table];
+    }
+
+    private static bool TryFindRegistered(string key, out (string English, string Simplified) translation)
+    {
+        foreach (var table in _registered)
+            if (table.TryGetValue(key, out translation)) return true;
+        translation = default;
+        return false;
     }
 
     /// <summary>Formats translated templates. Pass a stable source key, such as "已開啟 {0}".</summary>

@@ -1,99 +1,42 @@
-using System.Runtime.InteropServices;
-using System.Windows.Interop;
-
 namespace SnipFlow.Services;
 
-public static class WindowBoundsService
+/// <summary>Work-area helpers for SnipFlow's frameless windows.</summary>
+public static partial class WindowBoundsService
 {
-    private const int WmGetMinMaxInfo = 0x0024;
-    private const uint MonitorDefaultToNearest = 2;
-    private static readonly DependencyProperty IsAttachedProperty = DependencyProperty.RegisterAttached(
-        "IsAttached", typeof(bool), typeof(WindowBoundsService), new PropertyMetadata(false));
-
+    /// <summary>
+    /// Keeps a maximized frameless window inside the monitor work area. Windows needs a
+    /// WM_GETMINMAXINFO hook; X11 window managers already maximize to the work area.
+    /// </summary>
     public static void Attach(Window window)
     {
         ArgumentNullException.ThrowIfNull(window);
-        window.VerifyAccess();
-        if ((bool)window.GetValue(IsAttachedProperty)) return;
-        var handle = new WindowInteropHelper(window).Handle;
-        if (handle == IntPtr.Zero)
-        {
-            window.SourceInitialized -= SourceInitialized;
-            window.SourceInitialized += SourceInitialized;
-            return;
-        }
-
-        var source = HwndSource.FromHwnd(handle);
-        if (source == null) return;
-        source.AddHook(WindowProc);
-        window.SetValue(IsAttachedProperty, true);
+        AttachNative(window);
     }
 
-    private static void SourceInitialized(object? sender, EventArgs e)
-    {
-        if (sender is not Window window) return;
-        window.SourceInitialized -= SourceInitialized;
-        Attach(window);
-    }
+    static partial void AttachNative(Window window);
 
+    /// <summary>The working area (excluding panels and taskbars) of the window's screen, in DIPs.</summary>
     public static Rect GetWorkArea(Window window)
     {
         ArgumentNullException.ThrowIfNull(window);
-        window.VerifyAccess();
-        var handle = new WindowInteropHelper(window).Handle;
-        if (handle == IntPtr.Zero) return SystemParameters.WorkArea;
-        var source = HwndSource.FromHwnd(handle);
-        if (source == null || source.IsDisposed || source.CompositionTarget == null || !TryGetMonitorInfo(handle, out var info))
-            return SystemParameters.WorkArea;
-
-        var area = new Rect(info.Work.Left, info.Work.Top, info.Work.Right - info.Work.Left, info.Work.Bottom - info.Work.Top);
-        area.Transform(source.CompositionTarget.TransformFromDevice);
-        return area;
+        var screen = window.Screens.ScreenFromWindow(window) ?? window.Screens.Primary ?? window.Screens.All.FirstOrDefault();
+        if (screen is null) return new Rect(0, 0, 1280, 800);
+        var area = screen.WorkingArea;
+        var scale = screen.Scaling > 0 ? screen.Scaling : 1;
+        return new Rect(area.X / scale, area.Y / scale, area.Width / scale, area.Height / scale);
     }
 
-    private static IntPtr WindowProc(IntPtr window, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    /// <summary>The working area in physical pixels, the unit of <see cref="Window.Position"/>.</summary>
+    public static PixelRect GetWorkAreaPixels(Window window)
     {
-        if (message != WmGetMinMaxInfo || lParam == IntPtr.Zero) return IntPtr.Zero;
-        if (!TryGetMonitorInfo(window, out var info)) return IntPtr.Zero;
-
-        var bounds = Marshal.PtrToStructure<MinMaxInfo>(lParam);
-        // Both RECTs and MINMAXINFO use device pixels, including on monitors with different DPI.
-        // Match the usable monitor area so WindowChrome cannot clip the bottom row behind the taskbar.
-        bounds.MaxPosition = new NativePoint(info.Work.Left - info.Monitor.Left, info.Work.Top - info.Monitor.Top);
-        bounds.MaxSize = new NativePoint(info.Work.Right - info.Work.Left, info.Work.Bottom - info.Work.Top);
-        Marshal.StructureToPtr(bounds, lParam, false);
-        // WPF still applies its MinWidth/MinHeight tracking constraints after this hook.
-        handled = false;
-        return IntPtr.Zero;
+        var screen = window.Screens.ScreenFromWindow(window) ?? window.Screens.Primary ?? window.Screens.All.FirstOrDefault();
+        return screen?.WorkingArea ?? new PixelRect(0, 0, 1280, 800);
     }
 
-    private static bool TryGetMonitorInfo(IntPtr window, out MonitorInfo info)
+    /// <summary>The scaling of the window's screen (1.0 = 96 DPI).</summary>
+    public static double GetScaling(Window window)
     {
-        info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
-        var monitor = MonitorFromWindow(window, MonitorDefaultToNearest);
-        return monitor != IntPtr.Zero && GetMonitorInfo(monitor, ref info);
+        var screen = window.Screens.ScreenFromWindow(window) ?? window.Screens.Primary;
+        return screen?.Scaling is > 0 and var scaling ? scaling : window.RenderScaling;
     }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativePoint
-    {
-        public int X, Y;
-        public NativePoint(int x, int y) { X = x; Y = y; }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativeRect { public int Left, Top, Right, Bottom; }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MonitorInfo { public int Size; public NativeRect Monitor, Work; public uint Flags; }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MinMaxInfo { public NativePoint Reserved, MaxSize, MaxPosition, MinTrackSize, MaxTrackSize; }
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
 }
