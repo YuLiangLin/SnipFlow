@@ -139,7 +139,7 @@ public static partial class OcrService
     {
         var size = image.PixelSize;
         bool upscale = (long)size.Width * size.Height * 4 <= UpscaleLimitPixels;
-        using var scaled = upscale ? Resize(image, new PixelSize(size.Width * 2, size.Height * 2)) : null;
+        using var scaled = upscale ? ImageTools.Scale(image, new PixelSize(size.Width * 2, size.Height * 2)) : null;
         using var flattened = FlattenOnWhite(scaled ?? image).ToBitmap();
         return (ImageTools.EncodePng(flattened), upscale ? 192 : 96);
     }

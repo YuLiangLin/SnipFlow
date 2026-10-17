@@ -27,15 +27,6 @@ public static partial class OcrService
 
     private static partial Task<string> RecognizeCoreAsync(Bitmap image, string? languageTag, CancellationToken cancellationToken);
 
-    /// <summary>Scales with high-quality filtering by drawing, which works for every bitmap kind.</summary>
-    /// <remarks>Skia's <c>Bitmap.CreateScaledBitmap</c> (used by <c>ImageTools.Scale</c>) rejects writeable and rendered bitmaps.</remarks>
-    private static Bitmap Resize(Bitmap source, PixelSize size)
-        => ImageTools.Render(size, context =>
-        {
-            using (context.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = BitmapInterpolationMode.HighQuality }))
-                context.DrawImage(source, new Rect(0, 0, source.PixelSize.Width, source.PixelSize.Height), new Rect(0, 0, size.Width, size.Height));
-        });
-
     /// <summary>
     /// Copies the image as opaque BGRA pixels. Transparent annotations are composited over white
     /// instead of being treated as black text.

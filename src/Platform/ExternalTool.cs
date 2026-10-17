@@ -14,16 +14,18 @@ public sealed record ProcessResult(int ExitCode, string StandardOutput, string S
 /// </summary>
 public static class ExternalTool
 {
-    static readonly Dictionary<string, string?> Cache = new(StringComparer.Ordinal);
+    static readonly Dictionary<string, string> Cache = new(StringComparer.Ordinal);
 
     /// <summary>Full path of <paramref name="name"/> from the app's tools folder or PATH, or null.</summary>
+    /// <remarks>Only found tools are cached, so a tool installed while SnipFlow runs is picked up on the next call.</remarks>
     public static string? Find(string name)
     {
         lock (Cache)
         {
-            if (Cache.TryGetValue(name, out var cached)) return cached;
+            if (Cache.TryGetValue(name, out var cached) && File.Exists(cached)) return cached;
             var found = Search(name);
-            Cache[name] = found;
+            if (found is null) Cache.Remove(name);
+            else Cache[name] = found;
             return found;
         }
     }

@@ -23,7 +23,7 @@ public static partial class OcrService
         Bitmap source = image;
         var scale = Math.Min(1d, (double)maximumDimension / Math.Max(size.Width, size.Height));
         if (scale < 1d)
-            source = Resize(image, new PixelSize(
+            source = ImageTools.Scale(image, new PixelSize(
                 Math.Clamp((int)Math.Round(size.Width * scale), 1, maximumDimension),
                 Math.Clamp((int)Math.Round(size.Height * scale), 1, maximumDimension)));
 

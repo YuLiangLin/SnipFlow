@@ -96,8 +96,16 @@ public static class ImageTools
     }
 
     /// <summary>Returns a bitmap scaled to <paramref name="size"/>.</summary>
+    /// <remarks>
+    /// Draws instead of calling <c>Bitmap.CreateScaledBitmap</c>, which Skia only supports for decoded
+    /// bitmaps and rejects for writeable and rendered ones (captures, PixelBuffer results, exports).
+    /// </remarks>
     public static Bitmap Scale(Bitmap source, PixelSize size, BitmapInterpolationMode mode = BitmapInterpolationMode.HighQuality)
-        => source.CreateScaledBitmap(size, mode);
+        => Render(size, context =>
+        {
+            using (context.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = mode }))
+                context.DrawImage(source, new Rect(0, 0, source.PixelSize.Width, source.PixelSize.Height), new Rect(0, 0, size.Width, size.Height));
+        });
 
     /// <summary>Scales down to fit within the given bounds, keeping the aspect ratio. Smaller images are returned unchanged.</summary>
     public static Bitmap Fit(Bitmap source, int maxWidth, int maxHeight)
