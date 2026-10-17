@@ -50,6 +50,30 @@
     <PackageReference Include="ScreenRecorderLib" Version="7.0.1" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
   </ItemGroup>
+  <!--
+    VideoLAN.LibVLC.Windows copies every VLC plugin (about 103 MB) unless this item lists what to copy
+    (paths relative to the package's build\x64 folder, '*' escaped as %2A). The video editor preview only
+    plays local MP4 (H.264/HEVC + AAC) through video callbacks, so it needs (about 26 MB):
+      libvlc.dll, libvlccore.dll                   the engine
+      access\libfilesystem_plugin                  file:// input
+      demux\libmp4_plugin                          MP4/MOV demuxer
+      codec\libavcodec_plugin                      software H.264/HEVC/AAC decoding (FFmpeg)
+      packetizer\*                                 H.264/HEVC/AAC packetizers used between demuxer and decoder
+      video_output\libvmem_plugin                  the memory video output behind SetVideoCallbacks
+      video_chroma\*                               I420/NV12 to RV32 conversion and scaling (swscale)
+      audio_output\libmmdevice/wasapi/directsound  default Windows audio output, with DirectSound as fallback
+      audio_filter\*, audio_mixer\*                format conversion, resampling, channel mixing and volume
+      logger\*                                     libvlc log handling
+    Not copied: hardware decoders (d3d11va/dxva2 are useless with video callbacks), other demuxers, codecs,
+    network access, Lua, HRTFs, subtitles, visualizations, stream output and renderers.
+  -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
+    <VlcWindowsX64IncludeFiles Include="libvlc.dll;libvlccore.dll" />
+    <VlcWindowsX64IncludeFiles Include="plugins\access\libfilesystem_plugin.dll;plugins\demux\libmp4_plugin.dll;plugins\codec\libavcodec_plugin.dll" />
+    <VlcWindowsX64IncludeFiles Include="plugins\packetizer\%2A;plugins\video_output\libvmem_plugin.dll;plugins\video_chroma\%2A" />
+    <VlcWindowsX64IncludeFiles Include="plugins\audio_output\libmmdevice_plugin.dll;plugins\audio_output\libwasapi_plugin.dll;plugins\audio_output\libdirectsound_plugin.dll" />
+    <VlcWindowsX64IncludeFiles Include="plugins\audio_filter\%2A;plugins\audio_mixer\%2A;plugins\logger\%2A" />
+  </ItemGroup>
 
   <!-- Platform-specific sources. -->
   <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-windows10.0.19041.0'">
