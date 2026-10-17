@@ -1,36 +1,38 @@
-using System.Windows.Input;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Avalonia.Platform;
 using SnipFlow.Services;
-using WpfPoint = System.Windows.Point;
-using WpfRect = System.Windows.Rect;
-using WpfVector = System.Windows.Vector;
 
 namespace SnipFlow.Editor;
 
 internal enum CollageLayout { Grid, Vertical, Horizontal }
 internal enum ObjectAlignment { Left, Center, Right, Top, Middle, Bottom }
 internal enum ObjectOrder { Front, Forward, Backward, Back }
-internal sealed record EditorSessionSnapshot(BitmapSource Image, List<AnnotationItem> Annotations, bool HasEdits, bool IsCollage);
+internal sealed record EditorSessionSnapshot(Bitmap Image, List<AnnotationItem> Annotations, bool HasEdits, bool IsCollage);
 
 public sealed partial class EditorView
 {
     private const int MaximumImages = 24;
+    private static readonly Dictionary<(int Width, int Height), WeakReference<Bitmap>> Boards = new();
+    private static readonly ConditionalWeakTable<Bitmap, object> BoardImages = new();
+    private static readonly object BoardMarker = new();
     private readonly HashSet<AnnotationItem> _selection = new();
     private readonly Dictionary<AnnotationItem, AnnotationItem> _transformSources = new();
     private readonly Dictionary<AnnotationItem, AnnotationItem> _propertySources = new();
-    private WpfPoint? _marqueeStart;
-    private WpfRect? _marquee;
+    private Point? _marqueeStart;
+    private Rect? _marquee;
     private HashSet<AnnotationItem>? _marqueeOriginal;
     public bool IsCollage { get; private set; }
     public int SelectionCount => _selection.Count;
     public int ImageCount => _annotations.Count(item => item.Tool == AnnotationTool.Image);
-    public int PixelWidth => _image?.PixelWidth ?? 0;
-    public int PixelHeight => _image?.PixelHeight ?? 0;
+    public int PixelWidth => _image?.PixelSize.Width ?? 0;
+    public int PixelHeight => _image?.PixelSize.Height ?? 0;
 
     internal void NewCollage()
     {
         VerifyAccess();
         RestoreSession(CreateBoard(1920, 1080), Array.Empty<AnnotationItem>(), hasEdits: true, isCollage: true);
-        _color = System.Windows.Media.Color.FromRgb(17, 24, 39);
+        _color = Color.FromRgb(17, 24, 39);
         _tool = AnnotationTool.Select;
         UpdateCursor();
         RefreshLanguage();
@@ -43,24 +45,24 @@ public sealed partial class EditorView
         CompleteGesture();
         CommitTextEdit();
         EndPropertyEdit();
-        BitmapSource? original = _image;
-        int width = Math.Max(1920, (original?.PixelWidth ?? 0) + 80);
-        int height = Math.Max(1080, (original?.PixelHeight ?? 0) + 80);
-        BitmapSource board = CreateBoard(width, height);
+        Bitmap? original = _image;
+        int width = Math.Max(1920, (original?.PixelSize.Width ?? 0) + 80);
+        int height = Math.Max(1080, (original?.PixelSize.Height ?? 0) + 80);
+        Bitmap board = CreateBoard(width, height);
         if (original is null)
             LoadImage(board);
         RememberMutation();
         if (original is not null)
         {
-            foreach (AnnotationItem item in _annotations) item.Offset(new WpfVector(40, 40));
+            foreach (AnnotationItem item in _annotations) item.Offset(new Vector(40, 40));
             _annotations.Insert(0, new AnnotationItem
             {
                 Tool = AnnotationTool.Image, Image = original,
-                Start = new WpfPoint(40, 40), End = new WpfPoint(40 + original.PixelWidth, 40 + original.PixelHeight), Width = 1
+                Start = new Point(40, 40), End = new Point(40 + original.PixelSize.Width, 40 + original.PixelSize.Height), Width = 1
             });
         }
         IsCollage = true;
-        _color = System.Windows.Media.Color.FromRgb(32, 32, 32);
+        _color = Color.FromRgb(32, 32, 32);
         _tool = AnnotationTool.Select;
         SetBoard(board);
         SelectItem(original is null ? null : _annotations[0]);
@@ -69,14 +71,14 @@ public sealed partial class EditorView
         RefreshLanguage();
     }
 
-    internal void AddImages(IReadOnlyList<BitmapSource> images)
+    internal void AddImages(IReadOnlyList<Bitmap> images)
     {
         VerifyAccess();
         var prepared = PrepareImagesForInsertion(images, null);
         if (prepared.Count != 0) InsertPreparedImages(prepared);
     }
 
-    internal void AddImageAt(BitmapSource image, WpfPoint center)
+    internal void AddImageAt(Bitmap image, Point center)
     {
         VerifyAccess();
         if (!double.IsFinite(center.X) || !double.IsFinite(center.Y) || !InsideImage(center))
@@ -84,48 +86,48 @@ public sealed partial class EditorView
         InsertPreparedImages(PrepareImagesForInsertion(new[] { image }, center));
     }
 
-    internal void ValidateImageInsertion(BitmapSource image)
+    internal void ValidateImageInsertion(Bitmap image)
     {
         VerifyAccess();
         ValidateImagesForInsertion(new[] { image });
     }
 
-    private void ValidateImagesForInsertion(IReadOnlyList<BitmapSource> images)
+    private void ValidateImagesForInsertion(IReadOnlyList<Bitmap> images)
     {
         if (!IsCollage) throw new InvalidOperationException(I18n.T("請先開啟多張合圖。"));
         if (ImageCount + images.Count > MaximumImages)
             throw new InvalidOperationException(I18n.T("每份合圖最多可放入 24 張圖片。"));
-        long pixels = _annotations.Where(item => item.Image is not null).Sum(item => (long)item.Image!.PixelWidth * item.Image.PixelHeight);
-        foreach (BitmapSource input in images)
+        long pixels = _annotations.Where(item => item.Image is not null).Sum(item => (long)item.Image!.PixelSize.Width * item.Image.PixelSize.Height);
+        foreach (Bitmap input in images)
         {
-            if (input.PixelWidth < 1 || input.PixelHeight < 1) throw new ArgumentException(I18n.T("影像尺寸不得為零。"));
-            pixels += (long)input.PixelWidth * input.PixelHeight;
+            if (input.PixelSize.Width < 1 || input.PixelSize.Height < 1) throw new ArgumentException(I18n.T("影像尺寸不得為零。"));
+            pixels += (long)input.PixelSize.Width * input.PixelSize.Height;
             if (pixels > 80_000_000) throw new InvalidOperationException(I18n.T("圖片總尺寸過大，請減少張數或縮小原圖。"));
         }
     }
 
-    private List<AnnotationItem> PrepareImagesForInsertion(IReadOnlyList<BitmapSource> images, WpfPoint? center)
+    private List<AnnotationItem> PrepareImagesForInsertion(IReadOnlyList<Bitmap> images, Point? center)
     {
         ValidateImagesForInsertion(images);
         var prepared = new List<AnnotationItem>();
-        foreach (BitmapSource input in images)
+        foreach (Bitmap input in images)
         {
-            BitmapSource image = input.IsFrozen ? input : input.CloneCurrentValue();
-            if (!image.IsFrozen) image.Freeze();
-            WpfRect bounds = InitialImageBounds(image, center, ImageCount + prepared.Count);
+            Bitmap image = AtDocumentDpi(input);
+            Rect bounds = InitialImageBounds(image, center, ImageCount + prepared.Count);
             prepared.Add(new AnnotationItem { Tool = AnnotationTool.Image, Image = image, Start = bounds.TopLeft, End = bounds.BottomRight, Width = 1 });
         }
         return prepared;
     }
 
-    private WpfRect InitialImageBounds(BitmapSource image, WpfPoint? center, int index = 0)
+    private Rect InitialImageBounds(Bitmap image, Point? center, int index = 0)
     {
-        double scale = Math.Min(1, Math.Min(Math.Max(1, PixelWidth - 80.0) / image.PixelWidth, Math.Max(1, PixelHeight - 80.0) / image.PixelHeight));
-        double width = image.PixelWidth * scale, height = image.PixelHeight * scale;
+        int imageWidth = image.PixelSize.Width, imageHeight = image.PixelSize.Height;
+        double scale = Math.Min(1, Math.Min(Math.Max(1, PixelWidth - 80.0) / imageWidth, Math.Max(1, PixelHeight - 80.0) / imageHeight));
+        double width = imageWidth * scale, height = imageHeight * scale;
         double offset = 40 + (index % 5) * 24;
         double x = Math.Clamp(center?.X - width / 2 ?? offset, 0, Math.Max(0, PixelWidth - width));
         double y = Math.Clamp(center?.Y - height / 2 ?? offset, 0, Math.Max(0, PixelHeight - height));
-        return new WpfRect(x, y, width, height);
+        return new Rect(x, y, width, height);
     }
 
     private void InsertPreparedImages(List<AnnotationItem> prepared)
@@ -138,6 +140,7 @@ public sealed partial class EditorView
         RefreshMosaics();
         SetSelection(prepared);
         _tool = AnnotationTool.Select;
+        EnsureRenderCache();
         FinishMutation();
         UpdateCursor();
     }
@@ -151,16 +154,16 @@ public sealed partial class EditorView
             images = images.Where(_selection.Contains).ToList();
         if (images.Count == 0) return;
         const double padding = 40, gap = 28;
-        var placements = new List<WpfRect>();
+        var placements = new List<Rect>();
         double right = PixelWidth, bottom = PixelHeight;
         if (layout == CollageLayout.Horizontal)
         {
             double x = padding, available = Math.Max(1, PixelHeight - 2 * padding);
             foreach (AnnotationItem item in images)
             {
-                double scale = Math.Min(1, available / item.Image!.PixelHeight);
-                double width = item.Image.PixelWidth * scale, height = item.Image.PixelHeight * scale;
-                placements.Add(new WpfRect(x, padding, width, height));
+                double scale = Math.Min(1, available / item.Image!.PixelSize.Height);
+                double width = item.Image.PixelSize.Width * scale, height = item.Image.PixelSize.Height * scale;
+                placements.Add(new Rect(x, padding, width, height));
                 x += width + gap;
             }
             right = Math.Max(right, x - gap + padding);
@@ -175,17 +178,17 @@ public sealed partial class EditorView
                 double rowHeight = 0;
                 for (int column = 0; column < columns && row + column < images.Count; column++)
                 {
-                    BitmapSource image = images[row + column].Image!;
-                    double scale = Math.Min(1, cell / image.PixelWidth);
-                    double width = image.PixelWidth * scale, height = image.PixelHeight * scale;
-                    placements.Add(new WpfRect(padding + column * (cell + gap), y, width, height));
+                    Bitmap image = images[row + column].Image!;
+                    double scale = Math.Min(1, cell / image.PixelSize.Width);
+                    double width = image.PixelSize.Width * scale, height = image.PixelSize.Height * scale;
+                    placements.Add(new Rect(padding + column * (cell + gap), y, width, height));
                     rowHeight = Math.Max(rowHeight, height);
                 }
                 y += rowHeight + gap;
             }
             bottom = Math.Max(bottom, y - gap + padding);
         }
-        BitmapSource board = CreateBoard((int)Math.Ceiling(right), (int)Math.Ceiling(bottom));
+        Bitmap board = CreateBoard((int)Math.Ceiling(right), (int)Math.Ceiling(bottom));
         RememberMutation();
         for (int i = 0; i < images.Count; i++)
         {
@@ -206,7 +209,7 @@ public sealed partial class EditorView
         if (!IsCollage) return;
         if (_annotations.Any(item => item.Bounds.Right > width || item.Bounds.Bottom > height))
             throw new InvalidOperationException(I18n.T("物件超出新畫布範圍，請先縮小或移動物件。"));
-        BitmapSource board = CreateBoard(width, height);
+        Bitmap board = CreateBoard(width, height);
         if (width == PixelWidth && height == PixelHeight) return;
         RememberMutation();
         SetBoard(board);
@@ -218,10 +221,10 @@ public sealed partial class EditorView
     {
         if (!IsCollage || _annotations.Count == 0) return;
         PrepareObjectCommand();
-        WpfRect bounds = BoundsOf(_annotations);
-        BitmapSource board = CreateBoard((int)Math.Ceiling(bounds.Width + 80), (int)Math.Ceiling(bounds.Height + 80));
+        Rect bounds = BoundsOf(_annotations);
+        Bitmap board = CreateBoard((int)Math.Ceiling(bounds.Width + 80), (int)Math.Ceiling(bounds.Height + 80));
         RememberMutation();
-        foreach (AnnotationItem item in _annotations) item.Offset(new WpfVector(40 - bounds.Left, 40 - bounds.Top));
+        foreach (AnnotationItem item in _annotations) item.Offset(new Vector(40 - bounds.Left, 40 - bounds.Top));
         SetBoard(board);
         RefreshMosaics();
         FinishMutation();
@@ -245,13 +248,14 @@ public sealed partial class EditorView
         if (ImageCount + _selection.Count(item => item.Tool == AnnotationTool.Image) > MaximumImages)
             throw new InvalidOperationException(I18n.T("每份合圖最多可放入 24 張圖片。"));
         long pixels = _annotations.Concat(_annotations.Where(_selection.Contains))
-            .Where(item => item.Image is not null).Sum(item => (long)item.Image!.PixelWidth * item.Image.PixelHeight);
+            .Where(item => item.Image is not null).Sum(item => (long)item.Image!.PixelSize.Width * item.Image.PixelSize.Height);
         if (pixels > 80_000_000) throw new InvalidOperationException(I18n.T("圖片總尺寸過大，請減少張數或縮小原圖。"));
         var copies = _annotations.Where(_selection.Contains).Select(item => item.Clone()).ToList();
-        WpfVector offset = ClampOffset(BoundsOf(copies), new WpfVector(20, 20));
+        Vector offset = ClampOffset(BoundsOf(copies), new Vector(20, 20));
         foreach (AnnotationItem item in copies) item.Offset(offset);
         RememberMutation();
         _annotations.AddRange(copies);
+        EnsureRenderCache();
         SetSelection(copies);
         RefreshMosaics();
         FinishMutation();
@@ -262,8 +266,8 @@ public sealed partial class EditorView
         VerifyAccess();
         PrepareObjectCommand();
         if (_selection.Count == 0) return;
-        WpfVector delta = ClampOffset(BoundsOf(_selection), new WpfVector(x, y));
-        if (delta.LengthSquared < 0.0001) return;
+        Vector delta = ClampOffset(BoundsOf(_selection), new Vector(x, y));
+        if (delta.SquaredLength < 0.0001) return;
         RememberMutation();
         foreach (AnnotationItem item in _selection) item.Offset(delta);
         RefreshMosaics();
@@ -275,12 +279,12 @@ public sealed partial class EditorView
         VerifyAccess();
         PrepareObjectCommand();
         if (_selection.Count < 2) return;
-        WpfRect group = BoundsOf(_selection);
+        Rect group = BoundsOf(_selection);
         RememberMutation();
         foreach (AnnotationItem item in _selection)
         {
-            WpfRect bounds = item.Bounds;
-            WpfVector delta = alignment switch
+            Rect bounds = item.Bounds;
+            Vector delta = alignment switch
             {
                 ObjectAlignment.Left => new(group.Left - bounds.Left, 0),
                 ObjectAlignment.Center => new(group.Left + (group.Width - bounds.Width) / 2 - bounds.Left, 0),
@@ -301,15 +305,15 @@ public sealed partial class EditorView
         PrepareObjectCommand();
         if (_selection.Count < 3) return;
         var items = _selection.OrderBy(item => horizontal ? item.Bounds.Left : item.Bounds.Top).ToList();
-        WpfRect group = BoundsOf(items);
+        Rect group = BoundsOf(items);
         double total = items.Sum(item => horizontal ? item.Bounds.Width : item.Bounds.Height);
         double gap = ((horizontal ? group.Width : group.Height) - total) / (items.Count - 1);
         double position = horizontal ? group.Left : group.Top;
         RememberMutation();
         foreach (AnnotationItem item in items)
         {
-            WpfRect bounds = item.Bounds;
-            item.Offset(horizontal ? new WpfVector(position - bounds.Left, 0) : new WpfVector(0, position - bounds.Top));
+            Rect bounds = item.Bounds;
+            item.Offset(horizontal ? new Vector(position - bounds.Left, 0) : new Vector(0, position - bounds.Top));
             position += (horizontal ? bounds.Width : bounds.Height) + gap;
         }
         RefreshMosaics();
@@ -355,35 +359,93 @@ public sealed partial class EditorView
         EndPropertyEdit();
     }
 
-    private static BitmapSource CreateBoard(int width, int height)
+    private static Bitmap CreateBoard(int width, int height)
     {
         if (width < 80 || height < 80 || width > 16384 || height > 16384 || (long)width * height > 40_000_000)
             throw new InvalidOperationException(I18n.T("畫布過大，請改用網格排列或縮小圖片。"));
-        // An indexed white bitmap keeps large empty canvases and undo snapshots small.
-        var board = BitmapSource.Create(width, height, 96, 96, PixelFormats.Indexed1,
-            new BitmapPalette(new[] { Colors.White, Colors.White }), new byte[checked(((width + 7) / 8) * height)], (width + 7) / 8);
-        board.Freeze();
+        // A shared 16-bit white bitmap per size keeps large empty canvases and undo snapshots small.
+        if (Boards.TryGetValue((width, height), out var reference) && reference.TryGetTarget(out var cached))
+            return cached;
+        int stride = width * 2;
+        nuint bytes = checked((nuint)stride * (nuint)height);
+        Bitmap board;
+        unsafe
+        {
+            void* memory = NativeMemory.Alloc(bytes);
+            try
+            {
+                NativeMemory.Fill(memory, bytes, 0xFF);
+                board = new Bitmap(PixelFormat.Rgb565, AlphaFormat.Opaque, (IntPtr)memory, new PixelSize(width, height), ImageTools.Dpi, stride);
+            }
+            finally { NativeMemory.Free(memory); }
+        }
+        BoardImages.AddOrUpdate(board, BoardMarker);
+        foreach (var stale in Boards.Where(pair => !pair.Value.TryGetTarget(out _)).Select(pair => pair.Key).ToList())
+            Boards.Remove(stale);
+        Boards[(width, height)] = new WeakReference<Bitmap>(board);
         return board;
     }
 
-    private void SetBoard(BitmapSource image)
+    /// <summary>True for the blank white collage canvases created by <see cref="CreateBoard"/>.</summary>
+    private static bool IsBoard(Bitmap image) => BoardImages.TryGetValue(image, out _);
+
+    /// <summary>A restored collage canvas that is entirely white is replaced by the shared compact board.</summary>
+    private static Bitmap AsBoard(Bitmap image)
+    {
+        int width = image.PixelSize.Width, height = image.PixelSize.Height;
+        if (IsBoard(image) || width < 80 || height < 80 || width > 16384 || height > 16384 || (long)width * height > 40_000_000
+            || image.Format != PixelFormat.Bgra8888 || image.AlphaFormat is not (AlphaFormat.Premul or AlphaFormat.Opaque))
+            return image;
+        int rows = Math.Max(1, (1 << 20) / (width * 4));
+        var buffer = new byte[width * 4 * rows];
+        var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            for (int y = 0; y < height; y += rows)
+            {
+                int count = Math.Min(rows, height - y);
+                image.CopyPixels(new PixelRect(0, y, width, count), handle.AddrOfPinnedObject(), buffer.Length, width * 4);
+                var span = buffer.AsSpan(0, width * 4 * count);
+                if (image.AlphaFormat == AlphaFormat.Opaque)
+                {
+                    for (int index = 0; index < span.Length; index += 4)
+                        if (span[index] != 255 || span[index + 1] != 255 || span[index + 2] != 255) return image;
+                }
+                else if (span.IndexOfAnyExcept((byte)255) >= 0)
+                    return image;
+            }
+        }
+        catch (NotSupportedException)
+        {
+            return image;
+        }
+        finally { handle.Free(); }
+        return CreateBoard(width, height);
+    }
+
+    private void SetBoard(Bitmap image)
     {
         _image = image;
         _pixelSource = null;
-        _surface.Width = _documentLayer.Width = image.PixelWidth;
-        _surface.Height = _documentLayer.Height = image.PixelHeight;
-        _imageLabel.Text = $"{image.PixelWidth:N0} × {image.PixelHeight:N0} px";
-        _surface.InvalidateVisual();
+        SizeDocument(image);
     }
 
-    private static WpfRect BoundsOf(IEnumerable<AnnotationItem> items)
+    private static Rect BoundsOf(IEnumerable<AnnotationItem> items)
     {
-        WpfRect bounds = WpfRect.Empty;
-        foreach (AnnotationItem item in items) bounds.Union(item.Bounds);
-        return bounds;
+        // WPF's Rect.Union also grows to include zero-size rectangles (single points).
+        double left = double.PositiveInfinity, top = double.PositiveInfinity, right = double.NegativeInfinity, bottom = double.NegativeInfinity;
+        foreach (AnnotationItem item in items)
+        {
+            Rect bounds = item.Bounds;
+            left = Math.Min(left, bounds.Left);
+            top = Math.Min(top, bounds.Top);
+            right = Math.Max(right, bounds.Right);
+            bottom = Math.Max(bottom, bounds.Bottom);
+        }
+        return left <= right && top <= bottom ? new Rect(new Point(left, top), new Point(right, bottom)) : default;
     }
 
-    private WpfVector ClampOffset(WpfRect bounds, WpfVector delta) => new(
+    private Vector ClampOffset(Rect bounds, Vector delta) => new(
         Math.Clamp(delta.X, -bounds.Left, Math.Max(-bounds.Left, PixelWidth - bounds.Right)),
         Math.Clamp(delta.Y, -bounds.Top, Math.Max(-bounds.Top, PixelHeight - bounds.Bottom)));
 
@@ -395,7 +457,7 @@ public sealed partial class EditorView
         _selected = selected.LastOrDefault();
         _hoverHandle = SelectionHandle.None;
         RaiseSelectionChanged();
-        _surface.InvalidateVisual();
+        _overlay.InvalidateVisual();
     }
 
     private void RefreshMosaics()
@@ -404,7 +466,7 @@ public sealed partial class EditorView
             PrepareMosaic(item);
     }
 
-    private void ShowObjectMenu(WpfPoint point)
+    private void ShowObjectMenu(Point point)
     {
         PrepareObjectCommand();
         AnnotationItem? item = _annotations.LastOrDefault(candidate => candidate.HitTest(point, 6 / _zoom));
@@ -438,15 +500,14 @@ public sealed partial class EditorView
         Add("靠下對齊", () => AlignSelection(ObjectAlignment.Bottom), SelectionCount > 1);
         Add("水平平均分布", () => DistributeSelection(true), SelectionCount > 2);
         Add("垂直平均分布", () => DistributeSelection(false), SelectionCount > 2);
-        menu.PlacementTarget = _viewport;
-        menu.IsOpen = true;
+        menu.Open(_viewport);
     }
 
-    private WpfRect ResizeImage(WpfRect original, SelectionHandle handle, WpfVector delta)
+    private Rect ResizeImage(Rect original, SelectionHandle handle, Vector delta)
     {
         bool left = handle is SelectionHandle.TopLeft or SelectionHandle.BottomLeft;
         bool top = handle is SelectionHandle.TopLeft or SelectionHandle.TopRight;
-        WpfPoint anchor = new(left ? original.Right : original.Left, top ? original.Bottom : original.Top);
+        Point anchor = new(left ? original.Right : original.Left, top ? original.Bottom : original.Top);
         double desiredWidth = original.Width + (left ? -delta.X : delta.X);
         double desiredHeight = original.Height + (top ? -delta.Y : delta.Y);
         double ratio = original.Width / original.Height;
@@ -457,6 +518,6 @@ public sealed partial class EditorView
         double maxScale = Math.Min(maxWidth / original.Width, maxHeight / original.Height);
         scale = Math.Clamp(scale, Math.Min(2 / Math.Min(original.Width, original.Height), maxScale), maxScale);
         double width = original.Width * scale, height = width / ratio;
-        return new WpfRect(left ? anchor.X - width : anchor.X, top ? anchor.Y - height : anchor.Y, width, height);
+        return new Rect(left ? anchor.X - width : anchor.X, top ? anchor.Y - height : anchor.Y, width, height);
     }
 }

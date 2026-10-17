@@ -1,15 +1,16 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Windows.Storage;
-using FileAttributes = System.IO.FileAttributes;
-using Windows.Storage.FileProperties;
 using SnipFlow.Video;
 
 namespace SnipFlow.Services;
 
 /// <summary>Recent MP4 references and owned thumbnails. Original videos are never deleted here.</summary>
-public static class RecordingHistoryStore
+/// <remarks>
+/// Thumbnails come from the Windows shell (StorageFile.GetThumbnailAsync) or, on Linux, from one
+/// ffmpeg frame. Either way they are re-encoded as SnipFlow's own PNG in the VideoHistory folder.
+/// </remarks>
+public static partial class RecordingHistoryStore
 {
     private const int MaximumEntries = 200;
     private const int MaximumIndexBytes = 2 * 1024 * 1024;
@@ -22,7 +23,7 @@ public static class RecordingHistoryStore
         MaxDepth = 16,
         Converters = { new BoundedReferencesConverter(), new BoundedStringConverter() }
     };
-    private static readonly BitmapSource Placeholder = CreatePlaceholder();
+    private static readonly Bitmap Placeholder = CreatePlaceholder();
 
     public static async Task<IReadOnlyList<HistoryItem>> LoadAsync(CancellationToken cancellationToken = default)
     {
@@ -81,7 +82,7 @@ public static class RecordingHistoryStore
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested) { SettingsStore.Log(exception); }
         cancellationToken.ThrowIfCancellationRequested();
-        var thumbnail = await CreateThumbnailAsync(source, cancellationToken).ConfigureAwait(false) ?? Placeholder;
+        var thumbnail = await CreateThumbnailAsync(source, duration, cancellationToken).ConfigureAwait(false) ?? Placeholder;
         var png = await Task.Run(() => EncodeThumbnail(thumbnail), cancellationToken).ConfigureAwait(false);
 
         await Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -93,7 +94,7 @@ public static class RecordingHistoryStore
                 if (!SettingsStore.Current.KeepHistory) return;
                 var directory = SafeDirectory(create: true);
                 var before = ReadIndex(directory);
-                var existing = before.FirstOrDefault(entry => entry.SourcePath.Equals(source, StringComparison.OrdinalIgnoreCase));
+                var existing = before.FirstOrDefault(entry => entry.SourcePath.Equals(source, PlatformInfo.PathComparison));
                 var id = existing?.Id ?? Guid.NewGuid().ToString("N");
                 var entry = new VideoReference(id, source, DateTimeOffset.UtcNow, duration?.Ticks);
                 var limit = Math.Clamp(SettingsStore.Current.HistoryLimit, 10, MaximumEntries);
@@ -121,7 +122,7 @@ public static class RecordingHistoryStore
                 var directory = SafeDirectory(create: false);
                 var entries = ReadIndex(directory);
                 var entry = entries.FirstOrDefault(entry => entry.Id == item.RecordingId
-                    && entry.SourcePath.Equals(item.Path, StringComparison.OrdinalIgnoreCase));
+                    && entry.SourcePath.Equals(item.Path, PlatformInfo.PathComparison));
                 if (entry is null) return false;
                 WriteIndex(directory, entries.Where(value => value.Id != entry.Id).ToArray());
                 TryDeleteThumbnail(directory, entry.Id);
@@ -156,56 +157,27 @@ public static class RecordingHistoryStore
         finally { Gate.Release(); }
     }
 
-    private static async Task<BitmapSource?> CreateThumbnailAsync(string path, CancellationToken cancellationToken)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(8));
-        try
-        {
-            var file = await VideoNativeOperation.AwaitAsync(StorageFile.GetFileFromPathAsync(path), timeout.Token).ConfigureAwait(false);
-            using var thumbnail = await VideoNativeOperation.AwaitAsync(file.GetThumbnailAsync(ThumbnailMode.VideosView, 240),
-                timeout.Token).ConfigureAwait(false);
-            if (thumbnail is null || thumbnail.Type != ThumbnailType.Image || thumbnail.Size == 0
-                || thumbnail.Size > MaximumThumbnailBytes) return null;
-            using var stream = thumbnail.AsStreamForRead();
-            using var bytes = new MemoryStream();
-            var buffer = new byte[8192];
-            int read;
-            while (true)
-            {
-                timeout.Token.ThrowIfCancellationRequested();
-                // Keep the WinRT stream alive until this read actually completes.
-                read = await stream.ReadAsync(buffer, CancellationToken.None).ConfigureAwait(false);
-                timeout.Token.ThrowIfCancellationRequested();
-                if (read == 0) break;
-                if (bytes.Length + read > MaximumThumbnailBytes) return null;
-                await bytes.WriteAsync(buffer.AsMemory(0, read), timeout.Token).ConfigureAwait(false);
-            }
-            var data = bytes.ToArray();
-            return await Task.Run(() => DecodeThumbnail(data), timeout.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-        { SettingsStore.Log(exception); return null; }
-    }
+    /// <summary>A frame of the video scaled to at most 240 pixels, or null when none can be read in time.</summary>
+    private static partial Task<Bitmap?> CreateThumbnailAsync(string path, TimeSpan? duration, CancellationToken cancellationToken);
 
-    private static BitmapSource DecodeThumbnail(byte[] bytes)
+    private static Bitmap DecodeThumbnail(byte[] bytes)
     {
         using var stream = new MemoryStream(bytes, writable: false);
-        var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.OnDemand);
-        var frame = decoder.Frames[0];
-        if (frame.PixelWidth <= 0 || frame.PixelHeight <= 0 || frame.PixelWidth > 2048 || frame.PixelHeight > 2048)
-            throw new FileFormatException(I18n.T("錄影縮圖無法讀取。"));
-        var scale = Math.Min(1d, 240d / Math.Max(frame.PixelWidth, frame.PixelHeight));
-        stream.Position = 0;
-        var image = new BitmapImage();
-        image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad; image.StreamSource = stream;
-        image.DecodePixelWidth = Math.Max(1, (int)Math.Round(frame.PixelWidth * scale));
-        image.DecodePixelHeight = Math.Max(1, (int)Math.Round(frame.PixelHeight * scale));
-        image.EndInit(); image.Freeze(); return image;
+        Bitmap frame;
+        try { frame = new Bitmap(stream); }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        { throw new InvalidDataException(I18n.T("錄影縮圖無法讀取。"), exception); }
+        var size = frame.PixelSize;
+        if (size.Width <= 0 || size.Height <= 0 || size.Width > 2048 || size.Height > 2048)
+        { frame.Dispose(); throw new InvalidDataException(I18n.T("錄影縮圖無法讀取。")); }
+        var scale = Math.Min(1d, 240d / Math.Max(size.Width, size.Height));
+        if (scale >= 1) return frame;
+        using (frame)
+            return ImageTools.Scale(frame, new PixelSize(Math.Max(1, (int)Math.Round(size.Width * scale)),
+                Math.Max(1, (int)Math.Round(size.Height * scale))));
     }
 
-    private static BitmapSource? ReadThumbnail(string directory, string id)
+    private static Bitmap? ReadThumbnail(string directory, string id)
     {
         try
         {
@@ -216,13 +188,11 @@ public static class RecordingHistoryStore
         catch (Exception exception) when (IsFileError(exception)) { SettingsStore.Log(exception); return null; }
     }
 
-    private static byte[] EncodeThumbnail(BitmapSource image)
+    private static byte[] EncodeThumbnail(Bitmap image)
     {
-        using var stream = new MemoryStream();
-        var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(image, null, null, null)); encoder.Save(stream);
-        if (stream.Length > MaximumThumbnailBytes) throw new IOException(I18n.T("錄影縮圖過大，已停止儲存。"));
-        return stream.ToArray();
+        var bytes = ImageTools.EncodePng(image);
+        if (bytes.Length > MaximumThumbnailBytes) throw new IOException(I18n.T("錄影縮圖過大，已停止儲存。"));
+        return bytes;
     }
 
     private static IReadOnlyList<VideoReference> ReadIndex(string directory)
@@ -317,7 +287,7 @@ public static class RecordingHistoryStore
             throw new IOException(I18n.T("錄影歷史檔案不在允許的資料夾內。"));
         ValidateDirectoryChain(directory);
         var path = Path.GetFullPath(Path.Combine(directory, name));
-        if (!string.Equals(Path.GetDirectoryName(path), directory, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(Path.GetDirectoryName(path), directory, PlatformInfo.PathComparison))
             throw new IOException(I18n.T("錄影歷史檔案不在允許的資料夾內。"));
         if (TryAttributes(path, out var attributes) && (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
             throw new IOException(I18n.T("錄影歷史資料不是一般檔案，已停止操作。"));
@@ -345,7 +315,8 @@ public static class RecordingHistoryStore
             || !Path.GetExtension(path).Equals(".mp4", StringComparison.OrdinalIgnoreCase))
             throw new IOException(I18n.T("錄影歷史只能參照完整路徑的 MP4 檔案。"));
         var full = Path.GetFullPath(path);
-        if (Path.GetFileName(full).Contains(':')) throw new IOException(I18n.T("錄影歷史檔案路徑無效。"));
+        // A colon selects an NTFS alternate data stream; on Linux it is an ordinary file name character.
+        if (PlatformInfo.IsWindows && Path.GetFileName(full).Contains(':')) throw new IOException(I18n.T("錄影歷史檔案路徑無效。"));
         return full;
     }
 
@@ -355,14 +326,14 @@ public static class RecordingHistoryStore
         && name.EndsWith(".png", StringComparison.Ordinal) && IsId(name.Substring(10, 32));
     private static bool IsTemporaryName(string name) => name.Length == 50 && name.StartsWith("video-history-", StringComparison.Ordinal)
         && name.EndsWith(".tmp", StringComparison.Ordinal) && IsId(name.Substring(14, 32));
-    private static bool IsFileError(Exception exception) => exception is IOException or UnauthorizedAccessException or FileFormatException
+    private static bool IsFileError(Exception exception) => exception is IOException or UnauthorizedAccessException or InvalidDataException
         or System.Runtime.InteropServices.COMException
         or ArgumentException or NotSupportedException or System.Security.SecurityException;
     private static string FormatDuration(TimeSpan duration) => duration.TotalHours >= 1
         ? ((int)duration.TotalHours).ToString(CultureInfo.InvariantCulture) + duration.ToString(@"\:mm\:ss", CultureInfo.InvariantCulture)
         : duration.ToString(@"mm\:ss", CultureInfo.InvariantCulture);
 
-    private static BitmapSource CreatePlaceholder()
+    private static Bitmap CreatePlaceholder()
     {
         const int width = 240, height = 135, stride = width * 4;
         var pixels = new byte[stride * height];
@@ -374,8 +345,7 @@ public static class RecordingHistoryStore
                 pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = play ? (byte)220 : (byte)32;
                 pixels[offset + 3] = 255;
             }
-        var image = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
-        image.Freeze(); return image;
+        return ImageTools.FromBgra(pixels, width, height);
     }
 
     private sealed record VideoReference(string Id, string SourcePath, DateTimeOffset RecordedAtUtc, long? DurationTicks);

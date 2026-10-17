@@ -6,7 +6,7 @@ namespace SnipFlow;
 
 public partial class MainWindow
 {
-    async void CodeClick(object sender, RoutedEventArgs e) => await StartCodeCaptureAsync();
+    async void CodeClick(object? sender, RoutedEventArgs e) => await StartCodeCaptureAsync();
 
     public async Task StartCodeImageAsync()
     {
@@ -17,11 +17,11 @@ public partial class MainWindow
             string? initialCode = null;
             try
             {
-                if (Clipboard.ContainsText(TextDataFormat.UnicodeText)) initialCode = Clipboard.GetText(TextDataFormat.UnicodeText);
-                else if (Clipboard.ContainsText(TextDataFormat.Text)) initialCode = Clipboard.GetText(TextDataFormat.Text);
+                if (Clipboard is { } clipboard) initialCode = await ClipboardImageService.ReadTextAsync(clipboard);
             }
-            catch (ExternalException)
+            catch (Exception ex) when (ex is ExternalException or IOException or InvalidOperationException or TimeoutException)
             {
+                SettingsStore.Log(ex);
                 SetStatus("剪貼簿暫時無法讀取，請在視窗內貼上程式碼。");
             }
             if (initialCode?.Length > CodeImageLimits.MaxCharacters)
@@ -45,11 +45,10 @@ public partial class MainWindow
             RefreshDocumentState();
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             Show();
-            var composer = new CodeImageWindow(initialCode) { Owner = this };
-            if (composer.ShowDialog() != true || composer.Result is not { } image) return;
+            var composer = new CodeImageWindow(initialCode);
+            if (composer.ShowModal(this) != true || composer.Result is not { } image) return;
             if (isClosed || expectedGeneration != documentGeneration || appendToCollage != Editor.IsCollage)
                 throw new InvalidOperationException(I18n.T("目前文件已變更，請重新加入程式碼長圖。"));
-            if (!image.IsFrozen) image.Freeze();
 
             if (appendToCollage)
             {
@@ -64,7 +63,7 @@ public partial class MainWindow
             if (SettingsStore.Current.CopyAfterCapture)
             {
                 try { await CopyImageAsync(image); copied = true; }
-                catch (ExternalException ex)
+                catch (Exception ex) when (ex is ExternalException or InvalidOperationException)
                 {
                     SettingsStore.Log(ex);
                     SetStatus("程式碼長圖已開啟，但複製失敗。");

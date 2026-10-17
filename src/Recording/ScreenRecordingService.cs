@@ -1,12 +1,15 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
-using ScreenRecorderLib;
-using DrawingRectangle = System.Drawing.Rectangle;
 
 namespace SnipFlow.Recording;
 
 /// <summary>Records the selected physical desktop rectangle; it never sends video to a server.</summary>
-public sealed class ScreenRecordingService : IAsyncDisposable
+/// <remarks>
+/// The session logic is shared. The recorder itself is platform specific: Windows uses ScreenRecorderLib
+/// (Windows.Graphics.Capture and Media Foundation, <c>ScreenRecordingService.Windows.cs</c>); Linux runs ffmpeg
+/// with x11grab on X11 or xdg-desktop-portal ScreenCast frames on Wayland, and PulseAudio / PipeWire audio
+/// (<c>ScreenRecordingService.Linux.cs</c>, <c>Platform/Linux/Recording</c>).
+/// </remarks>
+public sealed partial class ScreenRecordingService : IAsyncDisposable
 {
     private static readonly SemaphoreSlim ActiveRecordingGate = new(1, 1);
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(20);
@@ -15,7 +18,7 @@ public sealed class ScreenRecordingService : IAsyncDisposable
     private readonly object _sync = new();
     private readonly Func<string, string> _translate;
     private readonly Stopwatch _elapsed = new();
-    private Recorder? _recorder;
+    private ScreenRecorderBackend? _recorder;
     private TaskCompletionSource<bool>? _started;
     private TaskCompletionSource<string>? _nativeCompletion;
     private Task<string?>? _session;
@@ -26,21 +29,33 @@ public sealed class ScreenRecordingService : IAsyncDisposable
     private bool _overwriteExisting;
     private string? _temporaryPath;
     private string? _outputPath;
+    private TimeSpan _finalizeTimeout = FinalizeTimeout;
+    private long _elapsedOffsetTicks;
 
     public ScreenRecordingService(Func<string, string>? translate = null)
         => _translate = translate ?? (text => text);
 
     /// <summary>May be raised on a native worker thread; GUI callers should dispatch it.</summary>
     public event EventHandler<RecordingState>? StateChanged;
+
+    /// <summary>
+    /// Raised (possibly on a worker thread) when the captured source ends on its own while recording, for
+    /// example when the user stops screen sharing in a Wayland session. The recorder keeps the last frame
+    /// until <see cref="StopAsync"/> is called, so the video recorded so far can still be saved.
+    /// </summary>
+    public event EventHandler<string>? Interrupted;
+
     public RecordingState State => _state;
     public bool IsActive => _hasLease;
-    public TimeSpan Elapsed => _elapsed.Elapsed;
+    public TimeSpan Elapsed => _elapsed.Elapsed + TimeSpan.FromTicks(Interlocked.Read(ref _elapsedOffsetTicks));
     public string? LastError { get; private set; }
+    /// <summary>A non-fatal note about the running recording (for example "recording without sound"), or null.</summary>
+    public string? Notice { get; private set; }
     public string? ResultPath { get; private set; }
-    public DrawingRectangle CaptureBounds { get; private set; }
+    public PixelRect CaptureBounds { get; private set; }
     public Task<string?> Completion => _session ?? Task.FromResult<string?>(null);
 
-    public static DrawingRectangle NormalizeBounds(DrawingRectangle bounds, Func<string, string>? translate = null)
+    public static PixelRect NormalizeBounds(PixelRect bounds, Func<string, string>? translate = null)
     {
         var text = translate ?? (value => value);
         var width = bounds.Width & ~1;
@@ -50,11 +65,11 @@ public sealed class ScreenRecordingService : IAsyncDisposable
         if (width > 8192 || height > 8192 || (long)width * height > 16_777_216)
             throw new ArgumentOutOfRangeException(nameof(bounds), text("錄影範圍過大，請選取較小的範圍。"));
         // Trim the right/bottom edge by at most one pixel; never capture outside the selection.
-        return new DrawingRectangle(bounds.X, bounds.Y, width, height);
+        return new PixelRect(bounds.X, bounds.Y, width, height);
     }
 
     public async Task StartAsync(
-        DrawingRectangle targetPhysicalBounds,
+        PixelRect targetPhysicalBounds,
         string outputPath,
         RecordingOptions? options = null,
         CancellationToken cancellationToken = default)
@@ -66,12 +81,7 @@ public sealed class ScreenRecordingService : IAsyncDisposable
             if (_hasLease || _session is { IsCompleted: false })
                 throw new InvalidOperationException(T("已有錄影正在進行。"));
             cancellationToken.ThrowIfCancellationRequested();
-            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
-                throw new PlatformNotSupportedException(T("螢幕錄影需要 Windows 10 2004 或更新版本。"));
-            if (RuntimeInformation.ProcessArchitecture != Architecture.X64)
-                throw new PlatformNotSupportedException(T("請使用 SnipFlow 的 Windows x64 版本錄影。"));
-            if (!Windows.Graphics.Capture.GraphicsCaptureSession.IsSupported())
-                throw new PlatformNotSupportedException(T("目前 Windows 工作階段不支援螢幕錄影。請確認顯示卡驅動程式及遠端桌面設定。"));
+            EnsurePlatformSupported();
             if (!await ActiveRecordingGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
                 throw new InvalidOperationException(T("已有錄影正在進行。"));
 
@@ -80,10 +90,13 @@ public sealed class ScreenRecordingService : IAsyncDisposable
             options ??= new RecordingOptions();
             ResultPath = null;
             LastError = null;
+            Notice = null;
             _elapsed.Reset();
+            Interlocked.Exchange(ref _elapsedOffsetTicks, 0);
             _session = null;
             _temporaryPath = null;
             _outputPath = null;
+            _finalizeTimeout = FinalizeTimeout;
             _started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _nativeCompletion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_sync)
@@ -102,11 +115,14 @@ public sealed class ScreenRecordingService : IAsyncDisposable
             // leaving this empty file in place makes its Media Foundation stream fail with E_FAIL.
             using (new FileStream(_temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
             File.Delete(_temporaryPath);
-            var recorderOptions = CreateRecorderOptions(CaptureBounds, options);
-            var recorder = await Task.Run(() => Recorder.CreateRecorder(recorderOptions), cancellationToken).ConfigureAwait(false);
-            recorder.OnStatusChanged += NativeStatusChanged;
-            recorder.OnRecordingComplete += NativeCompleted;
-            recorder.OnRecordingFailed += NativeFailed;
+            // The platform prepares its sources here (on Wayland the desktop may ask which screen to share).
+            var recorder = await CreateRecorderAsync(CaptureBounds, options, cancellationToken).ConfigureAwait(false);
+            Notice = recorder.Notice;
+            recorder.Recording += NativeRecording;
+            recorder.Finishing += NativeFinishing;
+            recorder.Completed += NativeCompleted;
+            recorder.Failed += NativeFailed;
+            recorder.Interrupted += NativeInterrupted;
             lock (_sync) _recorder = recorder;
             _session = CompleteSessionAsync(recorder);
             try
@@ -181,76 +197,17 @@ public sealed class ScreenRecordingService : IAsyncDisposable
 
     public async ValueTask DisposeAsync() => await CancelAsync().ConfigureAwait(false);
 
-    private RecorderOptions CreateRecorderOptions(DrawingRectangle target, RecordingOptions options)
-    {
-        var sources = new List<RecordingSourceBase>();
-        foreach (var screen in System.Windows.Forms.Screen.AllScreens)
-        {
-            var intersection = DrawingRectangle.Intersect(target, screen.Bounds);
-            if (intersection.Width <= 0 || intersection.Height <= 0)
-                continue;
-            sources.Add(new DisplayRecordingSource(screen.DeviceName)
-            {
-                RecorderApi = RecorderApi.WindowsGraphicsCapture,
-                IsCursorCaptureEnabled = options.CaptureCursor,
-                SourceRect = new ScreenRect(intersection.X - screen.Bounds.X, intersection.Y - screen.Bounds.Y,
-                    intersection.Width, intersection.Height),
-                OutputSize = new ScreenSize(intersection.Width, intersection.Height),
-                Position = new ScreenPoint(intersection.X - target.X, intersection.Y - target.Y),
-                AnchorPoint = Anchor.TopLeft,
-                Stretch = StretchMode.None
-            });
-        }
-        if (sources.Count == 0)
-            throw new InvalidOperationException(T("選取範圍不在任何可錄製的螢幕內，請重新框選。"));
+    /// <summary>Throws <see cref="PlatformNotSupportedException"/> when this desktop cannot record.</summary>
+    private partial void EnsurePlatformSupported();
 
-        var audio = new AudioOptions
-        {
-            IsAudioEnabled = options.SystemAudio || options.Microphone,
-            Channels = AudioChannels.Stereo,
-            Bitrate = AudioBitrate.bitrate_128kbps
-        };
-        if (options.SystemAudio)
-            audio.AudioSources.Add(LoopbackAudioSource.Default
-                ?? throw new InvalidOperationException(T("找不到系統聲音輸出裝置。請連接喇叭或耳機，或關閉系統聲音。")));
-        if (options.Microphone)
-            audio.AudioSources.Add(CaptureAudioSource.Default
-                ?? throw new InvalidOperationException(T("找不到麥克風。請連接麥克風並允許桌面應用程式存取，或關閉麥克風。")));
+    /// <summary>Creates the platform recorder for <paramref name="target"/>; it does not record until <see cref="ScreenRecorderBackend.Record"/>.</summary>
+    private partial Task<ScreenRecorderBackend> CreateRecorderAsync(PixelRect target, RecordingOptions options,
+        CancellationToken cancellationToken);
 
-        return new RecorderOptions
-        {
-            SourceOptions = new SourceOptions { RecordingSources = sources },
-            OutputOptions = new OutputOptions
-            {
-                RecorderMode = RecorderMode.Video,
-                OutputFrameSize = new ScreenSize(target.Width, target.Height),
-                SourceRect = new ScreenRect(0, 0, target.Width, target.Height),
-                Stretch = StretchMode.None
-            },
-            AudioOptions = audio,
-            LogOptions = new LogOptions
-            {
-                IsLogEnabled = !string.IsNullOrWhiteSpace(options.DiagnosticLogPath),
-                LogFilePath = options.DiagnosticLogPath,
-                LogSeverityLevel = LogLevel.Trace
-            },
-            MouseOptions = new MouseOptions { IsMousePointerEnabled = options.CaptureCursor, IsMouseClicksDetected = false },
-            VideoEncoderOptions = new VideoEncoderOptions
-            {
-                Framerate = 30,
-                IsFixedFramerate = true,
-                IsThrottlingDisabled = false,
-                IsHardwareEncodingEnabled = options.HardwareEncoding,
-                IsMp4FastStartEnabled = true,
-                IsFragmentedMp4Enabled = false,
-                Quality = 80,
-                Bitrate = (int)Math.Clamp((long)target.Width * target.Height * 5, 3_000_000, 18_000_000),
-                Encoder = new H264VideoEncoder { EncoderProfile = H264Profile.Main, BitrateMode = H264BitrateControlMode.UnconstrainedVBR }
-            }
-        };
-    }
+    /// <summary>Platform-specific wording for recorder load failures, or null to use the exception message.</summary>
+    private partial string? DescribePlatformError(Exception exception);
 
-    private async Task<string?> CompleteSessionAsync(Recorder recorder)
+    private async Task<string?> CompleteSessionAsync(ScreenRecorderBackend recorder)
     {
         Exception? failure = null;
         string? result = null;
@@ -261,9 +218,11 @@ public sealed class ScreenRecordingService : IAsyncDisposable
         lock (_sync) _recorder = null;
         try
         {
-            recorder.OnStatusChanged -= NativeStatusChanged;
-            recorder.OnRecordingComplete -= NativeCompleted;
-            recorder.OnRecordingFailed -= NativeFailed;
+            recorder.Recording -= NativeRecording;
+            recorder.Finishing -= NativeFinishing;
+            recorder.Completed -= NativeCompleted;
+            recorder.Failed -= NativeFailed;
+            recorder.Interrupted -= NativeInterrupted;
             await Task.Run(recorder.Dispose).ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -310,7 +269,7 @@ public sealed class ScreenRecordingService : IAsyncDisposable
 
     private async Task<string?> AwaitSessionAsync(CancellationToken cancellationToken)
     {
-        try { return await _session!.WaitAsync(FinalizeTimeout, cancellationToken).ConfigureAwait(false); }
+        try { return await _session!.WaitAsync(_finalizeTimeout, cancellationToken).ConfigureAwait(false); }
         catch (Exception exception) when (exception is TimeoutException or OperationCanceledException)
         {
             lock (_sync) { _discardRequested = true; _commitRequested = false; }
@@ -350,33 +309,39 @@ public sealed class ScreenRecordingService : IAsyncDisposable
                 return;
             if (_state is RecordingState.Starting or RecordingState.Recording)
                 SetState(RecordingState.Finishing);
+            // Linux recorders may need longer to finalize a long recording (moving the MP4 index to the front).
+            _finalizeTimeout = _recorder.FinalizeTimeout ?? FinalizeTimeout;
             _recorder.Stop();
         }
     }
 
-    private void NativeStatusChanged(object? sender, RecordingStatusEventArgs args)
+    private void NativeRecording(object? sender, TimeSpan alreadyRecorded)
     {
-        if (args.Status == RecorderStatus.Recording)
-        {
-            _elapsed.Start();
-            SetState(RecordingState.Recording);
-            _started?.TrySetResult(true);
-        }
-        else if (args.Status == RecorderStatus.Finishing)
-        {
-            _elapsed.Stop();
-            SetState(RecordingState.Finishing);
-        }
+        Interlocked.Exchange(ref _elapsedOffsetTicks, alreadyRecorded.Ticks);
+        _elapsed.Start();
+        SetState(RecordingState.Recording);
+        _started?.TrySetResult(true);
     }
 
-    private void NativeCompleted(object? sender, RecordingCompleteEventArgs args)
-        => _nativeCompletion?.TrySetResult(args.FilePath);
-
-    private void NativeFailed(object? sender, RecordingFailedEventArgs args)
+    private void NativeFinishing(object? sender, EventArgs args)
     {
-        var exception = new InvalidOperationException(T("錄影失敗，請檢查顯示卡、音訊裝置及儲存位置。") + " " + args.Error);
+        _elapsed.Stop();
+        SetState(RecordingState.Finishing);
+    }
+
+    private void NativeCompleted(object? sender, string filePath)
+        => _nativeCompletion?.TrySetResult(filePath);
+
+    private void NativeFailed(object? sender, Exception exception)
+    {
         _started?.TrySetException(exception);
         _nativeCompletion?.TrySetException(exception);
+    }
+
+    private void NativeInterrupted(object? sender, string message)
+    {
+        if (_state == RecordingState.Recording)
+            Interrupted?.Invoke(this, message);
     }
 
     private string PrepareOutputPath(string path, bool overwriteExisting)
@@ -414,12 +379,46 @@ public sealed class ScreenRecordingService : IAsyncDisposable
         StateChanged?.Invoke(this, state);
     }
 
-    private string DescribeError(Exception exception)
-    {
-        if (exception is DllNotFoundException or BadImageFormatException or FileLoadException)
-            return T("錄影元件無法載入。請安裝 Visual C++ 2015–2022 x64 執行階段並重新開啟 SnipFlow。") + " " + exception.Message;
-        return exception.Message;
-    }
+    private string DescribeError(Exception exception) => DescribePlatformError(exception) ?? exception.Message;
 
     private string T(string text) => _translate(text);
+}
+
+/// <summary>
+/// One platform recording behind <see cref="ScreenRecordingService"/>. Like ScreenRecorderLib's native callbacks,
+/// its events may be raised on worker threads, and <see cref="Dispose"/> joins the workers, so it must not be
+/// called from one of these events.
+/// </summary>
+internal abstract class ScreenRecorderBackend
+{
+    /// <summary>Frames are being written. The argument is the media time already recorded when this is raised.</summary>
+    internal event EventHandler<TimeSpan>? Recording;
+    /// <summary>The recorder stopped collecting and is finalizing the file.</summary>
+    internal event EventHandler? Finishing;
+    /// <summary>The file is complete. The argument is its path.</summary>
+    internal event EventHandler<string>? Completed;
+    internal event EventHandler<Exception>? Failed;
+    /// <summary>The source ended on its own (translated message); the recorder keeps running until <see cref="Stop"/>.</summary>
+    internal event EventHandler<string>? Interrupted;
+
+    /// <summary>A non-fatal, translated note about this recording (for example missing sound), or null.</summary>
+    internal string? Notice { get; init; }
+
+    /// <summary>How long a requested stop may take to finalize, or null for the default.</summary>
+    internal virtual TimeSpan? FinalizeTimeout => null;
+
+    /// <summary>Starts recording into <paramref name="path"/>; <see cref="Recording"/> follows once frames flow.</summary>
+    internal abstract void Record(string path);
+
+    /// <summary>Requests a graceful stop without blocking; <see cref="Completed"/> or <see cref="Failed"/> follows.</summary>
+    internal abstract void Stop();
+
+    /// <summary>Releases native resources and joins workers; stops (or kills) anything still running.</summary>
+    internal abstract void Dispose();
+
+    protected void OnRecording(TimeSpan alreadyRecorded) => Recording?.Invoke(this, alreadyRecorded);
+    protected void OnFinishing() => Finishing?.Invoke(this, EventArgs.Empty);
+    protected void OnCompleted(string path) => Completed?.Invoke(this, path);
+    protected void OnFailed(Exception exception) => Failed?.Invoke(this, exception);
+    protected void OnInterrupted(string message) => Interrupted?.Invoke(this, message);
 }

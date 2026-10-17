@@ -1,29 +1,32 @@
 using System.ComponentModel;
 using System.Globalization;
-using System.Windows.Input;
-using System.Windows.Interop;
-using System.Windows.Threading;
+using Avalonia.Input;
+using Avalonia.Media.Immutable;
 using SnipFlow.Capture;
 using SnipFlow.Services;
-using DrawingRectangle = System.Drawing.Rectangle;
-using WpfPoint = System.Windows.Point;
 
 namespace SnipFlow.Scroll;
 
 /// <summary>Selects a physical pixel boundary on an already captured region.</summary>
-public sealed class BoundaryPickWindow : Window
+/// <remarks>
+/// The snapshot normally has exactly the region's pixels. Wayland captures keep the compositor
+/// resolution, which can exceed the desktop rectangle on scaled desktops; rows are then mapped by the
+/// ratio, and <see cref="SelectedPixel"/> always counts snapshot rows.
+/// </remarks>
+public sealed class BoundaryPickWindow : DialogWindow
 {
-    private static readonly Brush MaskBrush = FrozenBrush(Color.FromArgb(142, 16, 16, 16));
-    private static Brush PanelBrush => ThemeService.Brush("OverlayPanel");
-    private static Brush AccentBrush => ThemeService.Brush("SelectionHandle");
-    private static Brush MutedBrush => ThemeService.Brush("OverlayMuted");
-    private readonly DrawingRectangle _physicalBounds;
-    private readonly BitmapSource _snapshot;
+    private static readonly IBrush MaskBrush = new ImmutableSolidColorBrush(Color.FromArgb(142, 16, 16, 16));
+    private static IBrush PanelBrush => ThemeService.Brush("OverlayPanel");
+    private static IBrush AccentBrush => ThemeService.Brush("SelectionHandle");
+    private static IBrush MutedBrush => ThemeService.Brush("OverlayMuted");
+    // Focus can bounce through a brief unfocused state while X11 window managers map the window.
+    private static readonly TimeSpan DeactivationGrace = PlatformInfo.IsWindows ? TimeSpan.Zero : TimeSpan.FromMilliseconds(400);
+    private readonly PixelRect _physicalBounds;
+    private readonly Bitmap _snapshot;
     private readonly bool _isStart;
     private readonly int _maximumPixel;
     private readonly BoundarySurface _surface;
-    private HwndSource? _source;
-    private IntPtr _handle;
+    private nint _handle;
     private int _pixel;
     private bool _positioning;
     private bool _wasActivated;
@@ -34,87 +37,116 @@ public sealed class BoundaryPickWindow : Window
     /// <summary>Start row [0, H - 1], or exclusive end boundary [0, H]; null on cancellation.</summary>
     public int? SelectedPixel { get; private set; }
 
-    public BoundaryPickWindow(DrawingRectangle physicalBounds, BitmapSource frozenSnapshot,
+    public BoundaryPickWindow(PixelRect physicalBounds, Bitmap frozenSnapshot,
         bool isStart, int? initialPixel = null, bool fromCollectedFrame = false)
     {
         ArgumentNullException.ThrowIfNull(frozenSnapshot);
         if (physicalBounds.Width <= 0 || physicalBounds.Height <= 0)
             throw new ArgumentException("The selected region must have positive dimensions.", nameof(physicalBounds));
-        if (frozenSnapshot.PixelWidth != physicalBounds.Width || frozenSnapshot.PixelHeight != physicalBounds.Height)
+        if (!PlatformInfo.IsWayland && frozenSnapshot.PixelSize != physicalBounds.Size)
             throw new ArgumentException("The snapshot must match the selected region in physical pixels.", nameof(frozenSnapshot));
 
         _physicalBounds = physicalBounds;
-        _snapshot = frozenSnapshot.IsFrozen ? frozenSnapshot : frozenSnapshot.CloneCurrentValue();
-        if (!_snapshot.IsFrozen)
-            _snapshot.Freeze();
+        _snapshot = frozenSnapshot;
         _isStart = isStart;
-        _maximumPixel = isStart ? physicalBounds.Height - 1 : physicalBounds.Height;
-        _pixel = Math.Clamp(initialPixel ?? physicalBounds.Height / 2, 0, _maximumPixel);
-        _surface = new BoundarySurface(this) { Focusable = true, FocusVisualStyle = null };
+        var height = frozenSnapshot.PixelSize.Height;
+        _maximumPixel = isStart ? height - 1 : height;
+        _pixel = Math.Clamp(initialPixel ?? height / 2, 0, _maximumPixel);
+        _surface = new BoundarySurface(this) { Focusable = true };
 
         Title = I18n.T(fromCollectedFrame ? (isStart ? "從已收集首頁選起點" : "從已收集末頁選終點")
             : isStart ? "點選第一則訊息的上緣" : "點選最後一則訊息的下緣");
-        WindowStyle = WindowStyle.None;
-        ResizeMode = ResizeMode.NoResize;
+        WindowDecorations = WindowDecorations.None;
+        CanResize = false;
+        CanMinimize = false;
+        CanMaximize = false;
         WindowStartupLocation = WindowStartupLocation.Manual;
         ShowInTaskbar = false;
         ShowActivated = true;
         Topmost = true;
-        AllowsTransparency = true;
-        Background = Brushes.Transparent;
-        Cursor = Cursors.Cross;
+        Background = Brushes.Black;
+        Cursor = new Cursor(StandardCursorType.Cross);
         Focusable = true;
-        Width = physicalBounds.Width;
-        Height = physicalBounds.Height;
         HorizontalContentAlignment = HorizontalAlignment.Stretch;
         VerticalContentAlignment = VerticalAlignment.Stretch;
         UseLayoutRounding = true;
-        SnapsToDevicePixels = true;
         Content = _surface;
-        RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.NearestNeighbor);
-        SourceInitialized += OnSourceInitialized;
-        Loaded += (_, _) =>
+        var exact = frozenSnapshot.PixelSize == physicalBounds.Size;
+        RenderOptions.SetBitmapInterpolationMode(this, exact ? BitmapInterpolationMode.None : BitmapInterpolationMode.HighQuality);
+        // Physical placement before the first map; Windows corrects it with SetWindowPos once the window exists.
+        if (PlatformInfo.IsWindows)
         {
-            ThemeService.Changed -= OnThemeChanged;
-            ThemeService.Changed += OnThemeChanged;
-        };
-        ContentRendered += (_, _) =>
+            var scaling = Screens.ScreenFromBounds(physicalBounds)?.Scaling is > 0 and var value ? value : 1;
+            Position = physicalBounds.Position;
+            Width = Math.Max(1, physicalBounds.Width / scaling);
+            Height = Math.Max(1, physicalBounds.Height / scaling);
+        }
+        else
+            CaptureNative.PositionOverlay(this, physicalBounds);
+        Opened += OnOpened;
+        Activated += (_, _) => _wasActivated = true;
+        Deactivated += OnDeactivated;
+        AddHandler(PointerMovedEvent, OnPreviewPointerMoved, RoutingStrategies.Tunnel);
+        AddHandler(PointerPressedEvent, OnPreviewPointerPressed, RoutingStrategies.Tunnel);
+        AddHandler(PointerReleasedEvent, OnPreviewPointerReleased, RoutingStrategies.Tunnel);
+        AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
+        ThemeService.Changed += OnThemeChanged;
+    }
+
+    private void OnOpened(object? sender, EventArgs args)
+    {
+        _handle = TryGetPlatformHandle()?.Handle ?? 0;
+        AttachDisplayHooks();
+        PositionPhysical();
+        // WPF ContentRendered: position again once the first frame is shown, then take keyboard focus.
+        Dispatcher.UIThread.Post(() =>
         {
             PositionPhysical();
-            if (!_closing)
-                _surface.Focus();
-        };
+            if (_closing || _closed)
+                return;
+            // X11 window managers may not focus a new window on their own (focus stealing prevention);
+            // the keys (arrows, Enter, Esc) need it, as WPF's ShowActivated gave it.
+            if (!IsActive)
+                Activate();
+            _surface.Focus();
+        }, DispatcherPriority.Background);
     }
 
-    private void OnSourceInitialized(object? sender, EventArgs args)
-    {
-        _handle = new WindowInteropHelper(this).Handle;
-        _source = HwndSource.FromHwnd(_handle);
-        _source?.AddHook(WindowMessage);
-        PositionPhysical();
-    }
+#if WINDOWS
+    private void AttachDisplayHooks() => Win32Properties.AddWndProcHookCallback(this, WindowMessage);
 
-    private IntPtr WindowMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    private void DetachDisplayHooks() => Win32Properties.RemoveWndProcHookCallback(this, WindowMessage);
+
+    private IntPtr WindowMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (message == 0x02E0) // WM_DPICHANGED: WPF updates its scale before physical bounds are restored.
-            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(PositionPhysical));
+        if (message == 0x02E0) // WM_DPICHANGED: Avalonia updates its scale before physical bounds are restored.
+            Dispatcher.UIThread.Post(PositionPhysical, DispatcherPriority.Loaded);
         if (message == 0x007E) // WM_DISPLAYCHANGE: the frozen snapshot no longer matches the desktop.
-            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(CancelSelection));
+            Dispatcher.UIThread.Post(CancelSelection, DispatcherPriority.Input);
         return IntPtr.Zero;
     }
+#else
+    private void AttachDisplayHooks() => Screens.Changed += OnScreensChanged;
+
+    private void DetachDisplayHooks() => Screens.Changed -= OnScreensChanged;
+
+    // XRandR change: the frozen snapshot no longer matches the desktop.
+    private void OnScreensChanged(object? sender, EventArgs args) =>
+        Dispatcher.UIThread.Post(CancelSelection, DispatcherPriority.Input);
+#endif
 
     private void PositionPhysical()
     {
-        if (_handle == IntPtr.Zero || _positioning || _closing || _closed)
+        if (_handle == 0 || _positioning || _closing || _closed)
             return;
         _positioning = true;
         try
         {
-            CaptureNative.PositionOverlay(_handle, _physicalBounds);
+            CaptureNative.PositionOverlay(this, _physicalBounds);
         }
         catch (Win32Exception)
         {
-            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(CancelSelection));
+            Dispatcher.UIThread.Post(CancelSelection, DispatcherPriority.Input);
         }
         finally
         {
@@ -122,24 +154,22 @@ public sealed class BoundaryPickWindow : Window
         }
     }
 
-    protected override void OnActivated(EventArgs args)
+    private void OnDeactivated(object? sender, EventArgs args)
     {
-        base.OnActivated(args);
-        _wasActivated = true;
+        if (!_wasActivated || _closing || _closed)
+            return;
+        void CancelIfInactive()
+        {
+            if (!IsActive)
+                CancelSelection();
+        }
+        if (DeactivationGrace == TimeSpan.Zero)
+            Dispatcher.UIThread.Post(CancelIfInactive, DispatcherPriority.Input);
+        else
+            DispatcherTimer.RunOnce(CancelIfInactive, DeactivationGrace, DispatcherPriority.Input);
     }
 
-    protected override void OnDeactivated(EventArgs args)
-    {
-        base.OnDeactivated(args);
-        if (_wasActivated && !_closing && !_closed)
-            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
-            {
-                if (!IsActive)
-                    CancelSelection();
-            }));
-    }
-
-    protected override void OnClosing(CancelEventArgs args)
+    protected override void OnClosing(WindowClosingEventArgs args)
     {
         _closing = true;
         if (!_confirmed)
@@ -159,45 +189,42 @@ public sealed class BoundaryPickWindow : Window
         ThemeService.Changed -= OnThemeChanged;
         if (!_confirmed || DialogResult != true)
             SelectedPixel = null;
-        _source?.RemoveHook(WindowMessage);
-        _source = null;
-        _handle = IntPtr.Zero;
+        if (_handle != 0)
+            DetachDisplayHooks();
+        _handle = 0;
         base.OnClosed(args);
     }
 
-    protected override void OnPreviewMouseMove(MouseEventArgs args)
+    private void OnPreviewPointerMoved(object? sender, PointerEventArgs args)
     {
-        base.OnPreviewMouseMove(args);
-        if (!_closing && UpdateFromCursor())
+        if (!_closing && UpdateFromCursor(args))
             _surface.InvalidateVisual();
     }
 
-    protected override void OnPreviewMouseLeftButtonDown(MouseButtonEventArgs args)
+    private void OnPreviewPointerPressed(object? sender, PointerPressedEventArgs args)
     {
-        base.OnPreviewMouseLeftButtonDown(args);
+        var kind = args.GetCurrentPoint(this).Properties.PointerUpdateKind;
         args.Handled = true;
-        if (!_closing && UpdateFromCursor())
+        if (kind == PointerUpdateKind.RightButtonPressed)
+        {
+            CancelSelection();
+            return;
+        }
+        if (kind == PointerUpdateKind.LeftButtonPressed && !_closing && UpdateFromCursor(args))
             _surface.InvalidateVisual();
     }
 
-    protected override void OnPreviewMouseLeftButtonUp(MouseButtonEventArgs args)
+    private void OnPreviewPointerReleased(object? sender, PointerReleasedEventArgs args)
     {
-        base.OnPreviewMouseLeftButtonUp(args);
+        if (args.InitialPressMouseButton != MouseButton.Left)
+            return;
         args.Handled = true;
-        if (!_closing && UpdateFromCursor())
+        if (!_closing && UpdateFromCursor(args))
             ConfirmSelection();
     }
 
-    protected override void OnPreviewMouseRightButtonDown(MouseButtonEventArgs args)
+    private void OnPreviewKeyDown(object? sender, KeyEventArgs args)
     {
-        base.OnPreviewMouseRightButtonDown(args);
-        args.Handled = true;
-        CancelSelection();
-    }
-
-    protected override void OnPreviewKeyDown(KeyEventArgs args)
-    {
-        base.OnPreviewKeyDown(args);
         if (_closing)
             return;
         switch (args.Key)
@@ -213,7 +240,7 @@ public sealed class BoundaryPickWindow : Window
             case Key.Up:
             case Key.Down:
                 args.Handled = true;
-                var step = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? 10 : 1;
+                var step = (args.KeyModifiers & KeyModifiers.Shift) != 0 ? 10 : 1;
                 var delta = args.Key == Key.Up ? -step : step;
                 _pixel = (int)Math.Clamp((long)_pixel + delta, 0, _maximumPixel);
                 _surface.InvalidateVisual();
@@ -221,20 +248,39 @@ public sealed class BoundaryPickWindow : Window
         }
     }
 
-    private bool UpdateFromCursor()
+    /// <summary>
+    /// Maps the pointer to a snapshot row. Windows polls the physical cursor like the WPF version; on
+    /// Linux the event position is used, relative to wherever the window manager placed the window.
+    /// </summary>
+    private bool UpdateFromCursor(PointerEventArgs args)
     {
         try
         {
-            var cursor = CaptureNative.CursorPosition();
-            var localX = (long)cursor.X - _physicalBounds.X;
-            var localY = (long)cursor.Y - _physicalBounds.Y;
-            if (localX < 0 || localX >= _physicalBounds.Width || localY < 0 || localY >= _physicalBounds.Height)
+            double localX, localY, width, height;
+            if (PlatformInfo.IsWindows)
+            {
+                var cursor = CaptureNative.CursorPosition();
+                localX = (long)cursor.X - _physicalBounds.X;
+                localY = (long)cursor.Y - _physicalBounds.Y;
+                width = _physicalBounds.Width;
+                height = _physicalBounds.Height;
+            }
+            else
+            {
+                var point = args.GetPosition(_surface);
+                localX = point.X;
+                localY = point.Y;
+                width = _surface.Bounds.Width;
+                height = _surface.Bounds.Height;
+            }
+            if (localX < 0 || localX >= width || localY < 0 || localY >= height || height <= 0)
                 return false;
+            var row = (long)Math.Floor(localY * _snapshot.PixelSize.Height / height);
             // The start includes the clicked row; the exclusive end includes it as its last row.
-            _pixel = (int)Math.Clamp(localY + (_isStart ? 0 : 1), 0, _maximumPixel);
+            _pixel = (int)Math.Clamp(row + (_isStart ? 0 : 1), 0, _maximumPixel);
             return true;
         }
-        catch (Win32Exception)
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
         {
             CancelSelection();
             return false;
@@ -244,8 +290,8 @@ public sealed class BoundaryPickWindow : Window
     private void OnThemeChanged(object? sender, EventArgs args)
     {
         void Redraw() { if (!_closed) _surface.InvalidateVisual(); }
-        if (Dispatcher.CheckAccess()) Redraw();
-        else Dispatcher.BeginInvoke(new Action(Redraw));
+        if (Dispatcher.UIThread.CheckAccess()) Redraw();
+        else Dispatcher.UIThread.Post(Redraw);
     }
 
     private void ConfirmSelection()
@@ -270,22 +316,25 @@ public sealed class BoundaryPickWindow : Window
 
     private void RenderBoundary(DrawingContext drawing)
     {
-        if (_surface.ActualWidth <= 0 || _surface.ActualHeight <= 0)
+        var size = _surface.Bounds.Size;
+        if (size.Width <= 0 || size.Height <= 0)
             return;
-        var viewport = new Rect(0, 0, _surface.ActualWidth, _surface.ActualHeight);
+        var viewport = new Rect(size);
+        // Lines keep their physical thickness; the boundary itself is a snapshot row.
         var scaleY = viewport.Height / _physicalBounds.Height;
-        var y = _pixel * scaleY;
-        drawing.PushClip(new RectangleGeometry(viewport));
-        drawing.DrawImage(_snapshot, viewport);
-        var mask = _isStart ? new Rect(0, 0, viewport.Width, y)
-            : new Rect(0, y, viewport.Width, Math.Max(0, viewport.Height - y));
-        drawing.DrawRectangle(MaskBrush, null, mask);
-        var from = new WpfPoint(0, y);
-        var to = new WpfPoint(viewport.Width, y);
-        drawing.DrawLine(new Pen(Brushes.Black, 5 * scaleY), from, to);
-        drawing.DrawLine(new Pen(AccentBrush, 2 * scaleY), from, to);
-        DrawHint(drawing, viewport, y);
-        drawing.Pop();
+        var y = _pixel * (viewport.Height / _snapshot.PixelSize.Height);
+        using (drawing.PushClip(viewport))
+        {
+            drawing.DrawImage(_snapshot, viewport);
+            var mask = _isStart ? new Rect(0, 0, viewport.Width, y)
+                : new Rect(0, y, viewport.Width, Math.Max(0, viewport.Height - y));
+            drawing.DrawRectangle(MaskBrush, null, mask);
+            var from = new Point(0, y);
+            var to = new Point(viewport.Width, y);
+            drawing.DrawLine(new Pen(Brushes.Black, 5 * scaleY), from, to);
+            drawing.DrawLine(new Pen(AccentBrush, 2 * scaleY), from, to);
+            DrawHint(drawing, viewport, y);
+        }
     }
 
     private void DrawHint(DrawingContext drawing, Rect viewport, double boundaryY)
@@ -293,7 +342,7 @@ public sealed class BoundaryPickWindow : Window
         var margin = Math.Min(10, Math.Min(viewport.Width, viewport.Height) / 4);
         var width = Math.Min(550, Math.Max(1, viewport.Width - margin * 2));
         var innerWidth = Math.Max(1, width - 20);
-        var heading = Text(Title, 14, ThemeService.Brush("OverlayInk"));
+        var heading = Text(Title ?? "", 14, ThemeService.Brush("OverlayInk"));
         heading.MaxTextWidth = innerWidth;
         var help = Text(I18n.T("↑↓ 微調 1 px · Shift 10 px · Enter 確認 · Esc／右鍵取消"), 11, MutedBrush);
         help.MaxTextWidth = innerWidth;
@@ -301,30 +350,22 @@ public sealed class BoundaryPickWindow : Window
         var left = (viewport.Width - width) / 2;
         var top = boundaryY >= viewport.Height / 2 ? margin : Math.Max(margin, viewport.Height - height - margin);
         var panel = new Rect(left, top, width, height);
-        drawing.DrawRoundedRectangle(PanelBrush, null, panel, 7, 7);
-        drawing.PushClip(new RectangleGeometry(panel));
-        drawing.DrawText(heading, new WpfPoint(left + 10, top + 8));
-        drawing.DrawText(help, new WpfPoint(left + 10, top + 12 + heading.Height));
-        drawing.Pop();
-    }
-
-    private FormattedText Text(string value, double size, Brush brush) => new(value,
-        CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-        new Typeface("Segoe UI, Microsoft JhengHei UI"), size, brush,
-        VisualTreeHelper.GetDpi(this).PixelsPerDip);
-
-    private static Brush FrozenBrush(Color color)
-    {
-        var brush = new SolidColorBrush(color);
-        brush.Freeze();
-        return brush;
-    }
-
-    private sealed class BoundarySurface(BoundaryPickWindow owner) : FrameworkElement
-    {
-        protected override void OnRender(DrawingContext drawing)
+        drawing.DrawRectangle(PanelBrush, null, panel, 7, 7);
+        using (drawing.PushClip(panel))
         {
-            base.OnRender(drawing);
+            drawing.DrawText(heading, new Point(left + 10, top + 8));
+            drawing.DrawText(help, new Point(left + 10, top + 12 + heading.Height));
+        }
+    }
+
+    private static FormattedText Text(string value, double size, IBrush brush) => new(value,
+        CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, new Typeface(UiThemes.AppFont), size, brush);
+
+    private sealed class BoundarySurface(BoundaryPickWindow owner) : Control
+    {
+        public override void Render(DrawingContext drawing)
+        {
+            base.Render(drawing);
             owner.RenderBoundary(drawing);
         }
     }

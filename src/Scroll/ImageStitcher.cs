@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Avalonia.Platform;
 using SnipFlow.Services;
 
 namespace SnipFlow.Scroll;
@@ -19,15 +21,37 @@ internal sealed record ScrollMatch(
     bool IsDuplicate,
     bool IsReliable);
 
+/// <summary>
+/// Rows [<see cref="Top"/>, <see cref="Top"/> + <see cref="Height"/>) of a captured frame at full width,
+/// without copying pixels. It replaces the WPF <c>CroppedBitmap</c> views of trimmed frames: the
+/// matcher and the stitcher read only these rows, so trimming never duplicates stored frames.
+/// </summary>
+internal readonly record struct FrameRows(Bitmap Image, int Top, int Height)
+{
+    public FrameRows(Bitmap image) : this(image, 0, image.PixelSize.Height) { }
+
+    public int Width => Image.PixelSize.Width;
+
+    /// <summary>The rows as their own bitmap (the frame itself when nothing is trimmed).</summary>
+    public Bitmap ToBitmap() => Top == 0 && Height == Image.PixelSize.Height
+        ? Image : ImageTools.Crop(Image, new PixelRect(0, Top, Width, Height));
+}
+
 /// <summary>Matches vertical movement; positive offsets move down and negative offsets move up.</summary>
+/// <remarks>
+/// Pixels are read as BGRA premultiplied (the capture layout; screen pixels are opaque, so the values
+/// equal the WPF Bgra32 reads). Bitmaps passed here are treated as immutable snapshots: samples are
+/// cached per bitmap, as the WPF version cached them per frozen bitmap.
+/// </remarks>
 public static class ImageStitcher
 {
     public const long MaxOutputPixels = 40_000_000;
     public const long MaxStoredPixels = 60_000_000;
     public const int MaxFrames = 64;
-    private static readonly ConditionalWeakTable<BitmapSource, SampleImage> Samples = new();
+    private static readonly ConditionalWeakTable<Bitmap, SampleImage> Samples = new();
+    private static readonly ConditionalWeakTable<Bitmap, Bitmap> Converted = new();
 
-    public static OverlapMatch FindOverlap(BitmapSource previous, BitmapSource current)
+    public static OverlapMatch FindOverlap(Bitmap previous, Bitmap current)
     {
         var match = FindScroll(previous, current);
         var reliable = match.IsReliable && (match.IsDuplicate || match.AdvancePixels > 0);
@@ -37,20 +61,29 @@ public static class ImageStitcher
                 : reliable ? "已找到穩定的垂直重疊。" : "無法可靠對齊，請調整重疊高度並確認接縫。"));
     }
 
-    internal static bool AreSameImages(BitmapSource first, BitmapSource second)
+    internal static bool AreSameImages(Bitmap first, Bitmap second) => AreSameImages(new FrameRows(first), new FrameRows(second));
+
+    internal static bool AreSameImages(FrameRows first, FrameRows second)
     {
-        if (first.PixelWidth != second.PixelWidth || first.PixelHeight != second.PixelHeight) return false;
+        if (first.Width != second.Width || first.Height != second.Height) return false;
         return IsDuplicate(ReadSample(first), ReadSample(second));
     }
 
-    internal static ScrollMatch FindScroll(BitmapSource previous, BitmapSource current)
+    internal static ScrollMatch FindScroll(Bitmap previous, Bitmap current)
     {
         ArgumentNullException.ThrowIfNull(previous);
         ArgumentNullException.ThrowIfNull(current);
-        if (previous.PixelWidth != current.PixelWidth || previous.PixelHeight != current.PixelHeight)
+        return FindScroll(new FrameRows(previous), new FrameRows(current));
+    }
+
+    internal static ScrollMatch FindScroll(FrameRows previous, FrameRows current)
+    {
+        ArgumentNullException.ThrowIfNull(previous.Image);
+        ArgumentNullException.ThrowIfNull(current.Image);
+        if (previous.Width != current.Width || previous.Height != current.Height)
             throw new ArgumentException(I18n.T("拼接畫面必須來自同一個截圖範圍，且大小一致。"));
-        var height = previous.PixelHeight;
-        if (height < 48 || previous.PixelWidth < 32)
+        var height = previous.Height;
+        if (height < 48 || previous.Width < 32)
             return new ScrollMatch(0, 0, 0, 1, false, false);
 
         var first = ReadSample(previous);
@@ -109,9 +142,12 @@ public static class ImageStitcher
     }
 
     /// <summary>Flags detailed fixed edge bands without cropping any captured content.</summary>
-    internal static bool HasFixedEdgeBand(BitmapSource previous, BitmapSource current)
+    internal static bool HasFixedEdgeBand(Bitmap previous, Bitmap current) =>
+        HasFixedEdgeBand(new FrameRows(previous), new FrameRows(current));
+
+    internal static bool HasFixedEdgeBand(FrameRows previous, FrameRows current)
     {
-        if (previous.PixelWidth != current.PixelWidth || previous.PixelHeight != current.PixelHeight) return false;
+        if (previous.Width != current.Width || previous.Height != current.Height) return false;
         var first = ReadSample(previous);
         var second = ReadSample(current);
         if (IsDuplicate(first, second)) return false;
@@ -120,33 +156,48 @@ public static class ImageStitcher
             || FixedRows(first, second, maximumRows, true) >= 16;
     }
 
-    public static BitmapSource Stitch(
-        IReadOnlyList<BitmapSource> frames,
+    public static Bitmap Stitch(
+        IReadOnlyList<Bitmap> frames,
+        IReadOnlyList<int> overlaps,
+        long maxPixels = MaxOutputPixels)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
+        return Stitch(Rows(frames), overlaps, maxPixels);
+    }
+
+    internal static Bitmap Stitch(
+        IReadOnlyList<FrameRows> frames,
         IReadOnlyList<int> overlaps,
         long maxPixels = MaxOutputPixels)
     {
         var outputPixels = CalculateOutputPixels(frames, overlaps);
         if (outputPixels > maxPixels)
             throw new InvalidOperationException(I18n.F("長截圖超過 {0:N0} 百萬像素上限，請分段截取。", maxPixels / 1_000_000));
-        var width = frames[0].PixelWidth;
+        var width = frames[0].Width;
         var height = checked((int)(outputPixels / width));
-        var stride = checked(width * 4);
-        var pixels = new byte[checked(stride * height)];
-        var rowOffset = 0;
-        for (var index = 0; index < frames.Count; index++)
+        // Rows are copied straight into the result, so no second full-size pixel array is allocated.
+        var result = CreateOutput(width, height);
+        using (var target = result.Lock())
         {
-            var source = AsBgra32(frames[index]);
-            var skippedRows = index == 0 ? 0 : overlaps[index - 1];
-            var copiedRows = source.PixelHeight - skippedRows;
-            source.CopyPixels(new Int32Rect(0, skippedRows, width, copiedRows), pixels, stride, checked(rowOffset * stride));
-            rowOffset += copiedRows;
+            var rowOffset = 0;
+            for (var index = 0; index < frames.Count; index++)
+            {
+                var skippedRows = index == 0 ? 0 : overlaps[index - 1];
+                var copiedRows = frames[index].Height - skippedRows;
+                CopyRows(frames[index], skippedRows, copiedRows, target, rowOffset);
+                rowOffset += copiedRows;
+            }
         }
-        var result = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
-        result.Freeze();
         return result;
     }
 
-    public static long CalculateOutputPixels(IReadOnlyList<BitmapSource> frames, IReadOnlyList<int> overlaps)
+    public static long CalculateOutputPixels(IReadOnlyList<Bitmap> frames, IReadOnlyList<int> overlaps)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
+        return CalculateOutputPixels(Rows(frames), overlaps);
+    }
+
+    internal static long CalculateOutputPixels(IReadOnlyList<FrameRows> frames, IReadOnlyList<int> overlaps)
     {
         ArgumentNullException.ThrowIfNull(frames);
         ArgumentNullException.ThrowIfNull(overlaps);
@@ -154,74 +205,105 @@ public static class ImageStitcher
             throw new ArgumentException(I18n.T("請先加入至少一個畫面。"), nameof(frames));
         if (overlaps.Count != frames.Count - 1)
             throw new ArgumentException(I18n.T("每兩個連續畫面都必須指定一個重疊高度。"), nameof(overlaps));
-        var width = frames[0].PixelWidth;
+        var width = frames[0].Width;
         long totalHeight = 0;
         for (var index = 0; index < frames.Count; index++)
         {
             var frame = frames[index];
-            if (frame.PixelWidth != width)
+            if (frame.Width != width)
                 throw new ArgumentException(I18n.T("每個畫面的寬度必須一致。"), nameof(frames));
             var overlap = index == 0 ? 0 : overlaps[index - 1];
-            if (overlap < 0 || overlap >= frame.PixelHeight
-                || (index > 0 && overlap > frames[index - 1].PixelHeight))
+            if (overlap < 0 || overlap >= frame.Height
+                || (index > 0 && overlap > frames[index - 1].Height))
                 throw new ArgumentOutOfRangeException(nameof(overlaps), I18n.T("重疊高度必須小於畫面高度。"));
-            totalHeight = checked(totalHeight + frame.PixelHeight - overlap);
+            totalHeight = checked(totalHeight + frame.Height - overlap);
         }
         return checked(width * totalHeight);
     }
 
     /// <summary>Copies only the selected document rows, so a short result does not retain a full long image.</summary>
-    internal static BitmapSource StitchRange(IReadOnlyList<BitmapSource> frames, IReadOnlyList<int> overlaps,
+    internal static Bitmap StitchRange(IReadOnlyList<Bitmap> frames, IReadOnlyList<int> overlaps,
+        int firstRow, int endRow)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
+        return StitchRange(Rows(frames), overlaps, firstRow, endRow);
+    }
+
+    internal static Bitmap StitchRange(IReadOnlyList<FrameRows> frames, IReadOnlyList<int> overlaps,
         int firstRow, int endRow)
     {
         var totalPixels = CalculateOutputPixels(frames, overlaps);
-        var width = frames[0].PixelWidth;
+        var width = frames[0].Width;
         var totalHeight = totalPixels / width;
         if (firstRow < 0 || endRow <= firstRow || endRow > totalHeight)
             throw new ArgumentOutOfRangeException(nameof(endRow), I18n.T("起點與終點必須在已擷取範圍內。"));
         var height = endRow - firstRow;
         if ((long)width * height > MaxOutputPixels)
             throw new InvalidOperationException(I18n.F("長截圖超過 {0:N0} 百萬像素上限，請分段截取。", MaxOutputPixels / 1_000_000));
-        var stride = checked(width * 4);
-        var pixels = new byte[checked(stride * height)];
-        long documentRow = 0;
-        for (var index = 0; index < frames.Count; index++)
+        var result = CreateOutput(width, height);
+        using (var target = result.Lock())
         {
-            var skipped = index == 0 ? 0 : overlaps[index - 1];
-            var available = frames[index].PixelHeight - skipped;
-            var from = Math.Max(documentRow, firstRow);
-            var to = Math.Min(documentRow + available, endRow);
-            if (to > from)
+            long documentRow = 0;
+            for (var index = 0; index < frames.Count; index++)
             {
-                var source = AsBgra32(frames[index]);
-                var sourceRow = checked(skipped + (int)(from - documentRow));
-                var destinationOffset = checked((int)(from - firstRow) * stride);
-                source.CopyPixels(new Int32Rect(0, sourceRow, width, checked((int)(to - from))), pixels, stride, destinationOffset);
+                var skipped = index == 0 ? 0 : overlaps[index - 1];
+                var available = frames[index].Height - skipped;
+                var from = Math.Max(documentRow, firstRow);
+                var to = Math.Min(documentRow + available, endRow);
+                if (to > from)
+                {
+                    var sourceRow = checked(skipped + (int)(from - documentRow));
+                    CopyRows(frames[index], sourceRow, checked((int)(to - from)), target, checked((int)(from - firstRow)));
+                }
+                documentRow += available;
+                if (documentRow >= endRow) break;
             }
-            documentRow += available;
-            if (documentRow >= endRow) break;
         }
-        var result = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
-        result.Freeze();
         return result;
     }
 
-    internal static BitmapSource CreateJoinPreview(BitmapSource previous, BitmapSource current, int overlap)
+    internal static Bitmap CreateJoinPreview(Bitmap previous, Bitmap current, int overlap) =>
+        CreateJoinPreview(new FrameRows(previous), new FrameRows(current), overlap);
+
+    internal static Bitmap CreateJoinPreview(FrameRows previous, FrameRows current, int overlap)
     {
-        var previousRows = Math.Min(100, previous.PixelHeight);
-        var currentRows = Math.Min(100, current.PixelHeight - overlap);
-        var upper = new CroppedBitmap(previous, new Int32Rect(0, previous.PixelHeight - previousRows, previous.PixelWidth, previousRows));
-        var lower = new CroppedBitmap(current, new Int32Rect(0, overlap, current.PixelWidth, currentRows));
-        upper.Freeze();
-        lower.Freeze();
-        return Stitch(new BitmapSource[] { upper, lower }, new[] { 0 });
+        var previousRows = Math.Min(100, previous.Height);
+        var currentRows = Math.Min(100, current.Height - overlap);
+        var upper = previous with { Top = previous.Top + previous.Height - previousRows, Height = previousRows };
+        var lower = current with { Top = current.Top + overlap, Height = currentRows };
+        return Stitch(new[] { upper, lower }, new[] { 0 });
     }
 
-    private static BitmapSource AsBgra32(BitmapSource source)
-        => source.Format == PixelFormats.Bgra32 ? source : new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+    private static FrameRows[] Rows(IReadOnlyList<Bitmap> frames)
+    {
+        var rows = new FrameRows[frames.Count];
+        for (var index = 0; index < rows.Length; index++)
+            rows[index] = new FrameRows(frames[index] ?? throw new ArgumentNullException(nameof(frames)));
+        return rows;
+    }
 
-    private static SampleImage ReadSample(BitmapSource image)
-        => image.IsFrozen ? Samples.GetValue(image, SampleImage.Read) : SampleImage.Read(image);
+    private static WriteableBitmap CreateOutput(int width, int height) =>
+        new(new PixelSize(width, height), ImageTools.Dpi, PixelFormat.Bgra8888, AlphaFormat.Premul);
+
+    private static void CopyRows(FrameRows source, int sourceRow, int rows, ILockedFramebuffer target, int targetRow)
+    {
+        if (rows <= 0) return;
+        AsBgra32(source.Image).CopyPixels(new PixelRect(0, checked(source.Top + sourceRow), source.Width, rows),
+            target.Address + checked(targetRow * target.RowBytes), checked(target.RowBytes * rows), target.RowBytes);
+    }
+
+    /// <summary>The bitmap itself when it already stores BGRA premultiplied pixels, otherwise a converted copy.</summary>
+    private static Bitmap AsBgra32(Bitmap source)
+        => source.Format == PixelFormat.Bgra8888 && source.AlphaFormat is AlphaFormat.Premul or AlphaFormat.Opaque
+            ? source : Converted.GetValue(source, static image => PixelBuffer.FromBitmap(image).ToBitmap());
+
+    // A trimmed frame's sample equals the matching rows of the whole frame's sample (same columns),
+    // so one cached sample serves every trim.
+    private static SampleImage ReadSample(FrameRows image)
+    {
+        var sample = Samples.GetValue(image.Image, static bitmap => SampleImage.Read(bitmap));
+        return image.Top == 0 && image.Height == sample.Height ? sample : sample.Slice(image.Top, image.Height);
+    }
 
     private static bool IsDuplicate(SampleImage first, SampleImage second)
     {
@@ -299,30 +381,51 @@ public static class ImageStitcher
 
     private sealed record SampleImage(int Height, int Columns, byte[] Values)
     {
-        public static SampleImage Read(BitmapSource image)
+        public static SampleImage Read(Bitmap image)
         {
             var source = AsBgra32(image);
-            var stride = checked(source.PixelWidth * 4);
+            var width = source.PixelSize.Width;
+            var height = source.PixelSize.Height;
+            var stride = checked(width * 4);
             // Read short strips rather than allocating another full-resolution image.
-            var pixels = new byte[checked(stride * Math.Min(32, source.PixelHeight))];
-            var columns = Math.Min(96, source.PixelWidth);
-            var values = new byte[checked(columns * source.PixelHeight)];
-            var left = source.PixelWidth / 12;
-            var right = source.PixelWidth - 1 - left;
-            for (var stripY = 0; stripY < source.PixelHeight; stripY += 32)
+            var pixels = new byte[checked(stride * Math.Min(32, height))];
+            var columns = Math.Min(96, width);
+            var values = new byte[checked(columns * height)];
+            var left = width / 12;
+            var right = width - 1 - left;
+            var handle = GCHandle.Alloc(pixels, GCHandleType.Pinned);
+            try
             {
-                var rows = Math.Min(32, source.PixelHeight - stripY);
-                source.CopyPixels(new Int32Rect(0, stripY, source.PixelWidth, rows), pixels, stride, 0);
-                for (var row = 0; row < rows; row++)
-                    for (var x = 0; x < columns; x++)
-                    {
-                        var pixelX = left + (right - left) * x / Math.Max(1, columns - 1);
-                        var offset = row * stride + pixelX * 4;
-                        values[(stripY + row) * columns + x] = (byte)((pixels[offset] * 29
-                            + pixels[offset + 1] * 150 + pixels[offset + 2] * 77) >> 8);
-                    }
+                var address = handle.AddrOfPinnedObject();
+                for (var stripY = 0; stripY < height; stripY += 32)
+                {
+                    var rows = Math.Min(32, height - stripY);
+                    source.CopyPixels(new PixelRect(0, stripY, width, rows), address, pixels.Length, stride);
+                    for (var row = 0; row < rows; row++)
+                        for (var x = 0; x < columns; x++)
+                        {
+                            var pixelX = left + (right - left) * x / Math.Max(1, columns - 1);
+                            var offset = row * stride + pixelX * 4;
+                            values[(stripY + row) * columns + x] = (byte)((pixels[offset] * 29
+                                + pixels[offset + 1] * 150 + pixels[offset + 2] * 77) >> 8);
+                        }
+                }
             }
-            return new SampleImage(source.PixelHeight, columns, values);
+            finally
+            {
+                handle.Free();
+            }
+            return new SampleImage(height, columns, values);
+        }
+
+        /// <summary>The sample of rows [top, top + rows), identical to reading those rows on their own.</summary>
+        public SampleImage Slice(int top, int rows)
+        {
+            if (top < 0 || rows <= 0 || top + rows > Height)
+                throw new ArgumentOutOfRangeException(nameof(rows));
+            var values = new byte[checked(rows * Columns)];
+            Buffer.BlockCopy(Values, top * Columns, values, 0, values.Length);
+            return new SampleImage(rows, Columns, values);
         }
     }
 }

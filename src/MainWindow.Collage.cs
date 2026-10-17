@@ -1,4 +1,3 @@
-using System.Windows.Controls.Primitives;
 using SnipFlow.Editor;
 using SnipFlow.Services;
 
@@ -8,7 +7,7 @@ public partial class MainWindow
 {
     string? projectPath;
 
-    void CollageClick(object sender, RoutedEventArgs e)
+    void CollageClick(object? sender, RoutedEventArgs e)
     {
         if (busy || capturePending || historyDragInProgress) return;
         try
@@ -39,14 +38,11 @@ public partial class MainWindow
         autoSavedRevision = -1;
     }
 
-    void AddImagesClick(object sender, RoutedEventArgs e)
+    void AddImagesClick(object? sender, RoutedEventArgs e)
     {
         if (busy || capturePending || historyDragInProgress) return;
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Filter = I18n.T("圖片|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff|所有檔案|*.*"), Multiselect = true
-        };
-        if (dialog.ShowDialog(this) == true) AddImageFiles(dialog.FileNames);
+        var files = FileDialogs.OpenFiles(this, null, I18n.T("圖片|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff|所有檔案|*.*"), allowMultiple: true);
+        if (files != null) AddImageFiles(files);
     }
 
     void AddImageFiles(IReadOnlyList<string> paths)
@@ -93,21 +89,16 @@ public partial class MainWindow
         string? path = saveAs ? null : projectPath;
         if (path is null)
         {
-            var dialog = new Microsoft.Win32.SaveFileDialog
-            {
-                Filter = I18n.T("SnipFlow 專案 (*.snipflow)|*.snipflow"),
-                FileName = $"SnipFlow_{DateTime.Now:yyyyMMdd_HHmmss}.snipflow",
-                DefaultExt = ".snipflow", AddExtension = true, OverwritePrompt = true
-            };
-            if (Directory.Exists(autoSaveDirectory)) dialog.InitialDirectory = autoSaveDirectory;
-            if (dialog.ShowDialog(this) != true) return false;
-            path = dialog.FileName;
+            path = FileDialogs.SaveFile(this, null, I18n.T("SnipFlow 專案 (*.snipflow)|*.snipflow"),
+                $"SnipFlow_{DateTime.Now:yyyyMMdd_HHmmss}.snipflow", ".snipflow",
+                Directory.Exists(autoSaveDirectory) ? autoSaveDirectory : null);
+            if (path is null) return false;
         }
         try
         {
             FinishAutoSaveWrite();
             autoSaveSequence++;
-            if (autoSavePath is not null && string.Equals(Path.GetFullPath(path), Path.ChangeExtension(autoSavePath, ".snipflow"), StringComparison.OrdinalIgnoreCase))
+            if (autoSavePath is not null && string.Equals(Path.GetFullPath(path), Path.ChangeExtension(autoSavePath, ".snipflow"), PlatformInfo.PathComparison))
                 autoSavedRevision = -1;
             EditorSessionStore.SaveProject(Editor, path);
             projectPath = Path.GetFullPath(path);
@@ -118,10 +109,10 @@ public partial class MainWindow
         catch (Exception ex) { ReportError(ex, "專案儲存失敗"); return false; }
     }
 
-    void SaveProjectClick(object sender, RoutedEventArgs e) => SaveProjectCurrent();
+    void SaveProjectClick(object? sender, RoutedEventArgs e) => SaveProjectCurrent();
     bool SaveDocument() => Editor.IsCollage ? SaveProjectCurrent() : SaveCurrent();
 
-    void NewCanvasClick(object sender, RoutedEventArgs e) => OpenBlankCanvas();
+    void NewCanvasClick(object? sender, RoutedEventArgs e) => OpenBlankCanvas();
 
     void NewCollageDocument() => OpenBlankCanvas();
 
@@ -154,28 +145,28 @@ public partial class MainWindow
         catch (Exception ex) { ReportError(ex, "無法修改物件"); }
     }
 
-    void OpenActionMenu(object sender, IEnumerable<(string Label, Action Action, bool Enabled)> actions)
+    void OpenActionMenu(object? sender, IEnumerable<(string Label, Action Action, bool Enabled)> actions)
     {
         if (busy || capturePending || historyDragInProgress || sender is not Button button) return;
         Editor.CommitTextEdit();
-        var menu = new ContextMenu { PlacementTarget = button, Placement = PlacementMode.Bottom };
+        var menu = new ContextMenu { Placement = PlacementMode.Bottom };
         foreach (var action in actions)
         {
             var entry = new MenuItem { Header = I18n.T(action.Label), IsEnabled = action.Enabled };
             entry.Click += (_, _) => RunObjectCommand(action.Action);
             menu.Items.Add(entry);
         }
-        menu.IsOpen = true;
+        menu.Open(button);
     }
 
-    void ArrangeMenuClick(object sender, RoutedEventArgs e) => OpenActionMenu(sender, new[]
+    void ArrangeMenuClick(object? sender, RoutedEventArgs e) => OpenActionMenu(sender, new[]
     {
         ("網格排列", (Action)(() => Editor.ArrangeImages(CollageLayout.Grid)), Editor.ImageCount > 0),
         ("直向排列", (Action)(() => Editor.ArrangeImages(CollageLayout.Vertical)), Editor.ImageCount > 0),
         ("橫向排列", (Action)(() => Editor.ArrangeImages(CollageLayout.Horizontal)), Editor.ImageCount > 0)
     });
 
-    void AlignmentMenuClick(object sender, RoutedEventArgs e) => OpenActionMenu(sender, new[]
+    void AlignmentMenuClick(object? sender, RoutedEventArgs e) => OpenActionMenu(sender, new[]
     {
         ("靠左對齊", (Action)(() => Editor.AlignSelection(ObjectAlignment.Left)), Editor.SelectionCount > 1),
         ("水平置中", (Action)(() => Editor.AlignSelection(ObjectAlignment.Center)), Editor.SelectionCount > 1),
@@ -187,7 +178,7 @@ public partial class MainWindow
         ("垂直平均分布", (Action)(() => Editor.DistributeSelection(false)), Editor.SelectionCount > 2)
     });
 
-    void OrderMenuClick(object sender, RoutedEventArgs e) => OpenActionMenu(sender, new[]
+    void OrderMenuClick(object? sender, RoutedEventArgs e) => OpenActionMenu(sender, new[]
     {
         ("移到最上層", (Action)(() => Editor.ChangeOrder(ObjectOrder.Front)), Editor.SelectionCount > 0),
         ("上移一層", (Action)(() => Editor.ChangeOrder(ObjectOrder.Forward)), Editor.SelectionCount > 0),
@@ -197,7 +188,7 @@ public partial class MainWindow
         ("刪除物件", (Action)Editor.DeleteSelection, Editor.SelectionCount > 0)
     });
 
-    void CanvasMenuClick(object sender, RoutedEventArgs e) => OpenActionMenu(sender, new[]
+    void CanvasMenuClick(object? sender, RoutedEventArgs e) => OpenActionMenu(sender, new[]
     {
         ("簡報 16:9 · 1920 × 1080", (Action)(() => Editor.ResizeCanvas(1920, 1080)), true),
         ("A4 直向 · 1240 × 1754", (Action)(() => Editor.ResizeCanvas(1240, 1754)), true),

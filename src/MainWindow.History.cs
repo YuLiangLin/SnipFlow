@@ -1,5 +1,5 @@
+using Avalonia.Input;
 using SnipFlow.Services;
-using System.Windows.Input;
 
 namespace SnipFlow;
 
@@ -18,6 +18,8 @@ public partial class MainWindow
             historyLifetime.Cancel();
             historyRefreshCancellation?.Cancel();
         };
+        // Keep opening the delete menu from selecting and loading the underlying card.
+        HistoryList.AddHandler(PointerPressedEvent, HistoryPreviewRightButtonDown, RoutingStrategies.Tunnel);
     }
 
     void RefreshHistory() => _ = RefreshHistoryAsync();
@@ -52,7 +54,7 @@ public partial class MainWindow
             {
                 HistoryList.ItemsSource = items;
                 HistoryCount.Text = items.Length.ToString();
-                HistoryEmpty.Visibility = items.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+                HistoryEmpty.IsVisible = items.Length == 0;
                 HistoryClearButton.IsEnabled = !busy && !capturePending && !historyDragInProgress && items.Length > 0;
             }
             finally { selectingHistory = false; }
@@ -71,7 +73,7 @@ public partial class MainWindow
         }
     }
 
-    async Task AddHistoryAsync(BitmapSource image)
+    async Task AddHistoryAsync(Bitmap image)
     {
         try
         {
@@ -98,16 +100,16 @@ public partial class MainWindow
         }
     }
 
-    void HistoryPreviewRightButtonDown(object sender, MouseButtonEventArgs e)
+    void HistoryPreviewRightButtonDown(object? sender, PointerPressedEventArgs e)
     {
         // Keep opening the delete menu from selecting and loading the underlying card.
-        if (sender is FrameworkElement { DataContext: HistoryItem }) e.Handled = true;
+        if (e.GetCurrentPoint(HistoryList).Properties.IsRightButtonPressed && e.Source is StyledElement { DataContext: HistoryItem }) e.Handled = true;
     }
 
-    async void DeleteHistoryClick(object sender, RoutedEventArgs e)
+    async void DeleteHistoryClick(object? sender, RoutedEventArgs e)
     {
         e.Handled = true;
-        if (!CanChangeHistory || sender is not FrameworkElement { Tag: HistoryItem item }) return;
+        if (!CanChangeHistory || sender is not Control { Tag: HistoryItem item }) return;
         busy = true;
         try
         {
@@ -130,7 +132,7 @@ public partial class MainWindow
         }
     }
 
-    async void ClearHistoryClick(object sender, RoutedEventArgs e)
+    async void ClearHistoryClick(object? sender, RoutedEventArgs e)
     {
         e.Handled = true;
         if (!CanChangeHistory) return;

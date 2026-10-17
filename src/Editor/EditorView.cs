@@ -1,29 +1,32 @@
-using System.Windows.Input;
+using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Templates;
+using Avalonia.Data;
+using Avalonia.Input;
+using Avalonia.Media.Immutable;
+using Avalonia.VisualTree;
 using SnipFlow.Services;
-using WpfUserControl = System.Windows.Controls.UserControl;
-using WpfCanvas = System.Windows.Controls.Canvas;
-using WpfTextBox = System.Windows.Controls.TextBox;
-using WpfPoint = System.Windows.Point;
-using WpfRect = System.Windows.Rect;
-using WpfVector = System.Windows.Vector;
-using WpfColor = System.Windows.Media.Color;
 
 namespace SnipFlow.Editor;
 
 /// <summary>
 /// A pixel-coordinate annotation canvas. Display zoom never changes exported dimensions.
 /// </summary>
-public sealed partial class EditorView : WpfUserControl
+public sealed partial class EditorView : UserControl
 {
     private const string CanvasHint = "滾輪縮放 · 空白鍵拖曳 · Delete 刪除標註";
     private const string TextHint = "Ctrl + Enter 完成 · Esc 取消 · 點選外部完成";
-    private readonly WpfCanvas _viewport;
-    private readonly WpfCanvas _documentLayer;
+    private static readonly RenderOptions SceneRenderOptions = new() { BitmapInterpolationMode = BitmapInterpolationMode.HighQuality };
+    private readonly Canvas _viewport;
+    private readonly Canvas _documentLayer;
+    // The scene is split into retained layers so a pointer move only re-renders what changed:
+    // image pixels, committed annotations, and the live gesture (pending shape, selection, marquee).
+    private readonly ImageSurface _imageSurface;
     private readonly ImageSurface _surface;
-    private readonly WpfTextBox _textEditor;
+    private readonly ImageSurface _overlay;
+    private readonly TextBox _textEditor;
     private readonly Border _textEditBorder;
     private readonly TextBlock _hintLabel;
-    private readonly FrameworkElement _emptyState;
+    private readonly Control _emptyState;
     private readonly Border _imageBadge;
     private readonly Border _zoomBadge;
     private readonly TextBlock _imageLabel;
@@ -31,27 +34,29 @@ public sealed partial class EditorView : WpfUserControl
     private readonly List<AnnotationItem> _annotations = new();
     private readonly Stack<EditorState> _undo = new();
     private readonly Stack<EditorState> _redo = new();
-    private BitmapSource? _image;
-    private BitmapSource? _pixelSource;
+    private Bitmap? _image;
+    private PixelBuffer? _pixelSource;
     private AnnotationItem? _pending;
     private AnnotationItem? _selected;
     private EditorState? _beforeTransform;
     private AnnotationItem? _transformSource;
     private SelectionHandle _transformHandle;
-    private WpfPoint _transformAnchor;
+    private Point _transformAnchor;
     private AnnotationItem? _textTarget;
     private AnnotationItem? _textDraft;
     private EditorState? _beforeText;
     private EditorState? _beforeProperty;
     private AnnotationItem? _propertySource;
     private AnnotationItem? _propertyTarget;
-    private Window? _hostWindow;
+    private TopLevel? _hostWindow;
+    private IPointer? _capturedPointer;
+    private SolidColorBrush? _textSelectionBrush;
     private bool _syncTextUi;
     private bool _outsideTextClick;
     private bool _languageSubscribed;
     private bool _suppressEvents;
     private AnnotationTool _tool = AnnotationTool.Arrow;
-    private WpfColor _color = WpfColor.FromRgb(99, 213, 197);
+    private Color _color = Color.FromRgb(99, 213, 197);
     private double _strokeWidth = 4;
     private double _textSize = 26;
     private double _zoom = 1;
@@ -63,9 +68,9 @@ public sealed partial class EditorView : WpfUserControl
     private bool _fitMode = true;
     private bool _spaceDown;
     private bool _panning;
-    private WpfPoint _panStart;
-    private WpfPoint _panOrigin;
-    private WpfPoint _gestureStart;
+    private Point _panStart;
+    private Point _panOrigin;
+    private Point _gestureStart;
     private SelectionHandle _hoverHandle;
 
     public event EventHandler? Changed;
@@ -80,7 +85,7 @@ public sealed partial class EditorView : WpfUserControl
     public long Revision => _revision;
     public bool IsInteracting => _textDraft is not null || _pending is not null || _transformSource is not null || _propertySource is not null || _marqueeStart is not null;
     public AnnotationTool? SelectedTool => SelectedItem?.Tool;
-    public WpfColor? SelectedColor => SelectedItem?.Color;
+    public Color? SelectedColor => SelectedItem?.Color;
     public double? SelectedStrokeWidth => SelectedItem?.Width;
     public double? SelectedTextSize => SelectedItem?.Tool == AnnotationTool.Text ? SelectedItem.FontSize : null;
 
@@ -128,35 +133,40 @@ public sealed partial class EditorView : WpfUserControl
         Focusable = true;
         ClipToBounds = true;
         Background = ThemeService.Brush("Bg");
-        _viewport = new WpfCanvas
+        _viewport = new Canvas
         {
             Background = ThemeService.Brush("Bg"),
             ClipToBounds = true
         };
-        _documentLayer = new WpfCanvas
+        _documentLayer = new Canvas
         {
-            Visibility = Visibility.Collapsed,
+            IsVisible = false,
             UseLayoutRounding = false,
-            SnapsToDevicePixels = false
+            // WPF render transforms start at the top-left corner; Avalonia's default origin is the center.
+            RenderTransformOrigin = RelativePoint.TopLeft
         };
-        TextOptions.SetTextFormattingMode(_documentLayer, TextFormattingMode.Ideal);
-        _surface = new ImageSurface(this);
-        RenderOptions.SetBitmapScalingMode(_surface, BitmapScalingMode.HighQuality);
-        _documentLayer.Children.Add(_surface);
-        _textEditor = new WpfTextBox
+        _imageSurface = new ImageSurface(this, SceneLayers.Image);
+        _surface = new ImageSurface(this, SceneLayers.Annotations);
+        _overlay = new ImageSurface(this, SceneLayers.Interaction);
+        foreach (ImageSurface layer in new[] { _imageSurface, _surface, _overlay })
+        {
+            RenderOptions.SetBitmapInterpolationMode(layer, BitmapInterpolationMode.HighQuality);
+            _documentLayer.Children.Add(layer);
+        }
+        _textEditor = new TextBox
         {
             AcceptsReturn = true,
             AcceptsTab = true,
             TextWrapping = TextWrapping.Wrap,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
             Background = Brushes.Transparent,
             Foreground = new SolidColorBrush(_color),
-            SelectionBrush = ThemeService.Brush("SelectionBorder"),
-            SelectionOpacity = 0.35,
+            // Selected text keeps the annotation color; only the highlight behind it is tinted.
+            SelectionForegroundBrush = null,
             BorderThickness = new Thickness(0),
             Padding = new Thickness(0),
-            Style = null,
+            MinWidth = 0,
+            MinHeight = 0,
+            CornerRadius = default,
             FontFamily = AnnotationItem.TextTypeface.FontFamily,
             FontWeight = AnnotationItem.TextTypeface.Weight,
             FontStyle = AnnotationItem.TextTypeface.Style,
@@ -166,30 +176,30 @@ public sealed partial class EditorView : WpfUserControl
             HorizontalContentAlignment = HorizontalAlignment.Left,
             VerticalContentAlignment = VerticalAlignment.Top,
             UseLayoutRounding = false,
-            SnapsToDevicePixels = false,
-            Language = System.Windows.Markup.XmlLanguage.GetLanguage(AnnotationItem.TextCulture.IetfLanguageTag),
-            Cursor = Cursors.IBeam,
+            Cursor = EditorCursor(StandardCursorType.Ibeam),
             UndoLimit = 100,
-            SpellCheck = { IsEnabled = false }
+            // A bare presenter: no scroll viewer, padding or caret inset between the box edge and
+            // the text origin, so the text wraps at exactly the annotation's width.
+            Template = new FuncControlTemplate<TextBox>(CreateTextEditorPresenter)
         };
         _textEditor.CaretBrush = _textEditor.Foreground;
-        TextOptions.SetTextFormattingMode(_textEditor, TextFormattingMode.Ideal);
-        TextBlock.SetLineHeight(_textEditor, double.NaN);
-        TextBlock.SetLineStackingStrategy(_textEditor, LineStackingStrategy.MaxHeight);
+        UpdateTextSelectionBrush();
         _textEditBorder = new Border
         {
             Child = _textEditor,
             BorderBrush = ThemeService.Brush("SelectionBorder"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(2),
-            Visibility = Visibility.Collapsed
+            UseLayoutRounding = false,
+            RenderTransformOrigin = RelativePoint.TopLeft,
+            IsVisible = false
         };
         _documentLayer.Children.Add(_textEditBorder);
         _viewport.Children.Add(_documentLayer);
         _textEditor.TextChanged += (_, _) => TextEditorChanged();
-        _textEditor.LostKeyboardFocus += (_, e) =>
+        _textEditor.LostFocus += (_, e) =>
         {
-            if (IsTextEditing && !IsWithin(_textEditor, e.NewFocus as DependencyObject))
+            if (IsTextEditing && !IsWithin(_textEditor, e.NewFocusedElement) && _textEditor.ContextFlyout?.IsOpen != true)
                 CommitTextEdit();
         };
 
@@ -218,18 +228,21 @@ public sealed partial class EditorView : WpfUserControl
         layout.Children.Add(_hintLabel);
         Content = layout;
 
-        _viewport.PreviewMouseDown += OnMouseDown;
-        _viewport.PreviewMouseMove += OnMouseMove;
-        _viewport.PreviewMouseUp += OnMouseUp;
-        _viewport.PreviewMouseWheel += OnMouseWheel;
-        _viewport.LostMouseCapture += (_, e) =>
+        _viewport.AddHandler(PointerPressedEvent, OnMouseDown, RoutingStrategies.Tunnel);
+        _viewport.AddHandler(PointerMovedEvent, OnMouseMove, RoutingStrategies.Tunnel);
+        _viewport.AddHandler(PointerReleasedEvent, OnMouseUp, RoutingStrategies.Tunnel);
+        _viewport.AddHandler(PointerWheelChangedEvent, OnMouseWheel, RoutingStrategies.Tunnel);
+        _viewport.PointerCaptureLost += (_, e) =>
         {
-            if (ReferenceEquals(e.OriginalSource, _viewport))
+            if (ReferenceEquals(e.Source, _viewport) && ReferenceEquals(e.Pointer, _capturedPointer))
+            {
+                _capturedPointer = null;
                 CompleteGesture();
+            }
         };
-        PreviewKeyDown += OnKeyDown;
-        PreviewKeyUp += OnKeyUp;
-        LostKeyboardFocus += (_, _) =>
+        AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
+        AddHandler(KeyUpEvent, OnKeyUp, RoutingStrategies.Tunnel);
+        LostFocus += (_, _) =>
         {
             _spaceDown = false;
             UpdateCursor();
@@ -265,19 +278,18 @@ public sealed partial class EditorView : WpfUserControl
         UpdateCursor();
     }
 
-    public void LoadImage(BitmapSource image)
+    public void LoadImage(Bitmap image)
     {
         VerifyAccess();
         ArgumentNullException.ThrowIfNull(image);
-        if (image.PixelWidth < 1 || image.PixelHeight < 1)
+        if (image.PixelSize.Width < 1 || image.PixelSize.Height < 1)
             throw new ArgumentException(I18n.T("影像尺寸不得為零。"), nameof(image));
 
         CancelTextEdit();
         CancelGesture();
         EndPropertyEdit();
-        // Cloning a frozen decoded image can still access its original thread's decoder.
-        _image = image.IsFrozen ? image : image.CloneCurrentValue();
-        if (!_image.IsFrozen) _image.Freeze();
+        // One document unit is one source pixel; a 150% desktop capture must not shrink.
+        _image = AtDocumentDpi(image);
         _pixelSource = null;
         _annotations.Clear();
         _selection.Clear();
@@ -286,16 +298,13 @@ public sealed partial class EditorView : WpfUserControl
         _redo.Clear();
         _selected = null;
         _revision = _nextRevision = _savedRevision = 0;
-        _surface.Width = image.PixelWidth;
-        _surface.Height = image.PixelHeight;
-        _documentLayer.Width = image.PixelWidth;
-        _documentLayer.Height = image.PixelHeight;
-        _documentLayer.Visibility = Visibility.Visible;
-        _emptyState.Visibility = Visibility.Collapsed;
-        _imageBadge.Visibility = _zoomBadge.Visibility = Visibility.Visible;
-        _imageLabel.Text = $"{image.PixelWidth:N0} × {image.PixelHeight:N0} px";
+        SizeDocument(_image);
+        _documentLayer.IsVisible = true;
+        _emptyState.IsVisible = false;
+        _imageBadge.IsVisible = _zoomBadge.IsVisible = true;
         _fitMode = true;
         FitToView();
+        RefreshLanguage();
         RaiseSelectionChanged();
         RaiseChanged();
     }
@@ -311,7 +320,7 @@ public sealed partial class EditorView : WpfUserControl
         return new(_image, _annotations.Select(item => item.Clone()).ToList(), HasEdits, IsCollage);
     }
 
-    internal void RestoreSession(BitmapSource image, IReadOnlyList<AnnotationItem> annotations, bool hasEdits, bool isCollage = false)
+    internal void RestoreSession(Bitmap image, IReadOnlyList<AnnotationItem> annotations, bool hasEdits, bool isCollage = false)
     {
         VerifyAccess();
         ArgumentNullException.ThrowIfNull(image);
@@ -321,12 +330,14 @@ public sealed partial class EditorView : WpfUserControl
         _suppressEvents = true;
         try
         {
-            LoadImage(image);
+            LoadImage(isCollage ? AsBoard(image) : image);
             IsCollage = isCollage;
+            RefreshLanguage();
             _annotations.AddRange(restored);
             _revision = _nextRevision = restored.Count > 0 || hasEdits ? 1 : 0;
             _savedRevision = hasEdits ? -1 : _revision;
-            _surface.InvalidateVisual();
+            EnsureRenderCache();
+            InvalidateScene();
         }
         finally
         {
@@ -338,7 +349,7 @@ public sealed partial class EditorView : WpfUserControl
     }
 
     /// <summary>Returns only image pixels and committed annotations, at the original pixel size.</summary>
-    public BitmapSource ExportImage()
+    public Bitmap ExportImage()
     {
         VerifyAccess();
         if (_image is null)
@@ -347,18 +358,12 @@ public sealed partial class EditorView : WpfUserControl
         CompleteGesture();
         CommitTextEdit();
         EndPropertyEdit();
-        if (_annotations.Count == 0)
+        if (_annotations.Count == 0 && !IsBoard(_image))
             return _image;
 
-        var visual = new DrawingVisual();
-        using (DrawingContext context = visual.RenderOpen())
-            DrawScene(context, includeSelection: false);
         // At 96 DPI, one drawing unit is one output pixel. Source DPI is deliberately
         // not used for layout; a 150% desktop capture must not shrink on export.
-        var result = new RenderTargetBitmap(_image.PixelWidth, _image.PixelHeight, 96, 96, PixelFormats.Pbgra32);
-        result.Render(visual);
-        result.Freeze();
-        return result;
+        return ImageTools.Render(new PixelSize(PixelWidth, PixelHeight), context => DrawScene(context, SceneLayers.Document, onScreen: false));
     }
 
     public void MarkSaved()
@@ -415,10 +420,10 @@ public sealed partial class EditorView : WpfUserControl
         if (tool != AnnotationTool.Select)
             SelectItem(null);
         UpdateCursor();
-        _surface.InvalidateVisual();
+        InvalidateScene();
     }
 
-    public void SetColor(WpfColor color)
+    public void SetColor(Color color)
     {
         VerifyAccess();
         _color = color;
@@ -447,12 +452,12 @@ public sealed partial class EditorView : WpfUserControl
     public void FitToView()
     {
         VerifyAccess();
-        if (_image is null || _viewport.ActualWidth <= 0 || _viewport.ActualHeight <= 0)
+        if (_image is null || _viewport.Bounds.Width <= 0 || _viewport.Bounds.Height <= 0)
             return;
         _fitMode = true;
-        _zoom = Math.Clamp(Math.Min((_viewport.ActualWidth - 80) / _image.PixelWidth, (_viewport.ActualHeight - 80) / _image.PixelHeight), 0.005, 1);
-        _panX = (_viewport.ActualWidth - _image.PixelWidth * _zoom) / 2;
-        _panY = (_viewport.ActualHeight - _image.PixelHeight * _zoom) / 2;
+        _zoom = Math.Clamp(Math.Min((_viewport.Bounds.Width - 80) / PixelWidth, (_viewport.Bounds.Height - 80) / PixelHeight), 0.005, 1);
+        _panX = (_viewport.Bounds.Width - PixelWidth * _zoom) / 2;
+        _panY = (_viewport.Bounds.Height - PixelHeight * _zoom) / 2;
         RefreshView();
     }
 
@@ -462,37 +467,38 @@ public sealed partial class EditorView : WpfUserControl
         if (!HasImage)
             return;
         CompleteGesture();
-        ZoomAt(new WpfPoint(_viewport.ActualWidth / 2, _viewport.ActualHeight / 2), 1);
+        ZoomAt(new Point(_viewport.Bounds.Width / 2, _viewport.Bounds.Height / 2), 1);
     }
 
     public void ZoomIn() => ZoomFromCenter(1.2);
     public void ZoomOut() => ZoomFromCenter(1 / 1.2);
 
-    private void OnMouseDown(object sender, MouseButtonEventArgs e)
+    private void OnMouseDown(object? sender, PointerPressedEventArgs e)
     {
         if (!HasImage)
             return;
-        if (IsTextEditing && IsWithin(_textEditor, e.OriginalSource as DependencyObject))
+        if (IsTextEditing && IsWithin(_textEditor, e.Source))
             return;
-        if (e.ChangedButton == MouseButton.Right)
+        MouseButton button = ChangedButton(e);
+        if (button == MouseButton.Right)
         {
             ShowObjectMenu(ViewportToImage(e.GetPosition(_viewport)));
             e.Handled = true;
             return;
         }
-        if (e.ChangedButton == MouseButton.Middle || (e.ChangedButton == MouseButton.Left && _spaceDown))
+        if (button == MouseButton.Middle || (button == MouseButton.Left && _spaceDown))
         {
             CompleteGesture();
             _panning = true;
             _panStart = e.GetPosition(_viewport);
-            _panOrigin = new WpfPoint(_panX, _panY);
+            _panOrigin = new Point(_panX, _panY);
             _fitMode = false;
-            _viewport.CaptureMouse();
+            CaptureViewport(e.Pointer);
             UpdateCursor();
             e.Handled = true;
             return;
         }
-        if (e.ChangedButton != MouseButton.Left)
+        if (button != MouseButton.Left)
             return;
 
         bool finishedText = _outsideTextClick;
@@ -504,12 +510,12 @@ public sealed partial class EditorView : WpfUserControl
         }
         EndPropertyEdit();
         Focus();
-        WpfPoint point = ViewportToImage(e.GetPosition(_viewport));
+        Point point = ViewportToImage(e.GetPosition(_viewport));
         SelectionHandle handle = HitSelectionHandle(point);
         if (_selected is not null && handle != SelectionHandle.None)
         {
             BeginTransform(handle, point);
-            _viewport.CaptureMouse();
+            CaptureViewport(e.Pointer);
             e.Handled = true;
             return;
         }
@@ -524,14 +530,14 @@ public sealed partial class EditorView : WpfUserControl
             AnnotationItem? item = _annotations.LastOrDefault(candidate => candidate.HitTest(point, 6 / _zoom));
             if (item is null && _selected is { Tool: AnnotationTool.Rectangle or AnnotationTool.Ellipse or AnnotationTool.Text or AnnotationTool.Mosaic } && _selected.Bounds.Contains(point))
                 item = _selected;
-            bool extend = (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
+            bool extend = (e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Shift)) != 0;
             if (item is null)
             {
                 _marqueeOriginal = extend ? new HashSet<AnnotationItem>(_selection) : new();
                 if (!extend) SelectItem(null);
                 _marqueeStart = point;
-                _marquee = new WpfRect(point, point);
-                _viewport.CaptureMouse();
+                _marquee = new Rect(point, point);
+                CaptureViewport(e.Pointer);
             }
             else if (extend)
             {
@@ -551,7 +557,7 @@ public sealed partial class EditorView : WpfUserControl
             if (item is not null && _selection.Contains(item) && !extend)
             {
                 BeginTransform(SelectionHandle.Move, point);
-                _viewport.CaptureMouse();
+                CaptureViewport(e.Pointer);
             }
         }
         else if (_tool == AnnotationTool.Text)
@@ -564,7 +570,7 @@ public sealed partial class EditorView : WpfUserControl
                 SelectItem(null);
                 _gestureStart = point;
                 _pending = new AnnotationItem { Tool = AnnotationTool.Text, Color = _color, Width = _strokeWidth, FontSize = _textSize, Start = point, End = point };
-                _viewport.CaptureMouse();
+                CaptureViewport(e.Pointer);
             }
         }
         else
@@ -574,17 +580,17 @@ public sealed partial class EditorView : WpfUserControl
             _pending = new AnnotationItem { Tool = _tool, Color = _color, Width = _strokeWidth, Start = point, End = point };
             if (_tool is AnnotationTool.Pen or AnnotationTool.Highlight)
                 _pending.Points.Add(point);
-            _viewport.CaptureMouse();
+            CaptureViewport(e.Pointer);
         }
-        _surface.InvalidateVisual();
+        InvalidateScene();
         e.Handled = true;
     }
 
-    private void OnMouseMove(object sender, MouseEventArgs e)
+    private void OnMouseMove(object? sender, PointerEventArgs e)
     {
         if (_panning)
         {
-            WpfVector delta = e.GetPosition(_viewport) - _panStart;
+            Vector delta = e.GetPosition(_viewport) - _panStart;
             _panX = _panOrigin.X + delta.X;
             _panY = _panOrigin.Y + delta.Y;
             ClampPan();
@@ -595,17 +601,17 @@ public sealed partial class EditorView : WpfUserControl
         if (!HasImage)
             return;
 
-        WpfPoint point = ClampPoint(ViewportToImage(e.GetPosition(_viewport)));
+        Point point = ClampPoint(ViewportToImage(e.GetPosition(_viewport)));
         if (_marqueeStart is not null)
         {
-            _marquee = new WpfRect(_marqueeStart.Value, point);
-            _surface.InvalidateVisual();
+            _marquee = AnnotationItem.Span(_marqueeStart.Value, point);
+            _overlay.InvalidateVisual();
             e.Handled = true;
         }
         else if (_pending is not null)
         {
             UpdatePending(point);
-            _surface.InvalidateVisual();
+            _overlay.InvalidateVisual();
             e.Handled = true;
         }
         else if (_beforeTransform is not null && _selected is not null)
@@ -620,13 +626,13 @@ public sealed partial class EditorView : WpfUserControl
         }
     }
 
-    private void OnMouseUp(object sender, MouseButtonEventArgs e)
+    private void OnMouseUp(object? sender, PointerReleasedEventArgs e)
     {
-        if (e.ChangedButton is not (MouseButton.Left or MouseButton.Middle))
+        if (ChangedButton(e) is not (MouseButton.Left or MouseButton.Middle))
             return;
         if (_pending is not null)
         {
-            WpfPoint point = ClampPoint(ViewportToImage(e.GetPosition(_viewport)));
+            Point point = ClampPoint(ViewportToImage(e.GetPosition(_viewport)));
             UpdatePending(point);
         }
         else if (_beforeTransform is not null)
@@ -638,27 +644,28 @@ public sealed partial class EditorView : WpfUserControl
         }
     }
 
-    private void OnMouseWheel(object sender, MouseWheelEventArgs e)
+    private void OnMouseWheel(object? sender, PointerWheelEventArgs e)
     {
         if (!HasImage)
             return;
         CompleteGesture();
-        double factor = Math.Pow(1.12, e.Delta / 120.0);
+        // One wheel notch is Delta.Y = 1 (WPF reported 120).
+        double factor = Math.Pow(1.12, e.Delta.Y);
         ZoomAt(e.GetPosition(_viewport), _zoom * factor);
         e.Handled = true;
     }
 
-    private void OnKeyDown(object sender, KeyEventArgs e)
+    private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        ModifierKeys modifiers = Keyboard.Modifiers;
+        KeyModifiers modifiers = e.KeyModifiers;
         if (IsTextEditing)
         {
-            if (modifiers == ModifierKeys.Control && e.Key == Key.Enter)
+            if (modifiers == KeyModifiers.Control && e.Key == Key.Enter)
             {
                 CommitTextEdit();
                 e.Handled = true;
             }
-            else if (modifiers == ModifierKeys.None && e.Key == Key.Escape)
+            else if (modifiers == KeyModifiers.None && e.Key == Key.Escape)
             {
                 CancelTextEdit();
                 e.Handled = true;
@@ -666,51 +673,51 @@ public sealed partial class EditorView : WpfUserControl
             // Native TextBox caret, selection, IME, Delete, and local undo stay intact.
             return;
         }
-        if (modifiers == ModifierKeys.Control && e.Key == Key.Z)
+        if (modifiers == KeyModifiers.Control && e.Key == Key.Z)
         {
             Undo();
             e.Handled = true;
         }
-        else if ((modifiers == ModifierKeys.Control && e.Key == Key.Y)
-            || (modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Z))
+        else if ((modifiers == KeyModifiers.Control && e.Key == Key.Y)
+            || (modifiers == (KeyModifiers.Control | KeyModifiers.Shift) && e.Key == Key.Z))
         {
             Redo();
             e.Handled = true;
         }
-        else if (modifiers == ModifierKeys.Control && e.Key == Key.A)
+        else if (modifiers == KeyModifiers.Control && e.Key == Key.A)
         {
             SelectAll();
             e.Handled = true;
         }
-        else if (modifiers == ModifierKeys.Control && e.Key == Key.D)
+        else if (modifiers == KeyModifiers.Control && e.Key == Key.D)
         {
             try { DuplicateSelection(); }
             catch (Exception error) { AppDialog.Show(error.Message, I18n.T("無法複製物件"), MessageBoxButton.OK, MessageBoxImage.Warning); }
             e.Handled = true;
         }
-        else if ((modifiers is ModifierKeys.None or ModifierKeys.Shift) && e.Key is Key.Left or Key.Right or Key.Up or Key.Down)
+        else if ((modifiers is KeyModifiers.None or KeyModifiers.Shift) && e.Key is Key.Left or Key.Right or Key.Up or Key.Down)
         {
-            double step = modifiers == ModifierKeys.Shift ? 10 : 1;
+            double step = modifiers == KeyModifiers.Shift ? 10 : 1;
             NudgeSelection(e.Key == Key.Left ? -step : e.Key == Key.Right ? step : 0, e.Key == Key.Up ? -step : e.Key == Key.Down ? step : 0);
             e.Handled = true;
         }
-        else if (modifiers == ModifierKeys.None && (e.Key is Key.Delete or Key.Back))
+        else if (modifiers == KeyModifiers.None && (e.Key is Key.Delete or Key.Back))
         {
             DeleteSelection();
             e.Handled = true;
         }
-        else if (modifiers == ModifierKeys.None && e.Key == Key.Escape)
+        else if (modifiers == KeyModifiers.None && e.Key == Key.Escape)
         {
             CancelGesture();
             SelectItem(null);
             e.Handled = true;
         }
-        else if (modifiers == ModifierKeys.None && (e.Key is Key.Enter or Key.F2) && _selected?.Tool == AnnotationTool.Text)
+        else if (modifiers == KeyModifiers.None && (e.Key is Key.Enter or Key.F2) && _selected?.Tool == AnnotationTool.Text)
         {
             BeginTextEdit(_selected, null, null);
             e.Handled = true;
         }
-        else if (modifiers == ModifierKeys.None && e.Key == Key.Space)
+        else if (modifiers == KeyModifiers.None && e.Key == Key.Space)
         {
             _spaceDown = true;
             UpdateCursor();
@@ -718,7 +725,7 @@ public sealed partial class EditorView : WpfUserControl
         }
     }
 
-    private void OnKeyUp(object sender, KeyEventArgs e)
+    private void OnKeyUp(object? sender, KeyEventArgs e)
     {
         if (IsTextEditing)
             return;
@@ -730,7 +737,7 @@ public sealed partial class EditorView : WpfUserControl
         }
     }
 
-    private void BeginTextEdit(AnnotationItem? annotation, WpfRect? placement, WpfPoint? caretPosition)
+    private void BeginTextEdit(AnnotationItem? annotation, Rect? placement, Point? caretPosition)
     {
         CommitTextEdit();
         EndPropertyEdit();
@@ -742,8 +749,8 @@ public sealed partial class EditorView : WpfUserControl
             _textDraft = annotation.Clone();
         else
         {
-            WpfPoint start = ClampPoint(placement?.TopLeft ?? caretPosition ?? new WpfPoint(0, 0));
-            double availableWidth = Math.Max(1, _image.PixelWidth - start.X);
+            Point start = ClampPoint(placement?.TopLeft ?? caretPosition ?? new Point(0, 0));
+            double availableWidth = Math.Max(1, PixelWidth - start.X);
             _textDraft = new AnnotationItem
             {
                 Tool = AnnotationTool.Text,
@@ -763,21 +770,24 @@ public sealed partial class EditorView : WpfUserControl
         _textEditor.Text = _textDraft.Text;
         _textEditor.IsUndoEnabled = true;
         _syncTextUi = false;
-        _textEditBorder.Visibility = Visibility.Visible;
+        _textEditBorder.IsVisible = true;
         _spaceDown = false;
         _hintLabel.Text = I18n.T(TextHint);
         UpdateTextEditor();
         AttachHostWindow();
         _textEditor.Focus();
-        _textEditor.CaretIndex = _textEditor.Text.Length;
-        if (annotation is not null && caretPosition is WpfPoint position)
+        _textEditor.CaretIndex = _textEditor.Text?.Length ?? 0;
+        if (annotation is not null && caretPosition is Point position)
         {
-            _textEditor.UpdateLayout();
-            int index = _textEditor.GetCharacterIndexFromPoint(_documentLayer.TranslatePoint(position, _textEditor), true);
+            // Hit-test the same layout the text box shows, in the text's own (unrotated) frame.
+            Matrix toText = _textDraft.TextToDocumentMatrix.Invert();
+            Point local = toText.Transform(position);
+            TextHitTestResult hit = _textDraft.FormatText().HitTestPoint(local);
+            int index = hit.TextPosition;
             if (index >= 0)
-                _textEditor.CaretIndex = index;
+                _textEditor.CaretIndex = Math.Min(index, _textEditor.Text?.Length ?? 0);
         }
-        _surface.InvalidateVisual();
+        InvalidateScene();
         RaiseSelectionChanged();
         RaiseChanged();
     }
@@ -790,7 +800,7 @@ public sealed partial class EditorView : WpfUserControl
         AnnotationItem draft = _textDraft;
         AnnotationItem? target = _textTarget;
         EditorState before = _beforeText!;
-        draft.Text = _textEditor.Text;
+        draft.Text = _textEditor.Text ?? string.Empty;
         bool empty = string.IsNullOrWhiteSpace(draft.Text);
         bool changed = target is null ? !empty : empty || !draft.ContentEquals(target);
         EndTextUi();
@@ -816,7 +826,7 @@ public sealed partial class EditorView : WpfUserControl
         }
         else
             SelectItem(target);
-        _surface.InvalidateVisual();
+        InvalidateScene();
         RaiseSelectionChanged();
         RaiseChanged();
     }
@@ -829,7 +839,7 @@ public sealed partial class EditorView : WpfUserControl
         AnnotationItem? target = _textTarget;
         EndTextUi();
         SelectItem(target);
-        _surface.InvalidateVisual();
+        InvalidateScene();
         RaiseSelectionChanged();
         RaiseChanged();
     }
@@ -840,7 +850,7 @@ public sealed partial class EditorView : WpfUserControl
         _textDraft = null;
         _textTarget = null;
         _beforeText = null;
-        _textEditBorder.Visibility = Visibility.Collapsed;
+        _textEditBorder.IsVisible = false;
         RefreshLanguage();
         if (hadFocus)
             Focus();
@@ -851,7 +861,7 @@ public sealed partial class EditorView : WpfUserControl
     {
         if (_syncTextUi || _textDraft is null)
             return;
-        _textDraft.Text = _textEditor.Text;
+        _textDraft.Text = _textEditor.Text ?? string.Empty;
         UpdateTextEditor();
         RaiseChanged();
     }
@@ -863,72 +873,123 @@ public sealed partial class EditorView : WpfUserControl
         Size size = _textDraft.TextLayoutSize;
         double border = 1 / _zoom;
         _textEditBorder.BorderThickness = new Thickness(border);
-        _textEditor.Language = System.Windows.Markup.XmlLanguage.GetLanguage(AnnotationItem.TextCulture.IetfLanguageTag);
         _textEditor.FontSize = _textDraft.FontSize;
-        _textEditor.Foreground = new SolidColorBrush(_textDraft.Color);
+        if ((_textEditor.Foreground as ISolidColorBrush)?.Color != _textDraft.Color)
+        {
+            var foreground = new SolidColorBrush(_textDraft.Color);
+            _textEditor.Foreground = foreground;
+            _textEditor.CaretBrush = foreground;
+        }
         _textEditor.Background = Brushes.Transparent;
-        _textEditor.CaretBrush = _textEditor.Foreground;
-        // TextBoxView reserves caret space in its content margin, even with zero
-        // Padding. Keep that UI inset outside the annotation's text origin/width.
-        _textEditor.ApplyTemplate();
-        Thickness inset = (_textEditor.Template?.FindName("PART_ContentHost", _textEditor) as ScrollViewer)?.Content is FrameworkElement textView
-            ? textView.Margin : new Thickness(0);
-        _textEditor.Width = Math.Max(1, size.Width) + inset.Left + inset.Right;
+        // The editor's presenter has no content margin, so the text box is exactly the
+        // annotation's text width and its text origin is the annotation's origin.
+        _textEditor.Width = Math.Max(1, size.Width);
         // The input viewport grows with all lines. Its extra caret room is UI only.
-        _textEditor.Height = Math.Max(size.Height, _textDraft.FontSize * 1.4) + _textDraft.FontSize * 0.2 + inset.Top + inset.Bottom;
-        // Apply the same glyph transform as DrawText, keeping caret/border room outside its origin.
+        _textEditor.Height = Math.Max(size.Height, _textDraft.FontSize * 1.4) + _textDraft.FontSize * 0.2;
+        // Apply the same glyph transform as DrawText, keeping the border outside its origin.
         var matrix = _textDraft.TextToDocumentMatrix;
-        var origin = matrix.Transform(new WpfPoint(-inset.Left - border, -inset.Top - border));
-        matrix.OffsetX = origin.X;
-        matrix.OffsetY = origin.Y;
-        WpfCanvas.SetLeft(_textEditBorder, 0);
-        WpfCanvas.SetTop(_textEditBorder, 0);
-        _textEditBorder.RenderTransform = new MatrixTransform(matrix);
+        var origin = matrix.Transform(new Point(-border, -border));
+        Canvas.SetLeft(_textEditBorder, 0);
+        Canvas.SetTop(_textEditBorder, 0);
+        _textEditBorder.RenderTransform = new MatrixTransform(new Matrix(matrix.M11, matrix.M12, matrix.M21, matrix.M22, origin.X, origin.Y));
+    }
+
+    private static Control CreateTextEditorPresenter(TextBox box, INameScope scope)
+    {
+        var presenter = new TextPresenter
+        {
+            Name = "PART_TextPresenter",
+            Background = Brushes.Transparent,
+            UseLayoutRounding = false,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Top
+        };
+        presenter.Bind(TextPresenter.TextProperty, new TemplateBinding(TextBox.TextProperty) { Mode = BindingMode.TwoWay });
+        presenter.Bind(TextPresenter.CaretBlinkIntervalProperty, new TemplateBinding(TextBox.CaretBlinkIntervalProperty));
+        presenter.Bind(TextPresenter.CaretIndexProperty, new TemplateBinding(TextBox.CaretIndexProperty));
+        presenter.Bind(TextPresenter.SelectionStartProperty, new TemplateBinding(TextBox.SelectionStartProperty));
+        presenter.Bind(TextPresenter.SelectionEndProperty, new TemplateBinding(TextBox.SelectionEndProperty));
+        presenter.Bind(TextPresenter.TextAlignmentProperty, new TemplateBinding(TextBox.TextAlignmentProperty));
+        presenter.Bind(TextPresenter.TextWrappingProperty, new TemplateBinding(TextBox.TextWrappingProperty));
+        presenter.Bind(TextPresenter.LineHeightProperty, new TemplateBinding(TextBox.LineHeightProperty));
+        presenter.Bind(TextPresenter.PasswordCharProperty, new TemplateBinding(TextBox.PasswordCharProperty));
+        presenter.Bind(TextPresenter.RevealPasswordProperty, new TemplateBinding(TextBox.RevealPasswordProperty));
+        presenter.Bind(TextPresenter.SelectionBrushProperty, new TemplateBinding(TextBox.SelectionBrushProperty));
+        presenter.Bind(TextPresenter.SelectionForegroundBrushProperty, new TemplateBinding(TextBox.SelectionForegroundBrushProperty));
+        presenter.Bind(TextPresenter.CaretBrushProperty, new TemplateBinding(TextBox.CaretBrushProperty));
+        return presenter.RegisterInNameScope(scope);
+    }
+
+    private void UpdateTextSelectionBrush()
+    {
+        // WPF drew the theme's selection border color at 35% opacity behind the selected glyphs.
+        _textSelectionBrush ??= new SolidColorBrush(default, 0.35);
+        _textSelectionBrush.Color = ThemeService.GetColor("SelectionBorder");
+        _textEditor.SelectionBrush = _textSelectionBrush;
     }
 
     private void AttachHostWindow()
     {
-        Window? window = Window.GetWindow(this);
+        TopLevel? window = TopLevel.GetTopLevel(this);
         if (ReferenceEquals(window, _hostWindow))
             return;
         DetachHostWindow();
         _hostWindow = window;
-        if (window is not null)
-            window.PreviewMouseDown += OnHostMouseDown;
+        window?.AddHandler(PointerPressedEvent, OnHostMouseDown, RoutingStrategies.Tunnel, handledEventsToo: true);
     }
 
     private void DetachHostWindow()
     {
-        if (_hostWindow is not null)
-            _hostWindow.PreviewMouseDown -= OnHostMouseDown;
+        _hostWindow?.RemoveHandler(PointerPressedEvent, OnHostMouseDown);
         _hostWindow = null;
     }
 
-    private void OnHostMouseDown(object sender, MouseButtonEventArgs e)
+    private void OnHostMouseDown(object? sender, PointerPressedEventArgs e)
     {
-        if (e.ChangedButton == MouseButton.Left && IsTextEditing && !IsWithin(_textEditor, e.OriginalSource as DependencyObject))
+        if (e.GetCurrentPoint(null).Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed && IsTextEditing && !IsWithin(_textEditor, e.Source))
         {
-            _outsideTextClick = IsWithin(_viewport, e.OriginalSource as DependencyObject);
+            _outsideTextClick = IsWithin(_viewport, e.Source);
             CommitTextEdit();
         }
     }
 
-    private static bool IsWithin(DependencyObject parent, DependencyObject? child)
+    private static bool IsWithin(StyledElement parent, object? child)
     {
-        while (child is not null)
+        var current = child as StyledElement;
+        // The visual root's logical owner can lead back into the tree, so stop at any repeat.
+        var visited = new HashSet<StyledElement>(ReferenceEqualityComparer.Instance);
+        while (current is not null && visited.Add(current))
         {
-            if (ReferenceEquals(parent, child))
+            if (ReferenceEquals(parent, current))
                 return true;
-            child = child is Visual or System.Windows.Media.Media3D.Visual3D
-                ? VisualTreeHelper.GetParent(child)
-                : LogicalTreeHelper.GetParent(child);
+            // Popups (the text box's Cut/Copy/Paste menu) continue through their owner and target.
+            current = current is TopLevel ? current.Parent
+                : (current as Visual)?.GetVisualParent() as StyledElement
+                ?? (current as Avalonia.Controls.Primitives.Popup)?.PlacementTarget
+                ?? current.Parent;
         }
         return false;
     }
 
+    private void CaptureViewport(IPointer pointer)
+    {
+        _capturedPointer = pointer;
+        pointer.Capture(_viewport);
+    }
+
+    private void ReleaseViewportCapture()
+    {
+        IPointer? pointer = _capturedPointer;
+        _capturedPointer = null;
+        if (pointer is not null && ReferenceEquals(pointer.Captured, _viewport))
+            pointer.Capture(null);
+    }
+
+    private MouseButton ChangedButton(PointerEventArgs e) => e.GetCurrentPoint(_viewport).Properties.PointerUpdateKind.GetMouseButton();
+
     private void CompleteGesture()
     {
-        WpfRect? marquee = _marquee;
+        Rect? marquee = _marquee;
         HashSet<AnnotationItem>? marqueeOriginal = _marqueeOriginal;
         _marquee = null;
         _marqueeStart = null;
@@ -942,8 +1003,7 @@ public sealed partial class EditorView : WpfUserControl
         _transformSources.Clear();
         _transformHandle = SelectionHandle.None;
         _panning = false;
-        if (_viewport.IsMouseCaptured)
-            _viewport.ReleaseMouseCapture();
+        ReleaseViewportCapture();
 
         if (marquee is not null)
         {
@@ -954,7 +1014,7 @@ public sealed partial class EditorView : WpfUserControl
         }
         else if (pending?.Tool == AnnotationTool.Text)
         {
-            WpfRect? placement = pending.TextWidth > 0 ? pending.Bounds : null;
+            Rect? placement = pending.TextWidth > 0 ? pending.Bounds : null;
             BeginTextEdit(null, placement, pending.Start);
         }
         else if (pending is not null && IsUseful(pending))
@@ -976,7 +1036,7 @@ public sealed partial class EditorView : WpfUserControl
         }
 
         UpdateCursor();
-        _surface.InvalidateVisual();
+        InvalidateScene();
     }
 
     private void CancelGesture()
@@ -994,24 +1054,23 @@ public sealed partial class EditorView : WpfUserControl
         _panning = false;
         if (before is not null)
             Restore(before);
-        if (_viewport.IsMouseCaptured)
-            _viewport.ReleaseMouseCapture();
+        ReleaseViewportCapture();
         UpdateCursor();
-        _surface.InvalidateVisual();
+        InvalidateScene();
     }
 
-    private void UpdatePending(WpfPoint point)
+    private void UpdatePending(Point point)
     {
         if (_pending is null)
             return;
         if (_pending.Tool == AnnotationTool.Text)
         {
-            if ((point - _gestureStart).Length * _zoom >= 4)
+            if (Point.Distance(point, _gestureStart) * _zoom >= 4)
             {
-                var bounds = new WpfRect(_gestureStart, point);
+                var bounds = AnnotationItem.Span(_gestureStart, point);
                 _pending.Start = bounds.TopLeft;
                 _pending.End = bounds.TopLeft;
-                _pending.TextWidth = Math.Min(Math.Max(24, bounds.Width), Math.Max(1, _image!.PixelWidth - bounds.Left));
+                _pending.TextWidth = Math.Min(Math.Max(24, bounds.Width), Math.Max(1, PixelWidth - bounds.Left));
                 _pending.TextBoxHeight = bounds.Height;
             }
             else
@@ -1024,11 +1083,11 @@ public sealed partial class EditorView : WpfUserControl
             return;
         }
         _pending.End = point;
-        if ((_pending.Tool is AnnotationTool.Pen or AnnotationTool.Highlight) && (_pending.Points[^1] - point).Length >= 0.6)
+        if ((_pending.Tool is AnnotationTool.Pen or AnnotationTool.Highlight) && Point.Distance(_pending.Points[^1], point) >= 0.6)
             _pending.Points.Add(point);
     }
 
-    private void BeginTransform(SelectionHandle handle, WpfPoint point)
+    private void BeginTransform(SelectionHandle handle, Point point)
     {
         if (_selected is null)
             return;
@@ -1043,16 +1102,16 @@ public sealed partial class EditorView : WpfUserControl
         UpdateCursor();
     }
 
-    private void UpdateTransform(WpfPoint point)
+    private void UpdateTransform(Point point)
     {
         if (_selected is null || _transformSource is null || _image is null)
             return;
         AnnotationItem source = _transformSource;
         foreach (var pair in _transformSources) pair.Key.CopyFrom(pair.Value);
-        WpfVector delta = point - _transformAnchor;
-        if (delta.LengthSquared < 0.0000000001)
+        Vector delta = point - _transformAnchor;
+        if (delta.SquaredLength < 0.0000000001)
         {
-            _surface.InvalidateVisual();
+            InvalidateScene();
             return;
         }
         if (_transformHandle == SelectionHandle.Move)
@@ -1073,31 +1132,31 @@ public sealed partial class EditorView : WpfUserControl
         }
         else
         {
-            WpfRect original = source.Tool == AnnotationTool.Image ? source.Bounds : EditableBounds(source);
-            WpfRect resized = _selected.Tool == AnnotationTool.Image
+            Rect original = source.Tool == AnnotationTool.Image ? source.Bounds : EditableBounds(source);
+            Rect resized = _selected.Tool == AnnotationTool.Image
                 ? ResizeImage(original, _transformHandle, delta)
                 : ResizeBox(original, _transformHandle, delta, _selected.Tool == AnnotationTool.Text ? 12 : 2);
             ApplyResize(_selected, source, original, resized);
         }
-        _surface.InvalidateVisual();
+        InvalidateScene();
     }
 
-    private WpfRect ResizeBox(WpfRect original, SelectionHandle handle, WpfVector delta, double minimum)
+    private Rect ResizeBox(Rect original, SelectionHandle handle, Vector delta, double minimum)
     {
         double left = original.Left, top = original.Top, right = original.Right, bottom = original.Bottom;
         static double ClampRange(double value, double min, double max) => Math.Clamp(value, min, Math.Max(min, max));
         if (handle is SelectionHandle.TopLeft or SelectionHandle.Left or SelectionHandle.BottomLeft)
             left = ClampRange(left + delta.X, 0, right - minimum);
         if (handle is SelectionHandle.TopRight or SelectionHandle.Right or SelectionHandle.BottomRight)
-            right = ClampRange(right + delta.X, left + minimum, _image!.PixelWidth);
+            right = ClampRange(right + delta.X, left + minimum, PixelWidth);
         if (handle is SelectionHandle.TopLeft or SelectionHandle.Top or SelectionHandle.TopRight)
             top = ClampRange(top + delta.Y, 0, bottom - minimum);
         if (handle is SelectionHandle.BottomLeft or SelectionHandle.Bottom or SelectionHandle.BottomRight)
-            bottom = ClampRange(bottom + delta.Y, top + minimum, _image!.PixelHeight);
-        return new WpfRect(new WpfPoint(left, top), new WpfPoint(right, bottom));
+            bottom = ClampRange(bottom + delta.Y, top + minimum, PixelHeight);
+        return AnnotationItem.Span(new Point(left, top), new Point(right, bottom));
     }
 
-    private static void ApplyResize(AnnotationItem item, AnnotationItem source, WpfRect original, WpfRect resized)
+    private static void ApplyResize(AnnotationItem item, AnnotationItem source, Rect original, Rect resized)
     {
         if (item.Tool == AnnotationTool.Text)
         {
@@ -1109,7 +1168,7 @@ public sealed partial class EditorView : WpfUserControl
         }
         else if (item.Tool is AnnotationTool.Pen or AnnotationTool.Highlight)
         {
-            WpfPoint Map(WpfPoint point) => new(resized.X + (point.X - original.X) * resized.Width / original.Width, resized.Y + (point.Y - original.Y) * resized.Height / original.Height);
+            Point Map(Point point) => new(resized.X + (point.X - original.X) * resized.Width / original.Width, resized.Y + (point.Y - original.Y) * resized.Height / original.Height);
             item.Start = Map(source.Start);
             item.End = Map(source.End);
             for (int i = 0; i < item.Points.Count; i++)
@@ -1122,17 +1181,17 @@ public sealed partial class EditorView : WpfUserControl
         }
     }
 
-    private static WpfRect EditableBounds(AnnotationItem item)
+    private static Rect EditableBounds(AnnotationItem item)
     {
-        WpfRect bounds = item.Bounds;
+        Rect bounds = item.Bounds;
         if (bounds.Width < 2)
-            bounds = new WpfRect(bounds.X - (2 - bounds.Width) / 2, bounds.Y, 2, bounds.Height);
+            bounds = new Rect(bounds.X - (2 - bounds.Width) / 2, bounds.Y, 2, bounds.Height);
         if (bounds.Height < 2)
-            bounds = new WpfRect(bounds.X, bounds.Y - (2 - bounds.Height) / 2, bounds.Width, 2);
+            bounds = new Rect(bounds.X, bounds.Y - (2 - bounds.Height) / 2, bounds.Width, 2);
         return bounds;
     }
 
-    private static IEnumerable<(SelectionHandle Handle, WpfPoint Position)> HandlePoints(AnnotationItem item)
+    private static IEnumerable<(SelectionHandle Handle, Point Position)> HandlePoints(AnnotationItem item)
     {
         if (item.Tool == AnnotationTool.Arrow)
         {
@@ -1142,32 +1201,32 @@ public sealed partial class EditorView : WpfUserControl
         }
         if (item.Tool == AnnotationTool.Image)
         {
-            WpfRect imageBounds = item.Bounds;
+            Rect imageBounds = item.Bounds;
             yield return (SelectionHandle.TopLeft, imageBounds.TopLeft);
             yield return (SelectionHandle.TopRight, imageBounds.TopRight);
             yield return (SelectionHandle.BottomRight, imageBounds.BottomRight);
             yield return (SelectionHandle.BottomLeft, imageBounds.BottomLeft);
             yield break;
         }
-        WpfRect bounds = EditableBounds(item);
+        Rect bounds = EditableBounds(item);
         double middleX = bounds.X + bounds.Width / 2;
         double middleY = bounds.Y + bounds.Height / 2;
         yield return (SelectionHandle.TopLeft, bounds.TopLeft);
-        yield return (SelectionHandle.Top, new WpfPoint(middleX, bounds.Top));
+        yield return (SelectionHandle.Top, new Point(middleX, bounds.Top));
         yield return (SelectionHandle.TopRight, bounds.TopRight);
-        yield return (SelectionHandle.Right, new WpfPoint(bounds.Right, middleY));
+        yield return (SelectionHandle.Right, new Point(bounds.Right, middleY));
         yield return (SelectionHandle.BottomRight, bounds.BottomRight);
-        yield return (SelectionHandle.Bottom, new WpfPoint(middleX, bounds.Bottom));
+        yield return (SelectionHandle.Bottom, new Point(middleX, bounds.Bottom));
         yield return (SelectionHandle.BottomLeft, bounds.BottomLeft);
-        yield return (SelectionHandle.Left, new WpfPoint(bounds.Left, middleY));
+        yield return (SelectionHandle.Left, new Point(bounds.Left, middleY));
     }
 
-    private SelectionHandle HitSelectionHandle(WpfPoint point)
+    private SelectionHandle HitSelectionHandle(Point point)
     {
         if (_selected is null || IsTextEditing || _selection.Count != 1)
             return SelectionHandle.None;
-        var nearest = HandlePoints(_selected).OrderBy(handle => (handle.Position - point).LengthSquared).First();
-        return (nearest.Position - point).Length <= 8 / _zoom ? nearest.Handle : SelectionHandle.None;
+        var nearest = HandlePoints(_selected).OrderBy(handle => ((Vector)(handle.Position - point)).SquaredLength).First();
+        return Point.Distance(nearest.Position, point) <= 8 / _zoom ? nearest.Handle : SelectionHandle.None;
     }
 
     public void BeginPropertyEdit()
@@ -1217,7 +1276,7 @@ public sealed partial class EditorView : WpfUserControl
                 _redo.Clear();
                 FinishMutation();
             }
-            _surface.InvalidateVisual();
+            InvalidateScene();
             RaiseSelectionChanged();
             RaiseChanged();
             return;
@@ -1243,7 +1302,7 @@ public sealed partial class EditorView : WpfUserControl
         }
         else
             RefreshMosaics();
-        _surface.InvalidateVisual();
+        InvalidateScene();
         RaiseSelectionChanged();
         RaiseChanged();
     }
@@ -1253,7 +1312,7 @@ public sealed partial class EditorView : WpfUserControl
         if (item.Tool is AnnotationTool.Pen or AnnotationTool.Highlight)
             return item.Points.Count != 0;
         if (item.Tool == AnnotationTool.Arrow)
-            return (item.End - item.Start).Length >= 2;
+            return Point.Distance(item.End, item.Start) >= 2;
         return item.Bounds.Width >= 1 && item.Bounds.Height >= 1;
     }
 
@@ -1267,7 +1326,7 @@ public sealed partial class EditorView : WpfUserControl
     {
         _revision = ++_nextRevision;
         RaiseChanged();
-        _surface.InvalidateVisual();
+        InvalidateScene();
     }
 
     private EditorState Snapshot() => new(_revision, _annotations.Select(item => item.Clone()).ToList(), _annotations.Select((item, index) => (item, index)).Where(pair => _selection.Contains(pair.item)).Select(pair => pair.index).ToArray(), _image, IsCollage);
@@ -1283,6 +1342,7 @@ public sealed partial class EditorView : WpfUserControl
         if (_fitMode) FitToView();
         else { ClampPan(); RefreshView(); }
         RefreshLanguage();
+        InvalidateScene();
     }
 
     private void PrepareMosaic(AnnotationItem item)
@@ -1290,55 +1350,44 @@ public sealed partial class EditorView : WpfUserControl
         if (_image is not null) PrepareMosaic(item, _image, _annotations, ref _pixelSource);
     }
 
-    private static void PrepareMosaic(AnnotationItem item, BitmapSource image, IReadOnlyList<AnnotationItem> annotations,
-        ref BitmapSource? pixelCache)
+    private static void PrepareMosaic(AnnotationItem item, Bitmap image, IReadOnlyList<AnnotationItem> annotations,
+        ref PixelBuffer? pixelCache)
     {
-        WpfRect bounds = item.Bounds;
-        int left = Math.Clamp((int)Math.Floor(bounds.Left), 0, image.PixelWidth - 1);
-        int top = Math.Clamp((int)Math.Floor(bounds.Top), 0, image.PixelHeight - 1);
-        int right = Math.Clamp((int)Math.Ceiling(bounds.Right), left + 1, image.PixelWidth);
-        int bottom = Math.Clamp((int)Math.Ceiling(bounds.Bottom), top + 1, image.PixelHeight);
+        Rect bounds = item.Bounds;
+        int imageWidth = image.PixelSize.Width, imageHeight = image.PixelSize.Height;
+        int left = Math.Clamp((int)Math.Floor(bounds.Left), 0, imageWidth - 1);
+        int top = Math.Clamp((int)Math.Floor(bounds.Top), 0, imageHeight - 1);
+        int right = Math.Clamp((int)Math.Ceiling(bounds.Right), left + 1, imageWidth);
+        int bottom = Math.Clamp((int)Math.Ceiling(bounds.Bottom), top + 1, imageHeight);
         int width = right - left;
         int height = bottom - top;
-        item.Start = new WpfPoint(left, top);
-        item.End = new WpfPoint(right, bottom);
+        item.Start = new Point(left, top);
+        item.End = new Point(right, bottom);
 
-        BitmapSource pixelSource;
+        byte[] pixels;
+        int stride = checked(width * 4);
         bool composite = annotations.Any(annotation => annotation.Tool == AnnotationTool.Image);
         if (composite)
         {
-            var visual = new DrawingVisual();
-            using (DrawingContext context = visual.RenderOpen())
+            // Photographs (and the annotations below this mask) are part of what gets pixelated.
+            using var source = ImageTools.Render(new PixelSize(width, height), context =>
             {
-                context.PushTransform(new TranslateTransform(-left, -top));
-                context.PushClip(new RectangleGeometry(new WpfRect(left, top, width, height)));
-                context.DrawImage(image, new WpfRect(0, 0, image.PixelWidth, image.PixelHeight));
-                foreach (AnnotationItem annotation in annotations)
+                using (context.PushRenderOptions(SceneRenderOptions))
+                using (context.PushTransform(Matrix.CreateTranslation(-left, -top)))
+                using (context.PushClip(new Rect(left, top, width, height)))
                 {
-                    if (ReferenceEquals(annotation, item)) break;
-                    annotation.Draw(context);
+                    context.DrawImage(image, new Rect(0, 0, imageWidth, imageHeight));
+                    foreach (AnnotationItem annotation in annotations)
+                    {
+                        if (ReferenceEquals(annotation, item)) break;
+                        annotation.Draw(context);
+                    }
                 }
-                context.Pop();
-                context.Pop();
-            }
-            var source = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
-            source.Render(visual);
-            source.Freeze();
-            pixelSource = source;
+            });
+            pixels = PixelBuffer.FromBitmap(source).Pixels;
         }
         else
-        {
-            if (pixelCache is null)
-            {
-                var source = new FormatConvertedBitmap(image, PixelFormats.Pbgra32, null, 0);
-                source.Freeze();
-                pixelCache = source;
-            }
-            pixelSource = pixelCache;
-        }
-        int stride = checked(width * 4);
-        var pixels = new byte[checked(stride * height)];
-        pixelSource.CopyPixels(new Int32Rect(composite ? 0 : left, composite ? 0 : top, width, height), pixels, stride, 0);
+            pixels = ReadSourcePixels(image, new PixelRect(left, top, width, height), ref pixelCache);
         int blockSize = Math.Clamp((int)Math.Round(item.Width * 6), 16, 192);
         for (int blockY = 0; blockY < height; blockY += blockSize)
         {
@@ -1372,33 +1421,70 @@ public sealed partial class EditorView : WpfUserControl
                     }
             }
         }
-        item.Mosaic = BitmapSource.Create(width, height, 96, 96, PixelFormats.Pbgra32, null, pixels, stride);
-        item.Mosaic.Freeze();
+        item.Mosaic = new PixelBuffer(width, height, pixels).ToBitmap();
     }
 
-    private void DrawScene(DrawingContext context, bool includeSelection)
+    /// <summary>Copies source pixels (BGRA premultiplied) without converting the whole image when possible.</summary>
+    private static byte[] ReadSourcePixels(Bitmap image, PixelRect area, ref PixelBuffer? pixelCache)
+    {
+        var pixels = new byte[checked(area.Width * area.Height * 4)];
+        if (IsBoard(image))
+        {
+            // An empty collage board is white everywhere.
+            Array.Fill(pixels, (byte)255);
+            return pixels;
+        }
+        if (image.Format == Avalonia.Platform.PixelFormat.Bgra8888
+            && image.AlphaFormat is Avalonia.Platform.AlphaFormat.Premul or Avalonia.Platform.AlphaFormat.Opaque)
+        {
+            var handle = System.Runtime.InteropServices.GCHandle.Alloc(pixels, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try { image.CopyPixels(area, handle.AddrOfPinnedObject(), pixels.Length, area.Width * 4); }
+            finally { handle.Free(); }
+            if (image.AlphaFormat == Avalonia.Platform.AlphaFormat.Opaque) ImageOrientation.SetOpaque(pixels);
+            return pixels;
+        }
+        pixelCache ??= ImageOrientation.ReadPixels(image);
+        return pixelCache.Crop(area).Pixels;
+    }
+
+    [Flags]
+    private enum SceneLayers
+    {
+        Image = 1,
+        Annotations = 2,
+        Interaction = 4,
+        Document = Image | Annotations
+    }
+
+    private void DrawScene(DrawingContext context, SceneLayers layers, bool onScreen)
     {
         if (_image is null)
             return;
-        var imageBounds = new WpfRect(0, 0, _image.PixelWidth, _image.PixelHeight);
-        context.PushClip(new RectangleGeometry(imageBounds));
-        context.DrawImage(_image, imageBounds);
-        double pixelsPerDip = includeSelection ? VisualTreeHelper.GetDpi(_surface).PixelsPerDip : 1.0;
-        foreach (AnnotationItem annotation in _annotations)
-            if (!includeSelection || !IsTextEditing || !ReferenceEquals(annotation, _textTarget))
-                annotation.Draw(context, pixelsPerDip);
-        context.Pop();
-        if (includeSelection)
+        using var options = context.PushRenderOptions(SceneRenderOptions);
+        var imageBounds = new Rect(0, 0, PixelWidth, PixelHeight);
+        if ((layers & SceneLayers.Document) != 0)
+        {
+            using (context.PushClip(imageBounds))
+            {
+                if ((layers & SceneLayers.Image) != 0)
+                    context.DrawImage(_image, imageBounds);
+                if ((layers & SceneLayers.Annotations) != 0)
+                    foreach (AnnotationItem annotation in _annotations)
+                        if (!onScreen || !IsTextEditing || !ReferenceEquals(annotation, _textTarget))
+                            annotation.Draw(context);
+            }
+        }
+        if ((layers & SceneLayers.Interaction) != 0)
         {
             if (_pending?.Tool == AnnotationTool.Text)
             {
-                WpfRect bounds = _pending.Bounds;
+                Rect bounds = _pending.Bounds;
                 if (_pending.TextWidth == 0)
-                    bounds = new WpfRect(_pending.Start, new Size(Math.Min(360, Math.Max(1, _image.PixelWidth - _pending.Start.X)), _pending.FontSize * 1.4));
+                    bounds = new Rect(_pending.Start, new Size(Math.Min(360, Math.Max(1, PixelWidth - _pending.Start.X)), _pending.FontSize * 1.4));
                 context.DrawRectangle(null, new Pen(ThemeService.Brush("SelectionBorder"), 1 / _zoom), bounds);
             }
             else
-                _pending?.Draw(context, pixelsPerDip);
+                _pending?.Draw(context);
             if (!IsTextEditing)
                 foreach (AnnotationItem item in _selection) DrawSelection(context, item);
             if (_marquee is not null)
@@ -1408,7 +1494,7 @@ public sealed partial class EditorView : WpfUserControl
 
     private void DrawSelection(DrawingContext context, AnnotationItem item)
     {
-        var outline = new Pen(ThemeService.Brush("SelectionBorder"), 1 / _zoom) { DashStyle = DashStyles.Dash };
+        var outline = new Pen(ThemeService.Brush("SelectionBorder"), 1 / _zoom, DashStyle.Dash);
         if (item.Tool != AnnotationTool.Arrow)
             context.DrawRectangle(null, outline, EditableBounds(item));
         var handlePen = new Pen(ThemeService.Brush("SelectionBorder"), 1.5 / _zoom);
@@ -1423,11 +1509,11 @@ public sealed partial class EditorView : WpfUserControl
         if (HasImage)
         {
             CompleteGesture();
-            ZoomAt(new WpfPoint(_viewport.ActualWidth / 2, _viewport.ActualHeight / 2), _zoom * factor);
+            ZoomAt(new Point(_viewport.Bounds.Width / 2, _viewport.Bounds.Height / 2), _zoom * factor);
         }
     }
 
-    private void ZoomAt(WpfPoint viewportPoint, double zoom)
+    private void ZoomAt(Point viewportPoint, double zoom)
     {
         if (!HasImage)
             return;
@@ -1445,46 +1531,103 @@ public sealed partial class EditorView : WpfUserControl
     {
         if (_image is null)
             return;
-        double width = _image.PixelWidth * _zoom;
-        double height = _image.PixelHeight * _zoom;
+        double width = PixelWidth * _zoom;
+        double height = PixelHeight * _zoom;
         double visibleX = Math.Min(60, width / 2);
         double visibleY = Math.Min(60, height / 2);
-        _panX = Math.Clamp(_panX, visibleX - width, Math.Max(visibleX - width, _viewport.ActualWidth - visibleX));
-        _panY = Math.Clamp(_panY, visibleY - height, Math.Max(visibleY - height, _viewport.ActualHeight - visibleY));
+        _panX = Math.Clamp(_panX, visibleX - width, Math.Max(visibleX - width, _viewport.Bounds.Width - visibleX));
+        _panY = Math.Clamp(_panY, visibleY - height, Math.Max(visibleY - height, _viewport.Bounds.Height - visibleY));
     }
 
-    private bool InsideImage(WpfPoint point) => _image is not null && point.X >= 0 && point.Y >= 0 && point.X <= _image.PixelWidth && point.Y <= _image.PixelHeight;
+    private bool InsideImage(Point point) => _image is not null && point.X >= 0 && point.Y >= 0 && point.X <= PixelWidth && point.Y <= PixelHeight;
 
-    private WpfPoint ClampPoint(WpfPoint point) => _image is null ? point : new WpfPoint(Math.Clamp(point.X, 0, _image.PixelWidth), Math.Clamp(point.Y, 0, _image.PixelHeight));
+    private Point ClampPoint(Point point) => _image is null ? point : new Point(Math.Clamp(point.X, 0, PixelWidth), Math.Clamp(point.Y, 0, PixelHeight));
 
-    private WpfPoint ViewportToImage(WpfPoint point) => new((point.X - _panX) / _zoom, (point.Y - _panY) / _zoom);
+    private Point ViewportToImage(Point point) => new((point.X - _panX) / _zoom, (point.Y - _panY) / _zoom);
 
     private void RefreshView()
     {
-        _documentLayer.RenderTransform = new MatrixTransform(_zoom, 0, 0, _zoom, _panX, _panY);
+        _documentLayer.RenderTransform = new MatrixTransform(new Matrix(_zoom, 0, 0, _zoom, _panX, _panY));
         _zoomLabel.Text = $"{_zoom:P0}";
         UpdateTextEditor();
-        _surface.InvalidateVisual();
+        // Committed annotations do not depend on zoom; handles and outlines keep a constant screen size.
+        _overlay.InvalidateVisual();
     }
 
     private void UpdateCursor()
     {
-        _viewport.Cursor = _panning || _spaceDown ? Cursors.Hand : (_transformHandle != SelectionHandle.None ? _transformHandle : _hoverHandle) switch
+        _viewport.Cursor = _panning || _spaceDown ? EditorCursor(StandardCursorType.Hand) : (_transformHandle != SelectionHandle.None ? _transformHandle : _hoverHandle) switch
         {
-            SelectionHandle.TopLeft or SelectionHandle.BottomRight => Cursors.SizeNWSE,
-            SelectionHandle.TopRight or SelectionHandle.BottomLeft => Cursors.SizeNESW,
-            SelectionHandle.Left or SelectionHandle.Right => Cursors.SizeWE,
-            SelectionHandle.Top or SelectionHandle.Bottom => Cursors.SizeNS,
-            SelectionHandle.StartPoint or SelectionHandle.EndPoint or SelectionHandle.Move => Cursors.SizeAll,
-            _ => _tool == AnnotationTool.Select ? Cursors.Arrow : _tool == AnnotationTool.Text ? Cursors.IBeam : Cursors.Cross
+            SelectionHandle.TopLeft => EditorCursor(StandardCursorType.TopLeftCorner),
+            SelectionHandle.BottomRight => EditorCursor(StandardCursorType.BottomRightCorner),
+            SelectionHandle.TopRight => EditorCursor(StandardCursorType.TopRightCorner),
+            SelectionHandle.BottomLeft => EditorCursor(StandardCursorType.BottomLeftCorner),
+            SelectionHandle.Left or SelectionHandle.Right => EditorCursor(StandardCursorType.SizeWestEast),
+            SelectionHandle.Top or SelectionHandle.Bottom => EditorCursor(StandardCursorType.SizeNorthSouth),
+            SelectionHandle.StartPoint or SelectionHandle.EndPoint or SelectionHandle.Move => EditorCursor(StandardCursorType.SizeAll),
+            _ => EditorCursor(_tool == AnnotationTool.Select ? StandardCursorType.Arrow : _tool == AnnotationTool.Text ? StandardCursorType.Ibeam : StandardCursorType.Cross)
         };
-        _textEditor.Cursor = _panning ? Cursors.Hand : Cursors.IBeam;
+        _textEditor.Cursor = EditorCursor(_panning ? StandardCursorType.Hand : StandardCursorType.Ibeam);
+    }
+
+    private static readonly Dictionary<StandardCursorType, Cursor> Cursors = new();
+    private static Cursor EditorCursor(StandardCursorType type)
+    {
+        if (!Cursors.TryGetValue(type, out Cursor? cursor))
+            Cursors[type] = cursor = new Cursor(type);
+        return cursor;
     }
 
     private void SelectItem(AnnotationItem? item)
     {
         SetSelection(item is null ? Array.Empty<AnnotationItem>() : new[] { item });
     }
+
+    private void InvalidateScene()
+    {
+        _surface.InvalidateVisual();
+        _overlay.InvalidateVisual();
+    }
+
+    private void SizeDocument(Bitmap image)
+    {
+        foreach (ImageSurface layer in new[] { _imageSurface, _surface, _overlay })
+        {
+            layer.Width = image.PixelSize.Width;
+            layer.Height = image.PixelSize.Height;
+        }
+        _documentLayer.Width = image.PixelSize.Width;
+        _documentLayer.Height = image.PixelSize.Height;
+        _imageLabel.Text = $"{image.PixelSize.Width:N0} × {image.PixelSize.Height:N0} px";
+        EnsureRenderCache();
+        _imageSurface.InvalidateVisual();
+        InvalidateScene();
+    }
+
+    /// <summary>
+    /// Skia keeps the mipmaps used to draw a zoomed-out photo in its resource cache (32 MB by
+    /// default). The mipmaps of a large capture or collage do not fit, and would then be rebuilt
+    /// on every frame while drawing; this grows the limit (never shrinks it) to hold them.
+    /// </summary>
+    private void EnsureRenderCache()
+    {
+        long pixels = (long)PixelWidth * PixelHeight
+            + _annotations.Where(item => item.Image is not null).Sum(item => (long)item.Image!.PixelSize.Width * item.Image.PixelSize.Height);
+        // Mipmaps take a third of the 32-bit pixels; keep room for a second set while zooming.
+        long wanted = Math.Min(pixels * 4 / 3 * 2 + (32L << 20), 1L << 30);
+        try
+        {
+            if (SkiaSharp.SKGraphics.GetResourceCacheTotalByteLimit() < wanted)
+                SkiaSharp.SKGraphics.SetResourceCacheTotalByteLimit(wanted);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or TypeInitializationException)
+        {
+            SettingsStore.Log(ex);
+        }
+    }
+
+    /// <summary>Re-tags the bitmap at 96 DPI (pixels unchanged) so one document unit is one pixel.</summary>
+    private static Bitmap AtDocumentDpi(Bitmap image) => image.Dpi == ImageTools.Dpi ? image : ImageOrientation.ReadPixels(image).ToBitmap();
 
     private void RaiseChanged()
     {
@@ -1497,10 +1640,10 @@ public sealed partial class EditorView : WpfUserControl
 
     private void OnLanguageChanged(object? sender, EventArgs e)
     {
-        if (Dispatcher.CheckAccess())
+        if (Dispatcher.UIThread.CheckAccess())
             RefreshLanguage();
         else
-            Dispatcher.BeginInvoke(new Action(RefreshLanguage));
+            Dispatcher.UIThread.Post(RefreshLanguage);
     }
 
     private void OnThemeChanged(object? sender, EventArgs e)
@@ -1508,11 +1651,12 @@ public sealed partial class EditorView : WpfUserControl
         void Redraw()
         {
             if (!IsLoaded) return;
-            _surface.InvalidateVisual();
+            UpdateTextSelectionBrush();
+            InvalidateScene();
             _imageDropPreview?.InvalidateVisual();
         }
-        if (Dispatcher.CheckAccess()) Redraw();
-        else Dispatcher.BeginInvoke(new Action(Redraw));
+        if (Dispatcher.UIThread.CheckAccess()) Redraw();
+        else Dispatcher.UIThread.Post(Redraw);
     }
 
     private void RefreshLanguage() => _hintLabel.Text = I18n.T(IsTextEditing ? TextHint : IsCollage ? "Ctrl / Shift 多選 · 拖曳空白處框選 · 方向鍵微調 · 右鍵排列" : CanvasHint);
@@ -1528,22 +1672,28 @@ public sealed partial class EditorView : WpfUserControl
         Margin = new Thickness(16),
         HorizontalAlignment = alignment,
         VerticalAlignment = VerticalAlignment.Top,
-        Visibility = Visibility.Collapsed,
+        IsVisible = false,
         IsHitTestVisible = false
     };
 
-    private static FrameworkElement CreateEmptyState() => new Grid { IsHitTestVisible = false };
+    private static Control CreateEmptyState() => new Grid { IsHitTestVisible = false };
 
-    private sealed record EditorState(long Revision, List<AnnotationItem> Items, int[] SelectedIndices, BitmapSource? Image, bool IsCollage);
+    private sealed record EditorState(long Revision, List<AnnotationItem> Items, int[] SelectedIndices, Bitmap? Image, bool IsCollage);
 
-    private sealed class ImageSurface(EditorView editor) : FrameworkElement
+    private sealed class ImageSurface : Control
     {
-        protected override void OnRender(DrawingContext drawingContext) => editor.DrawScene(drawingContext, includeSelection: true);
+        private readonly EditorView _editor;
+        private readonly SceneLayers _layers;
 
-        protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+        internal ImageSurface(EditorView editor, SceneLayers layers)
         {
-            base.OnDpiChanged(oldDpi, newDpi);
-            InvalidateVisual();
+            _editor = editor;
+            _layers = layers;
+            UseLayoutRounding = false;
+            // Pointer input is handled by the viewport; the layers only draw.
+            IsHitTestVisible = false;
         }
+
+        public override void Render(DrawingContext context) => _editor.DrawScene(context, _layers, onScreen: true);
     }
 }

@@ -43,7 +43,7 @@ internal static class EditorSessionStore
         SaveProject(editor.CaptureSession(), path);
     }
 
-    // The caller owns the captured annotation clones. Frozen bitmaps can be encoded on a worker thread.
+    // The caller owns the captured annotation clones. Bitmaps are thread-agile and can be encoded on a worker thread.
     internal static void SaveProject(EditorSessionSnapshot snapshot, string path)
     {
         var destination = NormalizeProjectPath(path);
@@ -163,8 +163,8 @@ internal static class EditorSessionStore
             SchemaVersion = SchemaVersion,
             Kind = SessionKind,
             SessionId = Guid.NewGuid().ToString("N"),
-            PixelWidth = snapshot.Image.PixelWidth,
-            PixelHeight = snapshot.Image.PixelHeight,
+            PixelWidth = snapshot.Image.PixelSize.Width,
+            PixelHeight = snapshot.Image.PixelSize.Height,
             HasEdits = snapshot.HasEdits,
             IsCollage = snapshot.IsCollage,
             Annotations = snapshot.Annotations.Select(ToData).ToList()
@@ -205,7 +205,7 @@ internal static class EditorSessionStore
         if (manifest.SessionId != Path.GetFileName(checkpoint)) throw InvalidCheckpoint();
         ValidatePngFiles(checkpoint, manifest);
         var original = ReadPng(Path.Combine(checkpoint, "original.png"));
-        if (original.PixelWidth != manifest.PixelWidth || original.PixelHeight != manifest.PixelHeight)
+        if (original.PixelSize.Width != manifest.PixelWidth || original.PixelSize.Height != manifest.PixelHeight)
             throw InvalidCheckpoint();
         var annotations = new List<AnnotationItem>(manifest.Annotations.Count);
         for (var index = 0; index < manifest.Annotations.Count; index++)
@@ -226,26 +226,25 @@ internal static class EditorSessionStore
         ArgumentNullException.ThrowIfNull(snapshot);
         if (snapshot.Image is null || snapshot.Annotations is null || snapshot.Annotations.Count > MaxAnnotations)
             throw InvalidCheckpoint();
-        long pixels = FrozenImagePixels(snapshot.Image);
+        long pixels = ImagePixels(snapshot.Image);
         foreach (var item in snapshot.Annotations)
         {
-            if (item is null || (item.Mosaic is not null && !item.Mosaic.IsFrozen) || (item.Image is not null && !item.Image.IsFrozen))
+            if (item is null)
                 throw InvalidCheckpoint();
             if (!ImageOrientation.IsValid(item.TextOrientation) || (item.Tool != AnnotationTool.Text && item.TextOrientation != 0))
                 throw InvalidCheckpoint();
             if (item.Tool == AnnotationTool.Mosaic)
-                pixels += FrozenImagePixels(item.Mosaic ?? throw InvalidCheckpoint());
+                pixels += ImagePixels(item.Mosaic ?? throw InvalidCheckpoint());
             else if (item.Tool == AnnotationTool.Image)
-                pixels += FrozenImagePixels(item.Image ?? throw InvalidCheckpoint());
+                pixels += ImagePixels(item.Image ?? throw InvalidCheckpoint());
             if (pixels > MaxPixels) throw InvalidCheckpoint();
         }
     }
 
-    private static long FrozenImagePixels(BitmapSource image)
+    private static long ImagePixels(Bitmap image)
     {
-        if (!image.IsFrozen) throw new ArgumentException("Captured project bitmaps must be frozen before saving.");
-        ValidateImageSize(image.PixelWidth, image.PixelHeight);
-        return (long)image.PixelWidth * image.PixelHeight;
+        ValidateImageSize(image.PixelSize.Width, image.PixelSize.Height);
+        return (long)image.PixelSize.Width * image.PixelSize.Height;
     }
 
     private static string CreateCheckpointDirectory(string sessionId)
@@ -316,8 +315,8 @@ internal static class EditorSessionStore
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         if (!Path.IsPathFullyQualified(directory)) throw InvalidCheckpoint();
         var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
-        if (!string.Equals(normalized, Path.TrimEndingDirectorySeparator(directory), StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(Path.GetDirectoryName(normalized), Root, StringComparison.OrdinalIgnoreCase)
+        if (!string.Equals(normalized, Path.TrimEndingDirectorySeparator(directory), PlatformInfo.PathComparison)
+            || !string.Equals(Path.GetDirectoryName(normalized), Root, PlatformInfo.PathComparison)
             || !Guid.TryParseExact(Path.GetFileName(normalized), "N", out _))
             throw InvalidCheckpoint();
         RejectReparsePoint(SettingsStore.DataRoot);
@@ -354,14 +353,12 @@ internal static class EditorSessionStore
         throw InvalidCheckpoint();
     }
 
-    private static long WritePng(BitmapSource image, string path)
+    private static long WritePng(Bitmap image, string path)
     {
-        ValidateImageSize(image.PixelWidth, image.PixelHeight);
+        ValidateImageSize(image.PixelSize.Width, image.PixelSize.Height);
         using var stream = CreateNewFile(path);
-        var encoder = new PngBitmapEncoder();
-        // Frozen decoded frames may retain a decoder owned by their source thread.
-        encoder.Frames.Add(BitmapFrame.Create(image, null, null, null));
-        encoder.Save(stream);
+        // Lossless PNG; the WPF version wrote the same format, so projects open in both versions.
+        ImageTools.SavePng(image, stream);
         if (stream.Length > MaxImageBytes) throw InvalidCheckpoint();
         stream.Flush(flushToDisk: true);
         return stream.Length;
@@ -398,16 +395,18 @@ internal static class EditorSessionStore
         return (width, height);
     }
 
-    private static BitmapSource ReadPng(string path)
+    private static Bitmap ReadPng(string path)
     {
         using var stream = OpenFile(path, MaxImageBytes);
         var (width, height) = ReadPngHeader(stream);
         stream.Position = 0;
-        var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
-        if (decoder.Frames.Count != 1 || decoder.Frames[0].PixelWidth != width || decoder.Frames[0].PixelHeight != height)
+        // Decoded at 96 DPI so the PNG's pHYs density never changes document coordinates.
+        var image = ImageTools.Decode(stream);
+        if (image.PixelSize.Width != width || image.PixelSize.Height != height)
+        {
+            image.Dispose();
             throw InvalidCheckpoint();
-        var image = decoder.Frames[0].CloneCurrentValue();
-        image.Freeze();
+        }
         return image;
     }
 

@@ -1,5 +1,3 @@
-using SnipFlow.Services;
-
 namespace SnipFlow.CodeCapture;
 
 internal sealed record CodeImageOptions(
@@ -14,7 +12,7 @@ internal static class CodeImageLimits
     internal const int MaxHeight = 16_384;
     internal const long MaxPixels = 40_000_000;
 
-    // Validate before handing text to either the syntax engine or WPF's formatter.
+    // Validate before handing text to either the syntax engine or the text formatter.
     // Reject the entire input instead of changing or truncating the user's code.
     internal static void ValidateText(string text)
     {
@@ -32,7 +30,7 @@ internal static class CodeImageLimits
             else if (++length > MaxLineLength)
                 throw new ArgumentException(I18n.F("單行超過 {0:N0} 字元，請先拆分長行。", MaxLineLength));
         }
-        // AvalonEdit accepts lone CR as a line ending as well as LF and CRLF.
+        // AvaloniaEdit accepts lone CR as a line ending as well as LF and CRLF.
         for (int index = 0; index < text.Length; index++)
             if (text[index] == '\r' && (index + 1 == text.Length || text[index + 1] != '\n')) lines++;
         if (lines > MaxLines)

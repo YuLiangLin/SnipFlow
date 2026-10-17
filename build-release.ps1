@@ -1,5 +1,5 @@
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.7.3',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.8.0',
     [string]$OutputRoot = (Join-Path $PSScriptRoot 'release'),
     [string]$SigningParameters = '',
     [string]$VpkToolPath = ''
@@ -16,7 +16,7 @@ if (-not (Test-Path -LiteralPath $toolPath)) {
     dotnet tool install vpk --version 1.2.161 --tool-path $toolDirectory
     if ($LASTEXITCODE -ne 0) { throw 'Velopack tool installation failed.' }
 }
-dotnet publish $projectPath -c Release --self-contained true -r win-x64 -p:Version=$Version -o $publishDirectory --nologo
+dotnet publish $projectPath -c Release -f net10.0-windows10.0.19041.0 --self-contained true -r win-x64 -p:Version=$Version -o $publishDirectory --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Application publish failed.' }
 $packArguments = @('pack','--packId','SnipFlow','--packTitle','SnipFlow','--packVersion',$Version,'--packDir',$publishDirectory,'--mainExe','SnipFlow.exe','--runtime','win-x64','--channel','win','--framework','vcredist143-x64','--outputDir',$packageDirectory,'--shortcuts','StartMenuRoot','--icon',(Join-Path $PSScriptRoot 'src\Assets\SnipFlow-v3.ico'))
 if ($SigningParameters) { $packArguments += @('--signParams',$SigningParameters) }

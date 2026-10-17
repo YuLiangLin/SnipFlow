@@ -1,16 +1,17 @@
-using Microsoft.Win32;
-using System.ComponentModel;
-using System.Security;
-using System.Windows.Data;
-using System.Windows.Interop;
+using Avalonia.Platform;
+using Avalonia.Styling;
 
 namespace SnipFlow.Services;
 
 /// <summary>UI colors only. Captured pixels, annotation colors and export palettes are independent.</summary>
+/// <remarks>
+/// Each palette key is one shared <see cref="SolidColorBrush"/> stored in the application resources.
+/// A theme change rewrites the colors of those brushes in place, so XAML <c>{DynamicResource}</c>
+/// references and code-built views holding <see cref="Brush(string)"/> both update without rebuilding.
+/// Fluent control resource keys are pointed at the same brushes.
+/// </remarks>
 public static class ThemeService
 {
-    // Every brush, including copies made by WPF styles, binds to the same explicit
-    // source. Update that source rather than coercing expression-backed brush values.
     static readonly (string Key, string Dark, string Light)[] Palette =
     [
         ("Bg", "#181818", "#F7F7F5"),
@@ -45,9 +46,49 @@ public static class ThemeService
         ("OverlayMuted", "#A3A3A3", "#60605C"),
         ("OverlayLine", "#949494", "#9D9D97"),
     ];
-    public static ThemePalette Colors { get; } = new(CreateColors(dark: true));
+
+    // Fluent theme keys mapped onto the palette so built-in controls follow the same colors.
+    static readonly (string FluentKey, string PaletteKey)[] FluentAliases =
+    [
+        ("TextControlBackground", "Raised"), ("TextControlBackgroundPointerOver", "Raised"),
+        ("TextControlBackgroundFocused", "Raised"), ("TextControlBackgroundDisabled", "Raised"),
+        ("TextControlBorderBrush", "Line"), ("TextControlBorderBrushPointerOver", "ControlBorder"),
+        ("TextControlBorderBrushFocused", "Muted"), ("TextControlBorderBrushDisabled", "Line"),
+        ("TextControlForeground", "Ink"), ("TextControlForegroundPointerOver", "Ink"),
+        ("TextControlForegroundFocused", "Ink"), ("TextControlForegroundDisabled", "Muted"),
+        ("TextControlPlaceholderForeground", "Muted"), ("TextControlPlaceholderForegroundPointerOver", "Muted"),
+        ("TextControlPlaceholderForegroundFocused", "Muted"), ("TextControlSelectionHighlightColor", "TextSelection"),
+        ("ComboBoxBackground", "Raised"), ("ComboBoxBackgroundPointerOver", "Hover"), ("ComboBoxBackgroundPressed", "Selected"),
+        ("ComboBoxBackgroundDisabled", "Raised"), ("ComboBoxBackgroundUnfocused", "Raised"),
+        ("ComboBoxBorderBrush", "Line"), ("ComboBoxBorderBrushPointerOver", "ControlBorder"),
+        ("ComboBoxBorderBrushPressed", "Muted"), ("ComboBoxBorderBrushDisabled", "Line"),
+        ("ComboBoxForeground", "Ink"), ("ComboBoxForegroundDisabled", "Muted"), ("ComboBoxForegroundFocused", "Ink"),
+        ("ComboBoxForegroundFocusedPressed", "Ink"), ("ComboBoxDropDownGlyphForeground", "Muted"),
+        ("ComboBoxDropDownBackground", "Panel"), ("ComboBoxDropDownBorderBrush", "Line"),
+        ("ComboBoxItemForeground", "Ink"), ("ComboBoxItemForegroundPointerOver", "Ink"), ("ComboBoxItemForegroundSelected", "Ink"),
+        ("ComboBoxItemForegroundSelectedPointerOver", "Ink"), ("ComboBoxItemForegroundPressed", "Ink"),
+        ("ComboBoxItemBackgroundPointerOver", "Hover"), ("ComboBoxItemBackgroundSelected", "Selected"),
+        ("ComboBoxItemBackgroundSelectedPointerOver", "Hover"), ("ComboBoxItemBackgroundPressed", "Selected"),
+        ("ComboBoxItemBackgroundSelectedPressed", "Selected"),
+        ("MenuFlyoutPresenterBackground", "Panel"), ("MenuFlyoutPresenterBorderBrush", "Line"),
+        ("MenuFlyoutItemForeground", "Ink"), ("MenuFlyoutItemForegroundPointerOver", "Ink"),
+        ("MenuFlyoutItemForegroundPressed", "Ink"), ("MenuFlyoutItemForegroundDisabled", "Muted"),
+        ("MenuFlyoutItemBackgroundPointerOver", "Hover"), ("MenuFlyoutItemBackgroundPressed", "Selected"),
+        ("MenuFlyoutItemKeyboardAcceleratorTextForeground", "Muted"),
+        ("FlyoutPresenterBackground", "Panel"),
+        ("ToolTipBackground", "Raised"), ("ToolTipForeground", "Ink"), ("ToolTipBorderBrush", "Line"),
+        ("SliderTrackFill", "TrackEmpty"), ("SliderTrackFillPointerOver", "TrackEmpty"), ("SliderTrackFillPressed", "TrackEmpty"),
+        ("SliderTrackValueFill", "TrackFilled"), ("SliderTrackValueFillPointerOver", "TrackFilled"), ("SliderTrackValueFillPressed", "TrackFilled"),
+        ("SliderThumbBackground", "Accent"), ("SliderThumbBackgroundPointerOver", "PrimaryHover"), ("SliderThumbBackgroundPressed", "PrimaryPressed"),
+        ("ScrollBarThumbFillPointerOver", "ScrollGripHover"), ("ScrollBarThumbFillPressed", "ScrollGripActive"),
+        ("ScrollBarPanningThumbBackground", "ScrollGrip"),
+        ("ScrollBarButtonArrowForeground", "Muted"),
+        ("CheckBoxForegroundUnchecked", "Ink"), ("CheckBoxForegroundChecked", "Ink"),
+    ];
+
+    static readonly Dictionary<string, SolidColorBrush> Brushes = Palette.ToDictionary(
+        entry => entry.Key, entry => new SolidColorBrush(Color.Parse(entry.Dark)), StringComparer.Ordinal);
     static bool initialized;
-    static bool observingSystem;
     static bool hasPalette;
 
     public static bool IsDark { get; private set; } = true;
@@ -60,67 +101,59 @@ public static class ThemeService
         _ => "dark",
     };
 
-    public static Brush Brush(string key) => (Brush)Application.Current.FindResource(key);
+    /// <summary>The shared, theme-updated brush for a palette key such as "Panel" or "Ink".</summary>
+    public static SolidColorBrush Brush(string key) => Brushes[key];
+
+    /// <summary>The current color of a palette key.</summary>
+    public static Color GetColor(string key) => Brushes[key].Color;
 
     public static void Initialize()
     {
         if (initialized) return;
-        Application.Current.Dispatcher.VerifyAccess();
+        Dispatcher.UIThread.VerifyAccess();
         initialized = true;
+        var resources = Application.Current!.Resources;
+        foreach (var (key, brush) in Brushes) resources[key] = brush;
+        foreach (var (fluentKey, paletteKey) in FluentAliases) resources[fluentKey] = Brushes[paletteKey];
         Apply();
         SettingsStore.Changed += SettingsChanged;
-        try
-        {
-            SystemEvents.UserPreferenceChanged += SystemPreferenceChanged;
-            observingSystem = true;
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or System.Runtime.InteropServices.ExternalException)
-        {
-            SettingsStore.Log(ex);
-        }
+        if (Application.Current.PlatformSettings is { } platform) platform.ColorValuesChanged += SystemColorsChanged;
     }
 
     public static void Shutdown()
     {
+        if (!initialized) return;
         initialized = false;
         SettingsStore.Changed -= SettingsChanged;
-        if (observingSystem) SystemEvents.UserPreferenceChanged -= SystemPreferenceChanged;
-        observingSystem = false;
+        if (Application.Current?.PlatformSettings is { } platform) platform.ColorValuesChanged -= SystemColorsChanged;
     }
 
     static void SettingsChanged(object? sender, EventArgs e) => RefreshOnDispatcher();
 
-    static void SystemPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
-    {
-        // Windows broadcasts application theme changes as user preference changes.
-        // Resolve the preference on the UI thread; never write system settings.
-        RefreshOnDispatcher(onlyForSystem: true);
-    }
+    static void SystemColorsChanged(object? sender, PlatformColorValues e) => RefreshOnDispatcher(onlyForSystem: true);
 
     static void RefreshOnDispatcher(bool onlyForSystem = false)
     {
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null || dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished) return;
         void Refresh()
         {
             if (!initialized || (onlyForSystem && NormalizeMode(SettingsStore.Current.Theme) != "system")) return;
             Apply();
         }
-        if (dispatcher.CheckAccess()) Refresh();
-        else dispatcher.BeginInvoke(Refresh);
+        if (Dispatcher.UIThread.CheckAccess()) Refresh();
+        else Dispatcher.UIThread.Post(Refresh);
     }
 
     static void Apply()
     {
         var mode = NormalizeMode(SettingsStore.Current.Theme);
         var dark = mode == "dark" || (mode == "system" && SystemUsesDarkAppTheme());
+        if (Application.Current is { } app)
+            app.RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light;
         if (hasPalette && IsDark == dark) return;
         IsDark = dark;
-        Colors.Update(CreateColors(dark));
+        foreach (var (key, darkValue, lightValue) in Palette)
+            Brushes[key].Color = Avalonia.Media.Color.Parse(dark ? darkValue : lightValue);
         hasPalette = true;
-
-        foreach (Window window in Application.Current.Windows)
-            if (new WindowInteropHelper(window).Handle != IntPtr.Zero) WindowAppearance.Apply(window);
 
         if (Changed is { } listeners)
             foreach (EventHandler listener in listeners.GetInvocationList())
@@ -128,40 +161,17 @@ public static class ThemeService
                 catch (Exception ex) { SettingsStore.Log(ex); }
     }
 
-    static Dictionary<string, Color> CreateColors(bool dark) => Palette.ToDictionary(
-        entry => entry.Key,
-        entry => (Color)ColorConverter.ConvertFromString(dark ? entry.Dark : entry.Light),
-        StringComparer.Ordinal);
-
     static bool SystemUsesDarkAppTheme()
     {
         try
         {
-            using var personalize = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", writable: false);
-            return personalize?.GetValue("AppsUseLightTheme") is int value && value == 0;
+            var values = Application.Current?.PlatformSettings?.GetColorValues();
+            return values is null || values.ThemeVariant == PlatformThemeVariant.Dark;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException)
+        catch (Exception ex)
         {
             SettingsStore.Log(ex);
             return true;
         }
-    }
-}
-
-/// <summary>Explicit binding source shared by application brushes and their style clones.</summary>
-public sealed class ThemePalette : INotifyPropertyChanged
-{
-    IReadOnlyDictionary<string, Color> colors;
-
-    internal ThemePalette(IReadOnlyDictionary<string, Color> initialColors) => colors = initialColors;
-    public Color this[string key] => colors[key];
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    internal void Update(IReadOnlyDictionary<string, Color> newColors)
-    {
-        // Publish a complete palette before any binding reads it, so notifications
-        // never expose a mixture of the old and new theme.
-        colors = newColors;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(Binding.IndexerName));
     }
 }

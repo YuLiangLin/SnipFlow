@@ -1,33 +1,36 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Windows.Data;
-using System.Windows.Input;
-using System.Windows.Interop;
-using System.Windows.Threading;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using SnipFlow.Capture;
 using SnipFlow.Services;
-using DrawingRectangle = System.Drawing.Rectangle;
 
 namespace SnipFlow.Scroll;
 
 /// <summary>Observes user scrolling without sending input or taking focus from the target.</summary>
-public sealed partial class ScrollCaptureWindow : Window
+/// <remarks>
+/// <see cref="_targetBounds"/> uses desktop pixels (the unit of <see cref="Window.Position"/>); frame
+/// rows, positions and trims use the pixels of the captured frames, which equal the desktop pixels except
+/// on scaled Wayland desktops, where captures keep the compositor resolution (<see cref="FrameHeight"/>).
+/// </remarks>
+public sealed partial class ScrollCaptureWindow : DialogWindow
 {
-    private readonly DrawingRectangle _targetBounds;
+    private readonly PixelRect _targetBounds;
     private readonly ScrollCaptureTarget _target;
     private readonly ScrollCaptureWorkflow _workflow;
     // Frames stay in document order. Positions are offsets of the raw viewport in document pixels.
-    private readonly List<BitmapSource> _frames = new();
+    private readonly List<Bitmap> _frames = new();
     private readonly List<int> _positions = new();
     private readonly Stack<bool> _addedAtTop = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly DispatcherTimer _timer;
-    private readonly System.Windows.Controls.Image _preview;
+    private readonly Image _preview;
     private readonly Border _previewBorder;
-    private readonly System.Windows.Controls.Image _joinPreview;
+    private readonly Image _joinPreview;
     private readonly TextBlock _status;
     private readonly TextBlock _dimensions;
     private readonly TextBlock _instruction;
+    private readonly TextBlock _regionOnlyNote;
     private readonly Button _pauseButton;
     private readonly Button _undoButton;
     private readonly Button _finishButton;
@@ -43,10 +46,11 @@ public sealed partial class ScrollCaptureWindow : Window
     private readonly Expander _trimExpander;
     private readonly Expander _rangeExpander;
     private readonly StackPanel _finishNotice;
-    private BitmapSource? _anchorRaw;
+    private Bitmap? _anchorRaw;
     private int _anchorPosition;
-    private BitmapSource? _lastProcessedRaw;
-    private BitmapSource? _unmatchedRaw;
+    private Bitmap? _lastProcessedRaw;
+    private Bitmap? _unmatchedRaw;
+    private PixelSize _frameSize;
     private int _topTrim;
     private int _bottomTrim;
     private bool _userPaused = true;
@@ -55,19 +59,19 @@ public sealed partial class ScrollCaptureWindow : Window
     private bool _closed;
     private bool _toolbarExcluded;
     private bool _limitReached;
-    private IntPtr _handle;
+    private nint _handle;
 
-    public BitmapSource? Result { get; private set; }
+    public Bitmap? Result { get; private set; }
 
-    public ScrollCaptureWindow(DrawingRectangle targetPhysicalBounds, BitmapSource? initialFrame = null,
+    public ScrollCaptureWindow(PixelRect targetPhysicalBounds, Bitmap? initialFrame = null,
         ScrollCaptureWorkflow workflow = ScrollCaptureWorkflow.Quick, WindowCaptureTarget? selectedTarget = null)
     {
         if (targetPhysicalBounds.Width < 32 || targetPhysicalBounds.Height < 48)
             throw new ArgumentException(I18n.T("請選取至少 32 × 48 像素的捲動內容範圍。"), nameof(targetPhysicalBounds));
-        if ((long)targetPhysicalBounds.Width * targetPhysicalBounds.Height > ImageStitcher.MaxOutputPixels)
+        if ((long)targetPhysicalBounds.Width * targetPhysicalBounds.Height > ImageStitcher.MaxOutputPixels
+            || (initialFrame is not null && (long)initialFrame.PixelSize.Width * initialFrame.PixelSize.Height > ImageStitcher.MaxOutputPixels))
             throw new ArgumentException(I18n.T("選取範圍太大，請縮小範圍後重試。"), nameof(targetPhysicalBounds));
-        if (initialFrame is not null && (initialFrame.PixelWidth != targetPhysicalBounds.Width
-            || initialFrame.PixelHeight != targetPhysicalBounds.Height))
+        if (initialFrame is not null && !FrameFitsRegion(initialFrame.PixelSize, targetPhysicalBounds))
             throw new ArgumentException("The initial frame must match the selected region.", nameof(initialFrame));
         if (workflow is not ScrollCaptureWorkflow.Quick and not ScrollCaptureWorkflow.Precise and not ScrollCaptureWorkflow.Code)
             throw new ArgumentOutOfRangeException(nameof(workflow));
@@ -78,14 +82,16 @@ public sealed partial class ScrollCaptureWindow : Window
         Title = I18n.T(workflow == ScrollCaptureWorkflow.Code ? "SnipFlow · 程式碼長截圖" : "SnipFlow · 對話長截圖");
         Width = 410;
         SizeToContent = SizeToContent.Height;
-        WindowStyle = WindowStyle.None;
-        ResizeMode = ResizeMode.NoResize;
+        WindowDecorations = WindowDecorations.None;
+        CanResize = false;
+        CanMinimize = false;
+        CanMaximize = false;
         Background = Brush("Panel");
         ShowActivated = false;
         Topmost = true;
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.Manual;
-        FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI");
+        FontFamily = UiThemes.AppFont;
         FontSize = 12;
         Foreground = Brush("Ink");
 
@@ -94,32 +100,33 @@ public sealed partial class ScrollCaptureWindow : Window
             BorderBrush = Brush("Line"), BorderThickness = new Thickness(1),
             Background = Brush("Panel"), Padding = new Thickness(14)
         };
+        _shell = shell;
         var layout = new StackPanel();
+        _layout = layout;
         shell.Child = layout;
         Content = new ScrollViewer
         {
             Content = shell, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, CanContentScroll = false
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
         };
-        var header = new Grid { Margin = new Thickness(0, 0, 0, 8) };
-        header.ColumnDefinitions.Add(new ColumnDefinition());
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 8), ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var title = new TextBlock
         {
             Text = I18n.T(workflow == ScrollCaptureWorkflow.Code ? "程式碼長截圖" : "對話長截圖"),
-            FontWeight = FontWeights.SemiBold, FontSize = 15
+            FontWeight = FontWeight.SemiBold, FontSize = 15, Background = Brushes.Transparent,
+            VerticalAlignment = VerticalAlignment.Center
         };
         header.Children.Add(title);
-        title.MouseLeftButtonDown += (_, args) =>
-        {
-            if (args.ButtonState == MouseButtonState.Pressed) DragMove();
-        };
+        WindowChrome.EnableTitleBarDrag(this, title, allowMaximize: false);
         var cancel = MakeButton("取消");
         cancel.Padding = new Thickness(9, 4, 9, 4);
         cancel.Margin = new Thickness(0);
         cancel.Click += (_, _) => Close();
-        Grid.SetColumn(cancel, 1);
-        header.Children.Add(cancel);
+        _cancelButton = cancel;
+        _headerActions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        _headerActions.Children.Add(cancel);
+        Grid.SetColumn(_headerActions, 1);
+        header.Children.Add(_headerActions);
         layout.Children.Add(header);
         _instruction = new TextBlock
         {
@@ -130,18 +137,24 @@ public sealed partial class ScrollCaptureWindow : Window
             Margin = new Thickness(0, 0, 0, 8)
         };
         layout.Children.Add(_instruction);
+        // Shown once when the target cannot be tracked (Wayland): only pixels guard the collection.
+        _regionOnlyNote = new TextBlock
+        {
+            Foreground = Brush("Muted"), TextWrapping = TextWrapping.Wrap, FontSize = 11,
+            Margin = new Thickness(0, 0, 0, 8), IsVisible = false
+        };
+        layout.Children.Add(_regionOnlyNote);
 
-        var previewRow = new Grid { Margin = new Thickness(0, 0, 0, 8) };
-        previewRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
-        previewRow.ColumnDefinitions.Add(new ColumnDefinition());
-        _preview = new System.Windows.Controls.Image { Stretch = Stretch.Uniform, SnapsToDevicePixels = true };
-        RenderOptions.SetBitmapScalingMode(_preview, BitmapScalingMode.HighQuality);
+        var previewRow = new Grid { Margin = new Thickness(0, 0, 0, 8), ColumnDefinitions = new ColumnDefinitions("96,*") };
+        _preview = new Image { Stretch = Stretch.Uniform };
+        RenderOptions.SetBitmapInterpolationMode(_preview, BitmapInterpolationMode.HighQuality);
         _previewBorder = new Border
         {
             Height = 58, Background = Brush("Bg"), BorderBrush = Brush("Line"),
             BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5),
-            ClipToBounds = true, Child = _preview, ToolTip = I18n.T("已收集長圖預覽")
+            ClipToBounds = true, Child = _preview
         };
+        ToolTip.SetTip(_previewBorder, I18n.T("已收集長圖預覽"));
         previewRow.Children.Add(_previewBorder);
         var information = new StackPanel { Margin = new Thickness(11, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         Grid.SetColumn(information, 1);
@@ -160,6 +173,7 @@ public sealed partial class ScrollCaptureWindow : Window
         if (workflow == ScrollCaptureWorkflow.Code) layout.Children.Add(rangeControls);
 
         var actions = new WrapPanel();
+        _actions = actions;
         _pauseButton = MakeButton("暫停");
         _pauseButton.Click += (_, _) => TogglePause();
         _finishButton = MakeButton("完成", accent: true);
@@ -176,13 +190,14 @@ public sealed partial class ScrollCaptureWindow : Window
         _finishNotice = CreateFinishNotice();
         layout.Children.Add(_finishNotice);
 
-        _manualPanel = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 11, 0, 0) };
+        _manualPanel = new StackPanel { IsVisible = false, Margin = new Thickness(0, 11, 0, 0) };
         _manualPanel.Children.Add(new TextBlock
         {
             Text = I18n.T("只接到已擷取內容的最上端或最下端。請確認接縫。"),
             TextWrapping = TextWrapping.Wrap, Foreground = Brush("Warning")
         });
-        _joinPreview = new System.Windows.Controls.Image { Stretch = Stretch.None, SnapsToDevicePixels = true };
+        _joinPreview = new Image { Stretch = Stretch.None, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
+        RenderOptions.SetBitmapInterpolationMode(_joinPreview, BitmapInterpolationMode.None);
         _manualPanel.Children.Add(new ScrollViewer
         {
             Content = _joinPreview, Height = 160, Margin = new Thickness(0, 7, 0, 0),
@@ -191,7 +206,7 @@ public sealed partial class ScrollCaptureWindow : Window
         });
         _direction = new ComboBox
         {
-            Background = Brush("Raised"), Foreground = Brush("Ink"),
+            Background = Brush("Raised"), Foreground = Brush("Ink"), HorizontalAlignment = HorizontalAlignment.Stretch,
             Margin = new Thickness(0, 7, 0, 0), Padding = new Thickness(7, 4, 7, 4),
             ItemsSource = new[] { I18n.T("向上補較早內容"), I18n.T("向下加入新內容") }, SelectedIndex = 1
         };
@@ -211,7 +226,7 @@ public sealed partial class ScrollCaptureWindow : Window
         var discard = MakeButton("捨棄此畫面");
         discard.Click += (_, _) =>
         {
-            _manualPanel.Visibility = Visibility.Collapsed;
+            _manualPanel.IsVisible = false;
             _unmatchedRaw = null;
             RefreshPreview();
             UpdateButtons();
@@ -225,7 +240,7 @@ public sealed partial class ScrollCaptureWindow : Window
         _trimExpander = new Expander
         {
             Header = I18n.T("略過固定頂部列／底部輸入框"), Foreground = Brush("Muted"),
-            Margin = new Thickness(0, 10, 0, 0)
+            Margin = new Thickness(0, 10, 0, 0), HorizontalAlignment = HorizontalAlignment.Stretch
         };
         var trimContent = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
         trimContent.Children.Add(new TextBlock
@@ -248,36 +263,32 @@ public sealed partial class ScrollCaptureWindow : Window
         var adjustments = new StackPanel();
         if (workflow != ScrollCaptureWorkflow.Code) adjustments.Children.Add(rangeControls);
         _undoButton.Margin = new Thickness(0, 8, 0, 0);
+        _undoButton.HorizontalAlignment = HorizontalAlignment.Left;
         adjustments.Children.Add(_undoButton);
         adjustments.Children.Add(_trimExpander);
         _rangeExpander = new Expander
         {
             Header = I18n.T("微調範圍"), Content = adjustments,
             IsExpanded = workflow == ScrollCaptureWorkflow.Precise,
-            Foreground = Brush("Muted"), Margin = new Thickness(0, 10, 0, 0)
+            Foreground = Brush("Muted"), Margin = new Thickness(0, 10, 0, 0), HorizontalAlignment = HorizontalAlignment.Stretch
         };
         layout.Children.Add(_rangeExpander);
+        CreateCompactBar(workflow);
 
-        _timer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromMilliseconds(275) };
+        _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(275) };
         _timer.Tick += async (_, _) => await ObserveAsync();
-        SourceInitialized += (_, _) =>
+        PlaceBeforeShow();
+        Opened += async (_, _) =>
         {
-            _handle = new WindowInteropHelper(this).Handle;
+            _handle = TryGetPlatformHandle()?.Handle ?? 0;
             _toolbarExcluded = ScrollCaptureTarget.ExcludeToolbar(_handle);
             WindowAppearance.Apply(this);
-        };
-        Loaded += (_, _) =>
-        {
-            ScrollCaptureTarget.PlaceToolbar(_handle, _targetBounds);
-            LimitWindowHeight();
             if (initialFrame is not null)
-            {
-                var first = initialFrame.IsFrozen ? initialFrame : initialFrame.CloneCurrentValue();
-                if (!first.IsFrozen) first.Freeze();
-                AddFirstFrame(first);
-            }
+                AddFirstFrame(initialFrame);
             _userPaused = _workflow == ScrollCaptureWorkflow.Precise;
-            if (!_userPaused) _timer.Start();
+            PlaceToolbar();
+            LimitWindowHeight();
+            ShowRegionOnlyNote();
             SetStatus(_workflow switch
             {
                 ScrollCaptureWorkflow.Code => "已開始收集程式碼畫面；自行捲動後按「完成」。",
@@ -285,12 +296,17 @@ public sealed partial class ScrollCaptureWindow : Window
                 _ => "自動收集中；慢慢捲動後按「完成」。"
             });
             UpdateButtons();
+            // Wayland: a screen stream keeps repeated captures fast and without screenshot flashes.
+            // The desktop may ask once which screen to share; cancelling that cancels the capture.
+            if (!await EnsureLiveCaptureAsync(initial: true) || _closed) return;
+            if (!_userPaused) StartTimer();
+            UpdateButtons();
         };
-        LocationChanged += (_, _) => LimitWindowHeight();
+        PositionChanged += (_, _) => LimitWindowHeight();
         SizeChanged += (_, _) =>
         {
             LimitWindowHeight();
-            if (_handle != IntPtr.Zero && !_closed) ScrollCaptureTarget.KeepToolbarVisible(_handle);
+            if (_handle != 0 && !_closed) KeepToolbarClear();
         };
         Closed += (_, _) =>
         {
@@ -298,19 +314,35 @@ public sealed partial class ScrollCaptureWindow : Window
             _timer.Stop();
             _lifetime.Cancel();
             _activePicker?.Close();
+            _liveCapture?.Dispose();
+            _liveCapture = null;
+            _ = ReleaseFramesAsync(keep: initialFrame);
         };
-        PreviewKeyDown += (_, args) =>
+        AddHandler(KeyDownEvent, (_, args) =>
         {
             if (args.Key == Key.Escape) { args.Handled = true; Close(); }
-        };
+        }, RoutingStrategies.Tunnel);
         UpdateButtons();
     }
+
+    /// <summary>
+    /// Captures have exactly the region's pixels, except in Wayland sessions, where the portal and the
+    /// screen stream keep the compositor resolution (larger than the region on scaled desktops).
+    /// </summary>
+    private static bool FrameFitsRegion(PixelSize frame, PixelRect region) =>
+        frame.Width > 0 && frame.Height > 0 && (PlatformInfo.IsWayland || frame == region.Size);
 
     private async Task ObserveAsync()
     {
         if (_closed || _finishing || _busy || _pickingBoundary || _userPaused || NeedsStart
-            || _rangeEnd is not null || _manualPanel.Visibility == Visibility.Visible) return;
-        if (!_target.CanObserve(_handle, _toolbarExcluded, out var reason))
+            || _rangeEnd is not null || _manualPanel.IsVisible) return;
+        if (!IsLiveCaptureRunning())
+        {
+            PauseForStoppedStream();
+            return;
+        }
+        if (DateTime.UtcNow < _settleUntil) return;
+        if (!CanObserveTarget(out var reason))
         {
             ResetObservation(discardPending: false);
             SetStatus(reason, warning: true);
@@ -320,9 +352,11 @@ public sealed partial class ScrollCaptureWindow : Window
         UpdateButtons();
         try
         {
-            // The excluded toolbar stays visible. No opacity changes or Activate calls.
-            var raw = ScreenshotService.CaptureRectangle(_targetBounds);
+            // The toolbar stays visible (excluded from capture, or outside the region). No opacity
+            // changes or Activate calls; the capture itself runs off the UI thread.
+            var raw = await CaptureTargetAsync();
             if (!CanCommitObservation()) return;
+            if (!AcceptFrameSize(raw)) return;
             if (_frames.Count == 0)
             {
                 AddFirstFrame(raw);
@@ -414,15 +448,60 @@ public sealed partial class ScrollCaptureWindow : Window
 
     private bool CanCommitObservation()
     {
-        if (_closed || _finishing || _pickingBoundary || _userPaused || _manualPanel.Visibility == Visibility.Visible) return false;
-        if (_target.CanObserve(_handle, _toolbarExcluded, out var reason)) return true;
+        if (_closed || _finishing || _pickingBoundary || _userPaused || _manualPanel.IsVisible) return false;
+        if (CanObserveTarget(out var reason)) return true;
         ResetObservation(discardPending: false);
         SetStatus(reason, warning: true);
         return false;
     }
 
-    private static FrameAnalysis AnalyzeFrame(BitmapSource anchor, int anchorPosition, BitmapSource current,
-        IReadOnlyList<BitmapSource> frames, IReadOnlyList<int> positions, CancellationToken token)
+    /// <summary>
+    /// <see cref="ScrollCaptureTarget.CanObserve"/>, plus SnipFlow's own toolbar: without capture
+    /// exclusion (always on Linux) it must stay outside the region, also where window stacking is
+    /// unknown (Wayland), so it never appears in a frame.
+    /// </summary>
+    private bool CanObserveTarget(out string reason, bool allowToolbarForeground = false)
+    {
+        if (!_toolbarExcluded && ToolbarCoversRegion())
+        {
+            DelayObservation();
+            reason = "請把操作條移到選取範圍外，避免出現在截圖中。";
+            return false;
+        }
+        var observable = _target.CanObserve(_handle, _toolbarExcluded, out reason, allowToolbarForeground);
+        if (_target.IsRegionOnly) ShowRegionOnlyNote();
+        return observable;
+    }
+
+    /// <summary>Fresh pixels of the region, read off the UI thread (Wayland reads the screen stream).</summary>
+    private Task<Bitmap> CaptureTargetAsync() =>
+        Task.Run(() => ScreenshotService.CaptureRectangleAsync(_targetBounds), _lifetime.Token);
+
+    /// <summary>
+    /// Every stored frame must have the same size. The size is fixed by the first frame; it can only
+    /// differ when the first frame came from another source (the Wayland screenshot portal before the
+    /// screen stream started), and then the fresh viewport replaces it while nothing has been joined.
+    /// </summary>
+    private bool AcceptFrameSize(Bitmap raw)
+    {
+        if (_frames.Count == 0 || raw.PixelSize == _frameSize) return true;
+        if (_frames.Count == 1 && _addedAtTop.Count == 0 && _rangeStart is null && _rangeEnd is null
+            && _topTrim == 0 && _bottomTrim == 0 && FrameFitsRegion(raw.PixelSize, _targetBounds))
+        {
+            _frames.Clear();
+            _positions.Clear();
+            _pendingAlignedRaw = null;
+            _unmatchedRaw = null;
+            AddFirstFrame(raw);
+            return false;
+        }
+        ResetObservation(discardPending: false);
+        SetStatus("擷取畫面的大小已改變，已保留現有內容；請完成後重新選取範圍。", warning: true);
+        return false;
+    }
+
+    private static FrameAnalysis AnalyzeFrame(FrameRows anchor, int anchorPosition, FrameRows current,
+        IReadOnlyList<FrameRows> frames, IReadOnlyList<int> positions, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         if (anchorPosition >= positions[0] && anchorPosition <= positions[^1]
@@ -462,8 +541,9 @@ public sealed partial class ScrollCaptureWindow : Window
         return new FrameAnalysis(FrameKind.New, frontierPosition, atTop);
     }
 
-    private void AddFirstFrame(BitmapSource frame)
+    private void AddFirstFrame(Bitmap frame)
     {
+        if (_frames.Count == 0) _frameSize = frame.PixelSize;
         _frames.Add(frame);
         _positions.Add(0);
         _anchorRaw = frame;
@@ -474,14 +554,14 @@ public sealed partial class ScrollCaptureWindow : Window
         SetStatus("已收集首張；在原視窗慢慢捲動。");
     }
 
-    private bool TryAcceptFrame(BitmapSource raw, int position, bool atTop)
+    private bool TryAcceptFrame(Bitmap raw, int position, bool atTop)
     {
         if (_frames.Count >= ImageStitcher.MaxFrames)
         {
             PauseAtLimit(I18n.F("已達 {0} 張上限；按「完成」保留已收集內容。", ImageStitcher.MaxFrames));
             return false;
         }
-        var storedPixels = (long)(_frames.Count + 1) * _targetBounds.Width * _targetBounds.Height;
+        var storedPixels = (long)(_frames.Count + 1) * FrameWidth * FrameHeight;
         if (storedPixels > ImageStitcher.MaxStoredPixels)
         {
             PauseAtLimit("已達記憶體上限；按「完成」保留已收集內容。");
@@ -496,7 +576,7 @@ public sealed partial class ScrollCaptureWindow : Window
         }
         var first = atTop ? position : _positions[0];
         var last = atTop ? _positions[^1] : position;
-        if ((last - (long)first + BodyHeight) * _targetBounds.Width > ImageStitcher.MaxOutputPixels)
+        if ((last - (long)first + BodyHeight) * FrameWidth > ImageStitcher.MaxOutputPixels)
         {
             PauseAtLimit("已達長圖大小上限；按「完成」保留已收集內容。");
             return false;
@@ -524,17 +604,16 @@ public sealed partial class ScrollCaptureWindow : Window
         return true;
     }
 
-    private int BodyHeight => _targetBounds.Height - _topTrim - _bottomTrim;
+    /// <summary>Frame pixels; the region size until the first frame fixes it.</summary>
+    private int FrameWidth => _frameSize.Width > 0 ? _frameSize.Width : _targetBounds.Width;
+    private int FrameHeight => _frameSize.Height > 0 ? _frameSize.Height : _targetBounds.Height;
 
-    private BitmapSource Crop(BitmapSource image) => Crop(image, _topTrim, _bottomTrim);
+    private int BodyHeight => FrameHeight - _topTrim - _bottomTrim;
 
-    private static BitmapSource Crop(BitmapSource image, int top, int bottom)
-    {
-        if (top == 0 && bottom == 0) return image;
-        var cropped = new CroppedBitmap(image, new Int32Rect(0, top, image.PixelWidth, image.PixelHeight - top - bottom));
-        cropped.Freeze();
-        return cropped;
-    }
+    private FrameRows Crop(Bitmap image) => Crop(image, _topTrim, _bottomTrim);
+
+    private static FrameRows Crop(Bitmap image, int top, int bottom) =>
+        new(image, top, image.PixelSize.Height - top - bottom);
 
     private int[] GetOverlaps(int height)
     {
@@ -546,14 +625,14 @@ public sealed partial class ScrollCaptureWindow : Window
 
     private void TogglePause()
     {
-        if (_closed || _finishing || _pickingBoundary || NeedsStart || _manualPanel.Visibility == Visibility.Visible) return;
+        if (_closed || _finishing || _pickingBoundary || NeedsStart || _manualPanel.IsVisible) return;
         _userPaused = !_userPaused;
         ResetObservation(discardPending: false);
         if (!_userPaused)
         {
             _rangeEnd = null;
             HideFinishNotice();
-            _timer.Start();
+            StartTimer();
         }
         else _timer.Stop();
         SetStatus(_userPaused ? "已暫停，擷取內容會保留。" : "切回目標視窗繼續捲動。");
@@ -581,7 +660,7 @@ public sealed partial class ScrollCaptureWindow : Window
         _anchorPosition = _positions[^1];
         _userPaused = true;
         _unmatchedRaw = null;
-        _manualPanel.Visibility = Visibility.Collapsed;
+        _manualPanel.IsVisible = false;
         _limitReached = false;
         HideFinishNotice();
         InvalidateRangeAfterUndo();
@@ -594,18 +673,18 @@ public sealed partial class ScrollCaptureWindow : Window
 
     private void ApplyTrim()
     {
-        if (_busy || _finishing || _pickingBoundary || _manualPanel.Visibility == Visibility.Visible) return;
+        if (_busy || _finishing || _pickingBoundary || _manualPanel.IsVisible) return;
         if (!int.TryParse(_topTrimBox.Text, NumberStyles.None, CultureInfo.InvariantCulture, out var top)
             || !int.TryParse(_bottomTrimBox.Text, NumberStyles.None, CultureInfo.InvariantCulture, out var bottom)
-            || top < 0 || bottom < 0 || (long)top + bottom > _targetBounds.Height - 48)
+            || top < 0 || bottom < 0 || (long)top + bottom > FrameHeight - 48)
         {
             SetStatus("裁切值須為非負整數，並至少保留 48 px。", warning: true);
             return;
         }
-        var height = _targetBounds.Height - top - bottom;
+        var height = FrameHeight - top - bottom;
         if (!CanTrimRange(top, bottom)) return;
         if (_frames.Count > 0 && ((long)_positions[^1] - _positions[0] + height)
-            * _targetBounds.Width > ImageStitcher.MaxOutputPixels)
+            * FrameWidth > ImageStitcher.MaxOutputPixels)
         {
             PauseAtLimit("已達長圖大小上限；按「完成」保留已收集內容。");
             return;
@@ -640,7 +719,8 @@ public sealed partial class ScrollCaptureWindow : Window
         _timer.Stop();
         ResetObservation(discardPending: false);
         HideFinishNotice();
-        _manualPanel.Visibility = Visibility.Visible;
+        ExpandToolbar();
+        _manualPanel.IsVisible = true;
         _overlapSlider.Maximum = BodyHeight - 1;
         _overlapSlider.Value = Math.Min(BodyHeight - 1, BodyHeight / 2);
         UpdateJoinPreview();
@@ -670,7 +750,7 @@ public sealed partial class ScrollCaptureWindow : Window
         var position = atTop ? checked(_positions[0] - advance) : checked(_positions[^1] + advance);
         var raw = _unmatchedRaw;
         if (!TryAcceptFrame(raw, position, atTop)) return;
-        _manualPanel.Visibility = Visibility.Collapsed;
+        _manualPanel.IsVisible = false;
         ResetObservation();
         SetStatus("接縫已加入；按「繼續」再捲動。");
         UpdateButtons();
@@ -684,10 +764,11 @@ public sealed partial class ScrollCaptureWindow : Window
 
     private void LimitWindowHeight()
     {
-        if (_handle == IntPtr.Zero || _closed) return;
-        var screen = System.Windows.Forms.Screen.FromHandle(_handle).WorkingArea;
-        var scale = VisualTreeHelper.GetDpi(this).DpiScaleY;
-        var maximum = Math.Max(120, screen.Height / scale - 24);
+        if (_handle == 0 || _closed) return;
+        var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+        if (screen is null) return;
+        var scale = RenderScaling > 0 ? RenderScaling : 1;
+        var maximum = Math.Max(120, screen.WorkingArea.Height / scale - 24);
         if (Math.Abs(MaxHeight - maximum) > 0.5) MaxHeight = maximum;
     }
 
@@ -700,45 +781,50 @@ public sealed partial class ScrollCaptureWindow : Window
     {
         if (_frames.Count == 0)
         {
-            _dimensions.Text = I18n.F("範圍 {0:N0} × {1:N0} px", _targetBounds.Width, BodyHeight);
+            _dimensions.Text = I18n.F("範圍 {0:N0} × {1:N0} px", FrameWidth, BodyHeight);
             return;
         }
-        var height = (long)(_rangeEnd ?? checked(_positions[^1] + _targetBounds.Height - _bottomTrim))
+        var height = (long)(_rangeEnd ?? checked(_positions[^1] + FrameHeight - _bottomTrim))
             - (_rangeStart ?? checked(_positions[0] + _topTrim));
-        _dimensions.Text = I18n.F("{0} 張 · {1:N0} × {2:N0} px", _frames.Count, _targetBounds.Width, height);
+        _dimensions.Text = I18n.F("{0} 張 · {1:N0} × {2:N0} px", _frames.Count, FrameWidth, height);
     }
 
     private void UpdateButtons()
     {
         _pauseButton.Content = new TextBlock { Text = I18n.T(_userPaused ? "繼續" : "暫停") };
-        _pauseButton.ToolTip = _rangeEnd is not null ? I18n.T("繼續收集會延伸終點。") : null;
-        _pauseButton.IsEnabled = !_finishing && !_pickingBoundary && !NeedsStart && _manualPanel.Visibility != Visibility.Visible;
+        ToolTip.SetTip(_pauseButton, _rangeEnd is not null ? I18n.T("繼續收集會延伸終點。") : null);
+        _pauseButton.IsEnabled = !_finishing && !_pickingBoundary && !NeedsStart && !_manualPanel.IsVisible
+            && !_startingLiveCapture;
         bool canEdit = !_busy && !_finishing && !_pickingBoundary;
         // Finishing waits for an in-flight matcher; a continuous observer must not make Done unclickable.
         _finishButton.IsEnabled = !_finishing && !_pickingBoundary && _frames.Count > 0
-            && HasFinishRange && _manualPanel.Visibility != Visibility.Visible;
-        _undoButton.IsEnabled = canEdit && _frames.Count > 1 && _manualPanel.Visibility != Visibility.Visible;
-        _manualButton.IsEnabled = canEdit && _unmatchedRaw is not null && _manualPanel.Visibility != Visibility.Visible;
-        _manualButton.Visibility = _unmatchedRaw is not null ? Visibility.Visible : Visibility.Collapsed;
+            && HasFinishRange && !_manualPanel.IsVisible;
+        _undoButton.IsEnabled = canEdit && _frames.Count > 1 && !_manualPanel.IsVisible;
+        _manualButton.IsEnabled = canEdit && _unmatchedRaw is not null && !_manualPanel.IsVisible;
+        _manualButton.IsVisible = _unmatchedRaw is not null;
         _manualPanel.IsEnabled = canEdit;
         _finishNotice.IsEnabled = canEdit;
         _confirmJoinButton.IsEnabled = canEdit;
-        _applyTrimButton.IsEnabled = canEdit && _manualPanel.Visibility != Visibility.Visible;
+        _applyTrimButton.IsEnabled = canEdit && !_manualPanel.IsVisible;
         _topTrimBox.IsEnabled = _bottomTrimBox.IsEnabled = _applyTrimButton.IsEnabled;
         UpdateRangeControls();
+        UpdateCompactControls();
     }
 
     private void SetStatus(string text, bool warning = false)
     {
         _status.Text = I18n.T(text);
         _status.Foreground = Brush(warning ? "Warning" : "Ink");
+        _compactStatus.Text = _status.Text;
+        _compactStatus.Foreground = _status.Foreground;
+        ToolTip.SetTip(_compactStatus, _status.Text);
     }
 
     private static TextBox MakeTrimBox() => new()
     {
-        Text = "0", Width = 48, Margin = new Thickness(7, 0, 10, 0), Padding = new Thickness(6),
+        Text = "0", Width = 56, MinHeight = 0, Margin = new Thickness(7, 0, 10, 0), Padding = new Thickness(6),
         Background = Brush("Bg"), Foreground = Brush("Ink"),
-        BorderBrush = Brush("Line"), CaretBrush = Brush("Ink")
+        BorderBrush = Brush("Line"), CaretBrush = Brush("Ink"), VerticalAlignment = VerticalAlignment.Center
     };
 
     private static Button MakeButton(string label, bool accent = false)
@@ -746,37 +832,20 @@ public sealed partial class ScrollCaptureWindow : Window
         var button = new Button
         {
             Content = new TextBlock { Text = I18n.T(label) }, Padding = new Thickness(12, 8, 12, 8),
-            Margin = new Thickness(0, 0, 7, 0), FontSize = 12,
-            Background = Brush(accent ? "Accent" : "Raised"),
-            Foreground = Brush(accent ? "AccentInk" : "Ink"),
-            BorderThickness = new Thickness(0), Cursor = Cursors.Hand, FontWeight = FontWeights.SemiBold
+            Margin = new Thickness(0, 0, 7, 0), FontSize = 12, MinHeight = 0,
+            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(6),
+            Cursor = new Cursor(StandardCursorType.Hand), FontWeight = FontWeight.SemiBold
         };
-        var border = new FrameworkElementFactory(typeof(Border));
-        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
-        border.SetBinding(Border.BackgroundProperty, new Binding(nameof(Button.Background))
+        if (accent) button.WithTheme("Primary");
+        else
         {
-            RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
-        });
-        border.SetBinding(Border.PaddingProperty, new Binding(nameof(Button.Padding))
-        {
-            RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
-        });
-        var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
-        presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-        presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-        border.AppendChild(presenter);
-        var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
-        var disabled = new Trigger { Property = IsEnabledProperty, Value = false };
-        disabled.Setters.Add(new Setter(OpacityProperty, 0.55));
-        template.Triggers.Add(disabled);
-        var hover = new Trigger { Property = IsMouseOverProperty, Value = true };
-        hover.Setters.Add(new Setter(OpacityProperty, 0.85));
-        template.Triggers.Add(hover);
-        button.Template = template;
+            button.Background = Brush("Raised");
+            button.Foreground = Brush("Ink");
+        }
         return button;
     }
 
-    private static Brush Brush(string key) => ThemeService.Brush(key);
+    private static IBrush Brush(string key) => ThemeService.Brush(key);
 
     private enum FrameKind { Known, New, Unreliable }
     private sealed record FrameAnalysis(FrameKind Kind, int Position = 0, bool AtTop = false, bool FixedEdge = false);
