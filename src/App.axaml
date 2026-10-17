@@ -233,6 +233,7 @@
       <Setter Property="CornerRadius" Value="6" />
     </Style>
     <Style Selector="ContextMenu, MenuFlyoutPresenter">
+      <Setter Property="FontFamily" Value="{DynamicResource AppFont}" />
       <Setter Property="CornerRadius" Value="8" />
       <Setter Property="Padding" Value="5" />
       <Setter Property="FontSize" Value="13" />
