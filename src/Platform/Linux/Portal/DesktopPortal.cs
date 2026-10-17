@@ -70,14 +70,17 @@ internal static class DesktopPortal
         arguments["handle_token"] = VariantValue.String(token);
 
         MessageBuffer message;
-        using (var writer = bus.GetMessageWriter())
+        // Dispose the writer that created the message: disposing a copy made before
+        // CreateMessage would return the message's buffer to the pool before it is sent.
+        var w = bus.GetMessageWriter();
+        try
         {
-            var w = writer;
             w.WriteMethodCallHeader(Service, ObjectPath, interfaceName, member, signature, MessageFlags.None);
             writeLeadingArguments?.Invoke(ref w);
             w.WriteDictionary(arguments);
             message = w.CreateMessage();
         }
+        finally { w.Dispose(); }
         var actualPath = await bus.CallMethodAsync(message, static (m, _) => m.GetBodyReader().ReadObjectPathAsString(), null)
             .ConfigureAwait(false);
 
@@ -98,13 +101,16 @@ internal static class DesktopPortal
     {
         var bus = await ConnectAsync().ConfigureAwait(false);
         MessageBuffer message;
-        using (var writer = bus.GetMessageWriter())
+        // Dispose the writer that created the message: disposing a copy made before
+        // CreateMessage would return the message's buffer to the pool before it is sent.
+        var w = bus.GetMessageWriter();
+        try
         {
-            var w = writer;
             w.WriteMethodCallHeader(Service, ObjectPath, interfaceName, member, signature, MessageFlags.None);
             writeArguments?.Invoke(ref w);
             message = w.CreateMessage();
         }
+        finally { w.Dispose(); }
         return await bus.CallMethodAsync(message, readReply, null).ConfigureAwait(false);
     }
 
@@ -115,14 +121,17 @@ internal static class DesktopPortal
         {
             var bus = await ConnectAsync().ConfigureAwait(false);
             MessageBuffer message;
-            using (var writer = bus.GetMessageWriter())
+            // Dispose the writer that created the message: disposing a copy made before
+            // CreateMessage would return the message's buffer to the pool before it is sent.
+            var w = bus.GetMessageWriter();
+            try
             {
-                var w = writer;
                 w.WriteMethodCallHeader(Service, ObjectPath, "org.freedesktop.DBus.Properties", "Get", "ss", MessageFlags.None);
                 w.WriteString(interfaceName);
                 w.WriteString(property);
                 message = w.CreateMessage();
             }
+            finally { w.Dispose(); }
             return await bus.CallMethodAsync(message, static (m, _) => m.GetBodyReader().ReadVariantValue(), null).ConfigureAwait(false);
         }
         catch (DBusExceptionBase) { return null; }
@@ -165,12 +174,15 @@ internal static class DesktopPortal
         try
         {
             MessageBuffer message;
-            using (var writer = bus.GetMessageWriter())
+            // Dispose the writer that created the message: disposing a copy made before
+            // CreateMessage would return the message's buffer to the pool before it is sent.
+            var w = bus.GetMessageWriter();
+            try
             {
-                var w = writer;
                 w.WriteMethodCallHeader(Service, path, RequestInterface, "Close", "", MessageFlags.None);
                 message = w.CreateMessage();
             }
+            finally { w.Dispose(); }
             await bus.CallMethodAsync(message).ConfigureAwait(false);
         }
         catch (Exception) { }
