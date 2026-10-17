@@ -1,0 +1,49 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=SnipFlow
+GenericName=Screenshot and annotation
+GenericName[zh_TW]=截圖與標註
+GenericName[zh_CN]=截图与标注
+Comment=Screenshots, annotations, scrolling capture, screen recording and video editing
+Comment[zh_TW]=截圖、標註、長截圖、螢幕錄影與影片後製
+Comment[zh_CN]=截图、标注、长截图、屏幕录制与视频后期
+Exec=snipflow %F
+Icon=snipflow
+Terminal=false
+StartupNotify=true
+StartupWMClass=SnipFlow
+Categories=Graphics;Utility;
+Keywords=screenshot;screen capture;annotate;scrolling;record;OCR;截圖;標註;錄影;
+MimeType=image/png;image/jpeg;image/bmp;image/gif;image/webp;video/mp4;
+Actions=capture-region;capture-window;capture-screen;scroll-capture;record;
+
+[Desktop Action capture-region]
+Name=Region screenshot
+Name[zh_TW]=框選截圖
+Name[zh_CN]=框选截图
+Exec=snipflow --capture region
+
+[Desktop Action capture-window]
+Name=Window screenshot
+Name[zh_TW]=視窗截圖
+Name[zh_CN]=窗口截图
+Exec=snipflow --capture window
+
+[Desktop Action capture-screen]
+Name=All screens screenshot
+Name[zh_TW]=全部螢幕截圖
+Name[zh_CN]=全部屏幕截图
+Exec=snipflow --capture all
+
+[Desktop Action scroll-capture]
+Name=Scrolling screenshot
+Name[zh_TW]=長截圖
+Name[zh_CN]=长截图
+Exec=snipflow --scroll
+
+[Desktop Action record]
+Name=Screen recording
+Name[zh_TW]=螢幕錄影
+Name[zh_CN]=屏幕录制
+Exec=snipflow --record

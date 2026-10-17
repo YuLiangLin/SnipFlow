@@ -9,7 +9,7 @@ on:
 permissions:
   contents: write
 jobs:
-  package:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,13 +19,54 @@ jobs:
       - name: Package Windows x64
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-        run: ./build-release.ps1 -Version $env:RELEASE_VERSION
+        run: |
+          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid version' }
+          ./build-release.ps1 -Version $env:RELEASE_VERSION
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: |
+            release/packages/*.exe
+            release/packages/*.nupkg
+            release/packages/*.json
+          if-no-files-found: error
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Package Linux x64
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid version'; exit 1; }
+          ./build-linux.sh "$RELEASE_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            release/packages-linux/*.deb
+            release/packages-linux/*.tar.gz
+            release/packages-linux/*.AppImage
+            release/packages-linux/*.nupkg
+            release/packages-linux/*.json
+          if-no-files-found: error
+  draft:
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
       - name: Create reviewable release draft
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid version' }
-          $assets = Get-ChildItem release/packages -File | Where-Object { $_.Extension -in '.exe','.nupkg','.json' } | Select-Object -ExpandProperty FullName
-          gh release create "v$env:RELEASE_VERSION" @assets --draft --target "$env:GITHUB_SHA" --title "SnipFlow $env:RELEASE_VERSION" --notes "Windows x64 安裝版。發布這個草稿後，已安裝的 SnipFlow 才會收到新版本。"
-          if ($LASTEXITCODE -ne 0) { throw 'Release draft creation failed.' }
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid version'; exit 1; }
+          gh release create "v$RELEASE_VERSION" assets/* --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+            --title "SnipFlow $RELEASE_VERSION" \
+            --notes "Windows x64 安裝版與 Linux x64（Ubuntu .deb、AppImage、可攜壓縮檔）。發布這個草稿後，已安裝的 SnipFlow 才會收到新版本。"
