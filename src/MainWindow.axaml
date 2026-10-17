@@ -1,0 +1,334 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:SnipFlow"
+        xmlns:editor="using:SnipFlow.Editor"
+        xmlns:ui="using:SnipFlow.Services"
+        x:Class="SnipFlow.MainWindow"
+        Title="SnipFlow" Width="420" Height="264" MinWidth="420" MinHeight="264"
+        WindowStartupLocation="CenterScreen" WindowDecorations="None" CanResize="True"
+        DragDrop.AllowDrop="True">
+  <Border x:Name="RootBorder" BorderBrush="{DynamicResource Line}" BorderThickness="1">
+    <Grid x:Name="RootGrid" RowDefinitions="52,*,26">
+      <Border x:Name="TitleBar" Grid.Row="0" Background="{DynamicResource Bg}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+        <Grid Margin="16,0,8,0" ColumnDefinitions="*,Auto">
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <Image Source="avares://SnipFlow/Assets/SnipFlow-v3.png" Width="28" Height="28" Margin="0,0,9,0" />
+            <TextBlock Text="SnipFlow" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+          </StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <StackPanel x:Name="HeaderCapture" Orientation="Horizontal" Margin="0,0,10,0">
+              <Button Click="CaptureClick" Theme="{StaticResource Primary}" Padding="12,7" ToolTip.Tip="{ui:Tr '框選截圖'}">
+                <StackPanel Orientation="Horizontal"><PathIcon Data="{local:Icon Add}" Width="15" Height="15" Margin="0,0,7,0" /><TextBlock Text="{ui:Tr '新截圖'}" VerticalAlignment="Center" /></StackPanel>
+              </Button>
+              <Button Click="CaptureMenuClick" Theme="{StaticResource Primary}" Width="30" Padding="0" Margin="4,0,0,0" ToolTip.Tip="{ui:Tr '截圖模式'}" AutomationProperties.Name="{ui:Tr '截圖模式'}">
+                <PathIcon Data="{local:Icon ChevronDown}" Width="12" Height="12" />
+              </Button>
+            </StackPanel>
+            <Button x:Name="CompactButton" Content="▣" Theme="{StaticResource WindowControl}" FontSize="15" Click="CompactClick" ToolTip.Tip="{ui:Tr '小型面板'}" />
+            <Button Theme="{StaticResource WindowControl}" Click="MinimizeClick" ToolTip.Tip="{ui:Tr '最小化'}"><PathIcon Data="{local:Icon Subtract}" Width="12" Height="12" /></Button>
+            <Button x:Name="MaximizeButton" Theme="{StaticResource WindowControl}" Click="MaximizeClick" ToolTip.Tip="{ui:Tr '最大化／還原'}"><PathIcon Data="{local:Icon Maximize}" Width="12" Height="12" /></Button>
+            <Button Theme="{StaticResource WindowControl}" Click="HideClick" ToolTip.Tip="{ui:Tr '隱藏至系統匣'}"><PathIcon Data="{local:Icon Dismiss}" Width="12" Height="12" /></Button>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <Grid Grid.Row="1" x:Name="Workspace" IsVisible="False" ColumnDefinitions="64,*,220">
+        <Border Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0">
+          <Grid Margin="10,12,10,12" RowDefinitions="*,Auto">
+            <Grid.Styles>
+              <Style Selector="Button">
+                <Setter Property="Theme" Value="{StaticResource QuietButton}" />
+                <Setter Property="Width" Value="40" />
+                <Setter Property="Height" Value="40" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Margin" Value="0,0,0,6" />
+                <Setter Property="Foreground" Value="{DynamicResource Ink}" />
+                <Setter Property="ToolTip.Placement" Value="Right" />
+                <Setter Property="ToolTip.ShowDelay" Value="350" />
+              </Style>
+              <Style Selector="Button > PathIcon">
+                <Setter Property="Width" Value="20" />
+                <Setter Property="Height" Value="20" />
+              </Style>
+            </Grid.Styles>
+            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,6">
+              <StackPanel>
+                <Button Click="CaptureMenuClick" Tag="CaptureRight" ToolTip.Tip="{ui:Tr '截圖模式'}" AutomationProperties.Name="{ui:Tr '截圖模式'}"><PathIcon Data="{local:Icon Camera}" /></Button>
+                <Button Click="ScrollClick" ToolTip.Tip="{ui:Tr '視窗長截圖'}" AutomationProperties.Name="{ui:Tr '視窗長截圖'}">
+                  <Button.ContextMenu><ContextMenu><MenuItem Header="{ui:Tr '視窗長截圖'}" Click="WindowScrollMenuItemClick" /><MenuItem Header="{ui:Tr '框選長截圖'}" Click="RegionScrollMenuItemClick" /></ContextMenu></Button.ContextMenu>
+                  <PathIcon Data="{local:Icon ScrollCapture}" />
+                </Button>
+                <Button Click="CodeClick" ToolTip.Tip="{ui:Tr '程式碼長截圖'}" AutomationProperties.Name="{ui:Tr '程式碼長截圖'}">
+                  <Button.ContextMenu><ContextMenu><MenuItem Header="{ui:Tr '視窗長截圖'}" Click="WindowCodeMenuItemClick" /><MenuItem Header="{ui:Tr '框選長截圖'}" Click="RegionCodeMenuItemClick" /></ContextMenu></Button.ContextMenu>
+                  <TextBlock Text="&lt;/&gt;" FontFamily="{DynamicResource MonoFont}" FontSize="15" FontWeight="SemiBold" />
+                </Button>
+                <Button Click="RecordClick" ToolTip.Tip="{ui:Tr '螢幕錄影'}" AutomationProperties.Name="{ui:Tr '螢幕錄影'}"><PathIcon Data="{local:Icon Video}" /></Button>
+                <Button Click="OpenClick" ToolTip.Tip="{ui:Tr '開啟檔案'}" AutomationProperties.Name="{ui:Tr '開啟檔案'}">
+                  <Button.ContextMenu><ContextMenu><MenuItem Header="{ui:Tr '開啟檔案'}" Click="OpenClick" /><MenuItem Header="{ui:Tr '開啟剪貼簿圖片'}" Click="OpenClipboardClick" /><MenuItem Header="{ui:Tr '空白畫布'}" Click="NewCanvasClick" /><MenuItem Header="{ui:Tr '開啟影片'}" Click="OpenVideoClick" /></ContextMenu></Button.ContextMenu>
+                  <PathIcon Data="{local:Icon FolderOpen}" />
+                </Button>
+                <Button Click="OpenClipboardClick" ToolTip.Tip="{ui:Tr '開啟剪貼簿圖片'}" AutomationProperties.Name="{ui:Tr '開啟剪貼簿圖片'}"><PathIcon Data="{local:Icon ClipboardPaste}" /></Button>
+                <Button Click="NewCanvasClick" ToolTip.Tip="{ui:Tr '空白畫布'}" AutomationProperties.Name="{ui:Tr '空白畫布'}">
+                  <Grid Width="20" Height="20" UseLayoutRounding="True">
+                    <Rectangle Width="18" Height="16" Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1.5" />
+                    <Path Data="M6,10 H14 M10,6 V14" Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1.5" />
+                  </Grid>
+                </Button>
+                <Button Click="CollageClick" ToolTip.Tip="{ui:Tr '多張合圖'}" AutomationProperties.Name="{ui:Tr '多張合圖'}"><PathIcon Data="{local:Icon Grid}" /></Button>
+              </StackPanel>
+            </ScrollViewer>
+            <StackPanel Grid.Row="1">
+              <Button Click="SettingsClick" ToolTip.Tip="{ui:Tr '設定'}" AutomationProperties.Name="{ui:Tr '設定'}"><PathIcon Data="{local:Icon Settings}" /></Button>
+              <Button Click="ExitClick" ToolTip.Tip="{ui:Tr '結束程式'}" AutomationProperties.Name="{ui:Tr '結束程式'}" Margin="0"><PathIcon Data="{local:Icon Power}" /></Button>
+            </StackPanel>
+          </Grid>
+        </Border>
+
+        <Grid Grid.Column="1" RowDefinitions="Auto,Auto,Auto,*,Auto">
+          <Border Grid.Row="0" MinHeight="48" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+              <DockPanel Margin="12,8">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                  <Button x:Name="CopyButton" Content="{ui:Tr '複製含標註圖片'}" Click="CopyClick" Theme="{StaticResource QuietButton}" AutomationProperties.Name="{ui:Tr '複製含標註圖片'}" Margin="0,0,6,0">
+                    <ToolTip.Tip>
+                      <StackPanel><TextBlock Text="{ui:Tr '複製含標註圖片'}" /><TextBlock Text="Ctrl + C" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,4,0,0" /></StackPanel>
+                    </ToolTip.Tip>
+                  </Button>
+                  <Button x:Name="SaveButton" Content="{ui:Tr '儲存 PNG'}" Click="SaveClick" Theme="{StaticResource QuietButton}" Background="{DynamicResource Raised}" ToolTip.Tip="{ui:Tr '匯出含標註圖片'}" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" x:Name="ToolButtons">
+                  <StackPanel.Styles>
+                    <Style Selector="Button">
+                      <Setter Property="Theme" Value="{StaticResource QuietButton}" />
+                      <Setter Property="Padding" Value="7,3" />
+                      <Setter Property="MinWidth" Value="32" />
+                    </Style>
+                  </StackPanel.Styles>
+                  <Button Tag="Select" Click="ToolClick" ToolTip.Tip="{ui:Tr '選取／移動 (V)'}"><PathIcon Data="{local:Icon Cursor}" Width="16" Height="16" /></Button>
+                  <Button Tag="Arrow" Click="ToolClick" ToolTip.Tip="{ui:Tr '箭頭 (A)'}" Content="↗" FontSize="20" />
+                  <Button Tag="Rectangle" Click="ToolClick" ToolTip.Tip="{ui:Tr '矩形 (R)'}" AutomationProperties.Name="{ui:Tr '矩形'}">
+                    <Grid Width="18" Height="18" UseLayoutRounding="True"><Rectangle Width="14" Height="12" Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1.5" HorizontalAlignment="Center" VerticalAlignment="Center" /></Grid>
+                  </Button>
+                  <Button Tag="Ellipse" Click="ToolClick" ToolTip.Tip="{ui:Tr '橢圓 (E)'}" AutomationProperties.Name="{ui:Tr '橢圓'}">
+                    <Grid Width="18" Height="18" UseLayoutRounding="True"><Ellipse Width="14" Height="14" Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1.5" HorizontalAlignment="Center" VerticalAlignment="Center" /></Grid>
+                  </Button>
+                  <Button Tag="Pen" Click="ToolClick" ToolTip.Tip="{ui:Tr '畫筆 (P)'}"><PathIcon Data="{local:Icon Edit}" Width="16" Height="16" /></Button>
+                  <Button Tag="Highlight" Click="ToolClick" ToolTip.Tip="{ui:Tr '螢光筆 (H)'}"><PathIcon Data="{local:Icon Highlight}" Width="16" Height="16" /></Button>
+                  <Button Tag="Text" Click="ToolClick" ToolTip.Tip="{ui:Tr '文字 (T)'}" Content="T" FontWeight="Bold" />
+                  <Button Tag="Mosaic" Click="ToolClick" ToolTip.Tip="{ui:Tr '馬賽克 (M)'}" Content="▦" FontSize="19" />
+                  <Button x:Name="ImageTransformButton" Click="ImageTransformMenuClick" ToolTip.Tip="{ui:Tr '旋轉／翻轉'}" AutomationProperties.Name="{ui:Tr '旋轉／翻轉'}" Content="⟳" FontSize="20" />
+                  <Border Width="1" Height="22" Background="{DynamicResource Line}" Margin="6,0" />
+                  <Button x:Name="UndoButton" Content="↶" FontSize="20" Click="UndoClick" ToolTip.Tip="{ui:Tr '復原 · Ctrl + Z'}" />
+                  <Button x:Name="RedoButton" Content="↷" FontSize="20" Click="RedoClick" ToolTip.Tip="{ui:Tr '重做 · Ctrl + Y'}" />
+                </StackPanel>
+              </DockPanel>
+            </ScrollViewer>
+          </Border>
+
+          <Border Grid.Row="1" MinHeight="40" Background="{DynamicResource Bg}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+              <DockPanel Margin="18,5">
+                <Button DockPanel.Dock="Right" x:Name="OcrButton" Content="{ui:Tr '辨識文字  OCR'}" Click="OcrClick" Theme="{StaticResource QuietButton}" Padding="10,4" Foreground="{DynamicResource Ink}" />
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                  <TextBlock x:Name="ToolLabel" Text="{ui:Tr '畫筆'}" Foreground="{DynamicResource Muted}" Margin="0,0,10,0" VerticalAlignment="Center" MaxWidth="64" TextTrimming="CharacterEllipsis" />
+                  <StackPanel x:Name="ColorButtons" Orientation="Horizontal" Margin="0,0,10,0" VerticalAlignment="Center">
+                    <Button Tag="#111827" Click="ColorClick" Theme="{StaticResource ColorSwatch}" Background="#111827" ToolTip.Tip="{ui:Tr '黑色'}" />
+                    <Button Tag="#63D5C5" Click="ColorClick" Theme="{StaticResource ColorSwatch}" Background="#63D5C5" ToolTip.Tip="{ui:Tr '青綠'}" />
+                    <Button Tag="#FF646C" Click="ColorClick" Theme="{StaticResource ColorSwatch}" Background="#FF646C" ToolTip.Tip="{ui:Tr '紅色'}" />
+                    <Button Tag="#FFCC6A" Click="ColorClick" Theme="{StaticResource ColorSwatch}" Background="#FFCC6A" ToolTip.Tip="{ui:Tr '黃色'}" />
+                    <Button Tag="#3B82F6" Click="ColorClick" Theme="{StaticResource ColorSwatch}" Background="#3B82F6" ToolTip.Tip="{ui:Tr '藍色'}" />
+                    <Button Tag="#8B5CF6" Click="ColorClick" Theme="{StaticResource ColorSwatch}" Background="#8B5CF6" ToolTip.Tip="{ui:Tr '紫色'}" />
+                    <Button Tag="#F97316" Click="ColorClick" Theme="{StaticResource ColorSwatch}" Background="#F97316" ToolTip.Tip="{ui:Tr '橘色'}" />
+                    <Button Tag="#FFFFFF" Click="ColorClick" Theme="{StaticResource ColorSwatch}" Background="White" ToolTip.Tip="{ui:Tr '白色'}" />
+                    <Button x:Name="MoreColorsButton" Click="MoreColorsClick" Width="26" Height="24" MinHeight="0" Padding="3" ToolTip.Tip="{ui:Tr '更多顏色'}" AutomationProperties.Name="{ui:Tr '更多顏色'}">
+                      <Ellipse Width="16" Height="16" Stroke="{DynamicResource Muted}" StrokeThickness="1">
+                        <Ellipse.Fill>
+                          <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                            <GradientStop Color="#FF646C" Offset="0" />
+                            <GradientStop Color="#FFCC6A" Offset="0.25" />
+                            <GradientStop Color="#63D5C5" Offset="0.5" />
+                            <GradientStop Color="#3B82F6" Offset="0.75" />
+                            <GradientStop Color="#8B5CF6" Offset="1" />
+                          </LinearGradientBrush>
+                        </Ellipse.Fill>
+                      </Ellipse>
+                    </Button>
+                  </StackPanel>
+                  <StackPanel x:Name="WidthProperties" Orientation="Horizontal">
+                    <TextBlock Text="{ui:Tr '粗細'}" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <Slider x:Name="WidthSlider" Minimum="1" Maximum="32" Value="4" Width="90" VerticalAlignment="Center" ValueChanged="StrokeChanged">
+                      <Slider.Resources>
+                        <!-- Keep the property bar as compact as the WPF slider. -->
+                        <x:Double x:Key="SliderHorizontalHeight">24</x:Double>
+                        <GridLength x:Key="SliderPreContentMargin">0</GridLength>
+                        <GridLength x:Key="SliderPostContentMargin">0</GridLength>
+                      </Slider.Resources>
+                    </Slider>
+                  </StackPanel>
+                  <StackPanel x:Name="TextProperties" Orientation="Horizontal" IsVisible="False">
+                    <TextBlock Text="{ui:Tr '字級'}" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBox x:Name="TextSizeBox" Text="26" Width="58" MinHeight="28" Padding="6,3" TextAlignment="Center" VerticalContentAlignment="Center" LostFocus="TextSizeChanged" ToolTip.Tip="{ui:Tr '文字大小（12–240 px）'}" />
+                  </StackPanel>
+                </StackPanel>
+              </DockPanel>
+            </ScrollViewer>
+          </Border>
+
+          <Border Grid.Row="2" x:Name="CollageBar" IsVisible="False" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+            <WrapPanel Margin="12,6">
+              <WrapPanel.Styles>
+                <Style Selector="Button">
+                  <Setter Property="Theme" Value="{StaticResource QuietButton}" />
+                  <Setter Property="Padding" Value="10,5" />
+                  <Setter Property="Margin" Value="0,0,4,0" />
+                </Style>
+              </WrapPanel.Styles>
+              <Button x:Name="AddImagesButton" Content="{ui:Tr '加入圖片'}" Click="AddImagesClick" ToolTip.Tip="{ui:Tr '多選檔案、拖入圖片或 Ctrl + V'}" />
+              <Button x:Name="PasteImagesButton" Content="{ui:Tr '貼上圖片'}" Click="PasteImagesClick" ToolTip.Tip="Ctrl + V" AutomationProperties.Name="{ui:Tr '貼上圖片'}" />
+              <Button Content="{ui:Tr '排列 ▾'}" Click="ArrangeMenuClick" />
+              <Button Content="{ui:Tr '對齊 ▾'}" Click="AlignmentMenuClick" />
+              <Button Content="{ui:Tr '圖層 ▾'}" Click="OrderMenuClick" />
+              <Button Content="{ui:Tr '畫布 ▾'}" Click="CanvasMenuClick" />
+              <Button x:Name="ProjectButton" Content="{ui:Tr '儲存專案'}" Click="SaveProjectClick" Background="{DynamicResource Raised}" ToolTip.Tip="{ui:Tr '保留圖片與可編輯標註 · Ctrl + S'}" />
+            </WrapPanel>
+          </Border>
+
+          <editor:EditorView Grid.Row="3" x:Name="Editor" />
+          <Grid Grid.Row="3" x:Name="EmptyState" Background="{DynamicResource Bg}">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="420" Margin="35">
+              <Image Source="avares://SnipFlow/Assets/SnipFlow-v3.png" Width="96" Height="96" HorizontalAlignment="Center" Margin="0,0,0,20" />
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <Button Theme="{StaticResource Primary}" Content="{ui:Tr '框選截圖'}" Click="CaptureClick" Width="180" Padding="16,13" />
+                <Button Theme="{StaticResource Primary}" Click="CaptureMenuClick" Width="32" Padding="0" Margin="6,0,0,0" VerticalAlignment="Stretch" ToolTip.Tip="{ui:Tr '截圖模式'}" AutomationProperties.Name="{ui:Tr '截圖模式'}">
+                  <PathIcon Data="{local:Icon ChevronDown}" Width="12" Height="12" />
+                </Button>
+              </StackPanel>
+              <TextBlock x:Name="HotkeyHint" Text="Ctrl + Alt + S" FontFamily="{DynamicResource MonoFont}" Foreground="{DynamicResource Muted}" HorizontalAlignment="Center" Margin="0,16,0,18" />
+              <Button Content="{ui:Tr '開啟檔案'}" Click="OpenClick" Width="180" BorderThickness="1" BorderBrush="{DynamicResource Line}" HorizontalAlignment="Center" />
+              <WrapPanel HorizontalAlignment="Center" Margin="0,10,0,0">
+                <Button Content="{ui:Tr '空白畫布'}" Click="NewCanvasClick" Margin="0,0,8,0" />
+                <Button Content="{ui:Tr '剪貼簿圖片'}" Click="OpenClipboardClick" ToolTip.Tip="{ui:Tr '開啟剪貼簿圖片'}" />
+              </WrapPanel>
+              <TextBlock Text="Ctrl + O ／ Ctrl + V" Foreground="{DynamicResource Muted}" FontSize="12" HorizontalAlignment="Center" Margin="0,12,0,0" />
+            </StackPanel>
+          </Grid>
+          <Border Grid.Row="4" x:Name="UpdateBanner" IsVisible="False" Background="{DynamicResource Raised}" Padding="14,9">
+            <DockPanel>
+              <Button x:Name="EditorUpdateButton" Content="{ui:Tr '重新啟動並更新'}" DockPanel.Dock="Right" Click="ApplyUpdateClick" Padding="10,4" Theme="{StaticResource Primary}" />
+              <TextBlock Text="{ui:Tr '新版本已下載。完成編輯後即可更新。'}" VerticalAlignment="Center" Foreground="{DynamicResource Ink}" />
+            </DockPanel>
+          </Border>
+        </Grid>
+
+        <Border Grid.Column="2" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="1,0,0,0">
+          <Grid RowDefinitions="48,*,Auto">
+            <Grid Margin="16,0,10,0" ColumnDefinitions="*,Auto,Auto">
+              <TextBlock Text="{ui:Tr '最近擷取'}" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="1" x:Name="HistoryCount" Text="0" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="6,0" />
+              <Button Grid.Column="2" x:Name="HistoryClearButton" Click="ClearHistoryClick" Width="28" Height="28" MinHeight="0" Padding="0" ToolTip.Tip="{ui:Tr '清空擷取歷史'}" AutomationProperties.Name="{ui:Tr '清空擷取歷史'}">
+                <PathIcon Data="{local:Icon Delete}" Width="15" Height="15" />
+              </Button>
+            </Grid>
+            <ListBox x:Name="HistoryList" Grid.Row="1" Background="Transparent" Foreground="{DynamicResource Ink}" BorderThickness="0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="HistorySelected" Padding="10,0">
+              <ListBox.Styles>
+                <Style Selector="ListBoxItem">
+                  <Setter Property="Padding" Value="0" />
+                  <Setter Property="Margin" Value="0,0,0,10" />
+                  <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                  <Setter Property="Background" Value="Transparent" />
+                  <Setter Property="Template">
+                    <ControlTemplate>
+                      <Border Name="Card" CornerRadius="9" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Soft}" Padding="8">
+                        <!-- Not named PART_ContentPresenter: the Fluent item theme would tint that presenter on hover and selection; the card does it here. -->
+                        <ContentPresenter Name="CardContent" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                      </Border>
+                    </ControlTemplate>
+                  </Setter>
+                </Style>
+                <Style Selector="ListBoxItem:selected /template/ Border#Card">
+                  <Setter Property="BorderBrush" Value="{DynamicResource Muted}" />
+                  <Setter Property="Background" Value="{DynamicResource Selected}" />
+                </Style>
+                <Style Selector="ListBoxItem:pointerover /template/ Border#Card">
+                  <Setter Property="Background" Value="{DynamicResource Raised}" />
+                </Style>
+              </ListBox.Styles>
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="ui:HistoryItem">
+                  <StackPanel ToolTip.Tip="{Binding Path}" Background="Transparent">
+                    <StackPanel.ContextMenu>
+                      <ContextMenu><MenuItem Header="{ui:Tr '移除此擷取紀錄'}" Tag="{Binding}" Click="DeleteHistoryClick" /></ContextMenu>
+                    </StackPanel.ContextMenu>
+                    <Border Background="{DynamicResource Bg}" CornerRadius="5" ClipToBounds="True">
+                      <Grid>
+                        <Image Source="{Binding Thumbnail}" Height="104" Stretch="Uniform" />
+                        <Border IsVisible="{Binding IsRecording}" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="6" Padding="6,3" Background="{DynamicResource Panel}" CornerRadius="4">
+                          <StackPanel Orientation="Horizontal">
+                            <PathIcon Data="{local:Icon Video}" Width="11" Height="11" Foreground="{DynamicResource Ink}" Margin="0,0,4,0" />
+                            <TextBlock Text="{ui:Tr '影片'}" FontSize="10" Foreground="{DynamicResource Ink}" VerticalAlignment="Center" />
+                          </StackPanel>
+                        </Border>
+                      </Grid>
+                    </Border>
+                    <Grid Margin="2,5,0,0" ColumnDefinitions="*,Auto">
+                      <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Title}" Foreground="{DynamicResource Ink}" FontSize="12" Margin="0,0,4,3" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Detail}" Foreground="{DynamicResource Muted}" FontSize="10" />
+                      </StackPanel>
+                      <Button Grid.Column="1" Tag="{Binding}" Click="DeleteHistoryClick" Focusable="False" Width="26" Height="28" MinHeight="0" Padding="0"
+                              ToolTip.Tip="{ui:Tr '移除此擷取紀錄'}" AutomationProperties.Name="{ui:Tr '移除此擷取紀錄'}">
+                        <PathIcon Data="{local:Icon Delete}" Width="14" Height="14" Foreground="{DynamicResource Muted}" />
+                      </Button>
+                    </Grid>
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock x:Name="HistoryEmpty" Grid.Row="1" Text="{ui:Tr '尚無擷取紀錄'}" Foreground="{DynamicResource Muted}" FontSize="12" TextAlignment="Center" Margin="10,38" VerticalAlignment="Top" IsHitTestVisible="False" />
+          </Grid>
+        </Border>
+      </Grid>
+
+      <Grid Grid.Row="1" x:Name="CompactPanel" Margin="20,18,20,12" RowDefinitions="Auto,Auto,*,Auto" ColumnDefinitions="*,*">
+        <Grid Height="48" Margin="0,0,6,0" ColumnDefinitions="*,32">
+          <Button Click="CaptureClick" Theme="{StaticResource Primary}" Padding="8,6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+            <StackPanel Orientation="Horizontal"><PathIcon Data="{local:Icon Camera}" Width="18" Height="18" Margin="0,0,7,0" /><TextBlock Text="{ui:Tr '截圖'}" FontSize="13" VerticalAlignment="Center" /></StackPanel>
+          </Button>
+          <Button Grid.Column="1" Click="CaptureMenuClick" Theme="{StaticResource Primary}" Padding="0" Margin="4,0,0,0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ToolTip.Tip="{ui:Tr '截圖模式'}" AutomationProperties.Name="{ui:Tr '截圖模式'}">
+            <PathIcon Data="{local:Icon ChevronDown}" Width="12" Height="12" />
+          </Button>
+        </Grid>
+        <Button Grid.Column="1" Click="RecordClick" Height="48" Margin="6,0,0,0" Background="{DynamicResource Raised}" HorizontalAlignment="Stretch">
+          <StackPanel Orientation="Horizontal"><PathIcon Data="{local:Icon Video}" Width="18" Height="18" Margin="0,0,8,0" /><TextBlock Text="{ui:Tr '螢幕錄影'}" FontSize="13" VerticalAlignment="Center" /></StackPanel>
+        </Button>
+        <TextBlock Grid.Row="1" x:Name="CompactHotkeyHint" Text="Ctrl + Alt + S" FontFamily="{DynamicResource MonoFont}" FontSize="11" Foreground="{DynamicResource Muted}" HorizontalAlignment="Center" Margin="0,9,0,0" TextTrimming="CharacterEllipsis" />
+        <WrapPanel Grid.Row="3" Grid.ColumnSpan="2" HorizontalAlignment="Center" MaxWidth="378">
+          <StackPanel Orientation="Horizontal" Margin="0,0,3,0">
+            <Button Content="{ui:Tr '長截圖'}" Click="ScrollClick" Padding="9,8" />
+            <Button Click="ScrollMenuClick" Width="24" Padding="0" Margin="2,0,0,0" VerticalAlignment="Stretch" ToolTip.Tip="{ui:Tr '捲動截圖模式'}" AutomationProperties.Name="{ui:Tr '捲動截圖模式'}"><PathIcon Data="{local:Icon ChevronDown}" Width="10" Height="10" /></Button>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,0,3,0">
+            <Button Content="{ui:Tr '程式碼長截圖'}" Click="CodeClick" Padding="9,8" />
+            <Button Click="CodeMenuClick" Width="24" Padding="0" Margin="2,0,0,0" VerticalAlignment="Stretch" ToolTip.Tip="{ui:Tr '程式碼長截圖模式'}" AutomationProperties.Name="{ui:Tr '程式碼長截圖模式'}"><PathIcon Data="{local:Icon ChevronDown}" Width="10" Height="10" /></Button>
+          </StackPanel>
+          <Button Content="{ui:Tr '開啟檔案'}" Click="OpenClick" Padding="9,8" Margin="0,0,3,0" />
+          <Button Content="{ui:Tr '空白畫布'}" Click="NewCanvasClick" Padding="9,8" Margin="0,0,3,0" />
+          <Button Click="OpenClipboardClick" Width="32" Padding="0" Margin="0,0,3,0" VerticalAlignment="Stretch" ToolTip.Tip="{ui:Tr '開啟剪貼簿圖片'}" AutomationProperties.Name="{ui:Tr '開啟剪貼簿圖片'}"><PathIcon Data="{local:Icon ClipboardPaste}" Width="16" Height="16" /></Button>
+          <Button Content="{ui:Tr '合圖'}" Click="CollageClick" Padding="9,8" Margin="0,0,3,0" />
+          <Button x:Name="ExpandButton" Content="{ui:Tr '編輯器'}" Click="ExpandClick" Padding="9,8" Margin="0,0,3,0" />
+          <Button Click="SettingsClick" ToolTip.Tip="{ui:Tr '設定'}" Padding="10,8" VerticalAlignment="Stretch"><PathIcon Data="{local:Icon Settings}" Width="16" Height="16" /></Button>
+        </WrapPanel>
+      </Grid>
+
+      <Border Grid.Row="2" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Background="{DynamicResource Bg}">
+        <Grid Margin="16,0" ColumnDefinitions="*,Auto,Auto">
+          <TextBlock x:Name="StatusText" Text="{ui:Tr '就緒'}" Foreground="{DynamicResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="1" x:Name="ImageInfo" Foreground="{DynamicResource Muted}" FontFamily="{DynamicResource MonoFont}" FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0" />
+          <Button Grid.Column="2" x:Name="CompactUpdateButton" Content="{ui:Tr '重新啟動並更新'}" Click="ApplyUpdateClick" Theme="{StaticResource Primary}" IsVisible="False" Height="28" MinHeight="28" Padding="10,4" FontSize="11" Margin="12,6,0,6" ToolTip.Tip="{ui:Tr '保存目前編輯，重新啟動並套用更新。'}" AutomationProperties.Name="{ui:Tr '重新啟動並更新'}" />
+        </Grid>
+      </Border>
+    </Grid>
+  </Border>
+</Window>
