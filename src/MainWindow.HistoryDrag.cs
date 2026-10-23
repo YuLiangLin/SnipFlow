@@ -1,5 +1,7 @@
-using System.Windows.Controls.Primitives;
-using System.Windows.Input;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.LogicalTree;
+using Avalonia.VisualTree;
 using SnipFlow.Services;
 
 namespace SnipFlow;
@@ -7,7 +9,11 @@ namespace SnipFlow;
 public partial class MainWindow
 {
     private const string HistoryImageDragFormat = "SnipFlow.HistoryImage.v1";
+    // An in-process format: the opaque token never leaves SnipFlow, and no file list is advertised.
+    private static readonly DataFormat<string> HistoryImageFormat = DataFormat.CreateInProcessFormat<string>(HistoryImageDragFormat);
+    private const double MinimumDragDistance = 4;
     private HistoryItem? historyDragCandidate;
+    private PointerPressedEventArgs? historyDragPress;
     private Point historyDragStart;
     private long historyDragGeneration;
     private HistoryImageDrag? activeHistoryDrag;
@@ -15,76 +21,88 @@ public partial class MainWindow
 
     void InitializeHistoryDrag()
     {
-        Editor.AllowDrop = true;
-        Editor.PreviewDragEnter += HistoryImageDragOver;
-        Editor.PreviewDragOver += HistoryImageDragOver;
-        Editor.PreviewDragLeave += HistoryImageDragLeave;
-        Editor.PreviewDrop += HistoryImageDrop;
-        HistoryList.PreviewQueryContinueDrag += HistoryQueryContinueDrag;
-        HistoryList.MouseLeave += (_, _) => historyDragCandidate = null;
-        PreviewMouseLeftButtonUp += (_, _) => historyDragCandidate = null;
-        PreviewDragEnter += HistoryOutsideEditorDrag;
-        PreviewDragOver += HistoryOutsideEditorDrag;
-        PreviewDrop += HistoryOutsideEditorDrag;
+        DragDrop.SetAllowDrop(Editor, true);
+        // Avalonia drag events only bubble. Editor handlers (including for already handled events)
+        // run before the window's handlers, which WPF achieved with Preview* handlers on the editor.
+        Editor.AddHandler(DragDrop.DragEnterEvent, HistoryImageDragOver, RoutingStrategies.Bubble, handledEventsToo: true);
+        Editor.AddHandler(DragDrop.DragOverEvent, HistoryImageDragOver, RoutingStrategies.Bubble, handledEventsToo: true);
+        Editor.AddHandler(DragDrop.DragLeaveEvent, HistoryImageDragLeave, RoutingStrategies.Bubble, handledEventsToo: true);
+        Editor.AddHandler(DragDrop.DropEvent, HistoryImageDrop, RoutingStrategies.Bubble, handledEventsToo: true);
+        HistoryList.AddHandler(PointerPressedEvent, HistoryDragMouseDown, RoutingStrategies.Tunnel, handledEventsToo: true);
+        HistoryList.AddHandler(PointerMovedEvent, HistoryDragMouseMove, RoutingStrategies.Tunnel);
+        HistoryList.PointerExited += (_, _) => { if (!historyDragInProgress) ClearHistoryDragCandidate(); };
+        AddHandler(PointerReleasedEvent, (_, _) => { if (!historyDragInProgress) ClearHistoryDragCandidate(); }, RoutingStrategies.Tunnel, handledEventsToo: true);
+        // Registered before the file-drop handlers, so a history drag outside the editor never reaches them.
+        AddHandler(DragDrop.DragEnterEvent, HistoryOutsideEditorDrag);
+        AddHandler(DragDrop.DragOverEvent, HistoryOutsideEditorDrag);
+        AddHandler(DragDrop.DropEvent, HistoryOutsideEditorDrag);
         Closed += (_, _) =>
         {
-            historyDragCandidate = null;
+            ClearHistoryDragCandidate();
             activeHistoryDrag = null;
             Editor.ClearImageDropPreview();
         };
     }
 
-    void HistoryOutsideEditorDrag(object sender, DragEventArgs e)
+    void ClearHistoryDragCandidate()
     {
-        if (!e.Data.GetDataPresent(HistoryImageDragFormat, autoConvert: false)) return;
-        for (DependencyObject? current = e.OriginalSource as DependencyObject; current is not null; current = HistoryDragParent(current))
-            if (ReferenceEquals(current, Editor)) return;
-        e.Effects = DragDropEffects.None;
+        historyDragCandidate = null;
+        historyDragPress = null;
+    }
+
+    void HistoryOutsideEditorDrag(object? sender, DragEventArgs e)
+    {
+        if (!e.DataTransfer.Contains(HistoryImageFormat)) return;
+        if (e.Source is StyledElement source && HistoryDragAncestors(source).Any(current => ReferenceEquals(current, Editor))) return;
+        e.DragEffects = DragDropEffects.None;
         e.Handled = true;
         Editor.ClearImageDropPreview();
     }
 
-    void HistoryDragMouseDown(object sender, MouseButtonEventArgs e)
+    void HistoryDragMouseDown(object? sender, PointerPressedEventArgs e)
     {
-        historyDragCandidate = null;
+        ClearHistoryDragCandidate();
+        if (!e.GetCurrentPoint(HistoryList).Properties.IsLeftButtonPressed) return;
         if (!Editor.IsCollage || busy || capturePending || historyDragInProgress || e.ClickCount != 1) return;
-        if (e.OriginalSource is not DependencyObject source || IsHistoryDragControl(source)) return;
-        if (ItemsControl.ContainerFromElement(HistoryList, source) is not ListBoxItem { Content: HistoryItem item }) return;
+        if (e.Source is not StyledElement source || IsHistoryDragControl(source)) return;
+        if (HistoryItemContainer(source) is not { DataContext: HistoryItem item }) return;
         if (item.IsRecording) return;
         historyDragCandidate = item;
+        historyDragPress = e;
         historyDragStart = e.GetPosition(HistoryList);
         historyDragGeneration = documentGeneration;
         // Let the ListBox select the card normally. A click never inserts an image.
     }
 
-    void HistoryDragMouseMove(object sender, MouseEventArgs e)
+    async void HistoryDragMouseMove(object? sender, PointerEventArgs e)
     {
-        if (historyDragCandidate is null) return;
-        if (e.LeftButton != MouseButtonState.Pressed || !Editor.IsCollage || busy || capturePending ||
+        if (historyDragCandidate is null || historyDragPress is null) return;
+        if (!e.GetCurrentPoint(HistoryList).Properties.IsLeftButtonPressed || !Editor.IsCollage || busy || capturePending ||
             historyDragInProgress || historyDragGeneration != documentGeneration)
         {
-            historyDragCandidate = null;
+            ClearHistoryDragCandidate();
             return;
         }
         Point position = e.GetPosition(HistoryList);
-        if (Math.Abs(position.X - historyDragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
-            Math.Abs(position.Y - historyDragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+        if (Math.Abs(position.X - historyDragStart.X) < MinimumDragDistance &&
+            Math.Abs(position.Y - historyDragStart.Y) < MinimumDragDistance) return;
 
         HistoryItem item = historyDragCandidate;
-        historyDragCandidate = null;
+        var press = historyDragPress;
+        ClearHistoryDragCandidate();
         if (item.IsRecording) return;
         e.Handled = true;
         historyDragInProgress = true;
         try
         {
-            BitmapSource image = HistoryStore.Read(item.Path);
+            Bitmap image = HistoryStore.Read(item.Path);
             Editor.ValidateImageInsertion(image);
             activeHistoryDrag = new(image, Guid.NewGuid().ToString("N"), documentGeneration, Editor.Revision);
-            var data = new DataObject();
-            // Transfer an opaque marker only; never advertise FileDrop or remove a history file.
-            data.SetData(HistoryImageDragFormat, activeHistoryDrag.Token, autoConvert: false);
+            var data = new DataTransfer();
+            // Transfer an opaque marker only; never advertise a file list or remove a history file.
+            data.Add(DataTransferItem.Create(HistoryImageFormat, activeHistoryDrag.Token));
             RefreshDocumentState();
-            DragDrop.DoDragDrop(HistoryList, data, DragDropEffects.Copy);
+            await DragDrop.DoDragDropAsync(press, data, DragDropEffects.Copy);
         }
         catch (Exception error) { ReportError(error, "無法加入圖片"); }
         finally
@@ -96,37 +114,37 @@ public partial class MainWindow
         }
     }
 
-    void HistoryImageDragOver(object sender, DragEventArgs e)
+    void HistoryImageDragOver(object? sender, DragEventArgs e)
     {
-        if (!e.Data.GetDataPresent(HistoryImageDragFormat, autoConvert: false)) return;
+        if (!e.DataTransfer.Contains(HistoryImageFormat)) return;
         e.Handled = true;
-        e.Effects = DragDropEffects.None;
+        e.DragEffects = DragDropEffects.None;
         if (TryGetHistoryDrag(e, out HistoryImageDrag drag) &&
             Editor.ShowImageDropPreview(drag.Image, e.GetPosition(Editor)))
-            e.Effects = DragDropEffects.Copy;
+            e.DragEffects = DragDropEffects.Copy;
         else Editor.ClearImageDropPreview();
     }
 
-    void HistoryImageDragLeave(object sender, DragEventArgs e)
+    void HistoryImageDragLeave(object? sender, DragEventArgs e)
     {
-        if (!e.Data.GetDataPresent(HistoryImageDragFormat, autoConvert: false)) return;
+        if (!e.DataTransfer.Contains(HistoryImageFormat)) return;
         e.Handled = true;
-        e.Effects = DragDropEffects.None;
+        e.DragEffects = DragDropEffects.None;
         Editor.ClearImageDropPreview();
     }
 
-    void HistoryImageDrop(object sender, DragEventArgs e)
+    void HistoryImageDrop(object? sender, DragEventArgs e)
     {
-        if (!e.Data.GetDataPresent(HistoryImageDragFormat, autoConvert: false)) return;
-        // Consume the custom format before the Window's general FileDrop handler.
+        if (!e.DataTransfer.Contains(HistoryImageFormat)) return;
+        // Consume the custom format before the window's general file drop handler.
         e.Handled = true;
-        e.Effects = DragDropEffects.None;
+        e.DragEffects = DragDropEffects.None;
         Editor.ClearImageDropPreview();
         if (!TryGetHistoryDrag(e, out HistoryImageDrag drag)) return;
         try
         {
             if (!Editor.AddDroppedImage(drag.Image, e.GetPosition(Editor))) return;
-            e.Effects = DragDropEffects.Copy;
+            e.DragEffects = DragDropEffects.Copy;
             ToolClick(new Button { Tag = "Select" }, new());
             RefreshDocumentState();
             SetStatus("已加入 {0} 張圖片。", 1);
@@ -138,39 +156,45 @@ public partial class MainWindow
     {
         drag = null!;
         if (!historyDragInProgress || activeHistoryDrag is not { } current || busy || capturePending || isClosed ||
-            !Editor.IsCollage || current.Generation != documentGeneration || current.Revision != Editor.Revision ||
-            (e.AllowedEffects & DragDropEffects.Copy) == 0)
+            !Editor.IsCollage || current.Generation != documentGeneration || current.Revision != Editor.Revision)
             return false;
-        if (e.Data.GetData(HistoryImageDragFormat, autoConvert: false) is not string token ||
+        if (e.DataTransfer.TryGetValue(HistoryImageFormat) is not string token ||
             !string.Equals(token, current.Token, StringComparison.Ordinal)) return false;
         drag = current;
         return true;
     }
 
-    void HistoryQueryContinueDrag(object sender, QueryContinueDragEventArgs e)
+    static ListBoxItem? HistoryItemContainer(StyledElement source)
     {
-        if (!historyDragInProgress) return;
-        if (e.EscapePressed || isClosed || busy || capturePending || !Editor.IsCollage ||
-            activeHistoryDrag?.Generation != documentGeneration)
+        foreach (var current in HistoryDragAncestors(source))
         {
-            e.Action = DragAction.Cancel;
-            e.Handled = true;
-            Editor.ClearImageDropPreview();
+            if (current is ListBoxItem container) return container;
+            if (current is ListBox) break;
         }
+        return null;
     }
 
-    static bool IsHistoryDragControl(DependencyObject source)
+    static bool IsHistoryDragControl(StyledElement source)
     {
-        for (DependencyObject? current = source; current is not null; current = HistoryDragParent(current))
+        foreach (var current in HistoryDragAncestors(source))
         {
-            if (current is ButtonBase or ScrollBar or MenuItem or System.Windows.Controls.ContextMenu) return true;
+            if (current is Button or ScrollBar or MenuItem or Avalonia.Controls.ContextMenu) return true;
             if (current is ListBoxItem or ListBox) break;
         }
         return false;
     }
 
-    static DependencyObject? HistoryDragParent(DependencyObject item) => item is Visual or System.Windows.Media.Media3D.Visual3D
-        ? VisualTreeHelper.GetParent(item) : LogicalTreeHelper.GetParent(item);
+    /// <summary>The element and its visual (or, outside the visual tree, logical) ancestors. The top level's
+    /// parents can lead back into the tree, so each element is visited once.</summary>
+    static IEnumerable<StyledElement> HistoryDragAncestors(StyledElement start)
+    {
+        var visited = new HashSet<StyledElement>(ReferenceEqualityComparer.Instance);
+        for (StyledElement? current = start; current is not null && visited.Add(current); current = HistoryDragParent(current))
+            yield return current;
+    }
 
-    private sealed record HistoryImageDrag(BitmapSource Image, string Token, long Generation, long Revision);
+    static StyledElement? HistoryDragParent(StyledElement item) => item is Visual visual && visual.GetVisualParent() is StyledElement parent
+        ? parent : (item as ILogical)?.LogicalParent as StyledElement;
+
+    private sealed record HistoryImageDrag(Bitmap Image, string Token, long Generation, long Revision);
 }

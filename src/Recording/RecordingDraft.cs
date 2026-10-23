@@ -22,7 +22,7 @@ internal sealed class RecordingDraft : IAsyncDisposable
     internal void MarkReady(string completedPath)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!string.Equals(Path.GetFullPath(completedPath), OutputPath, StringComparison.OrdinalIgnoreCase)
+        if (!string.Equals(Path.GetFullPath(completedPath), OutputPath, PlatformInfo.PathComparison)
             || !File.Exists(OutputPath) || new FileInfo(OutputPath).Length < 128)
             throw new InvalidOperationException(_translate("錄影沒有產生有效影片。請等待畫面開始錄製後再停止。"));
         _ready = true;
@@ -42,7 +42,7 @@ internal sealed class RecordingDraft : IAsyncDisposable
             var path = Path.GetFullPath(destination);
             if (!string.Equals(Path.GetExtension(path), ".mp4", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException(_translate("影片副檔名必須是 .mp4。"), nameof(destination));
-            if (path.StartsWith(_directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            if (path.StartsWith(_directory + Path.DirectorySeparatorChar, PlatformInfo.PathComparison))
                 throw new ArgumentException(_translate("請選擇其他影片儲存位置。"), nameof(destination));
             if (!overwriteExisting && File.Exists(path))
                 throw new IOException(_translate("影片檔案已存在，請改用另一個檔名。"));

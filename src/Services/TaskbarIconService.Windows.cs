@@ -1,18 +1,19 @@
 using System.Runtime.InteropServices;
-using System.Windows.Interop;
-using System.Windows.Threading;
+using Avalonia.Platform;
 
 namespace SnipFlow.Services;
 
 /// <summary>Refreshes the window icon after showing the workspace or recreating its taskbar button.</summary>
 internal sealed class TaskbarIconService
 {
-    static readonly DependencyProperty AttachedProperty = DependencyProperty.RegisterAttached(
-        "Attached", typeof(bool), typeof(TaskbarIconService), new PropertyMetadata(false));
+    static readonly HashSet<Window> AttachedWindows = new();
+    static bool shuttingDown;
     readonly Window window;
     readonly TaskbarIdentityService identity = new();
     readonly uint taskbarCreatedMessage;
-    HwndSource? source;
+    readonly Win32Properties.CustomWndProcHookCallback hook;
+    IntPtr handle;
+    bool hooked;
     bool queued;
     bool closed;
     bool shellNotified;
@@ -21,40 +22,44 @@ internal sealed class TaskbarIconService
     TaskbarIconService(Window window)
     {
         this.window = window;
+        hook = WindowMessage;
         taskbarCreatedMessage = RegisterWindowMessage("TaskbarButtonCreated");
-        window.SourceInitialized += SourceInitialized;
-        window.IsVisibleChanged += VisibleChanged;
+        window.Opened += SourceInitialized;
+        window.PropertyChanged += VisibleChanged;
         window.Closed += Closed;
-        if (new WindowInteropHelper(window).Handle != IntPtr.Zero) SourceInitialized(window, EventArgs.Empty);
+        if (window.TryGetPlatformHandle()?.Handle is { } existing && existing != IntPtr.Zero) SourceInitialized(window, EventArgs.Empty);
     }
 
     internal static void Attach(Window window)
     {
-        window.VerifyAccess();
-        if ((bool)window.GetValue(AttachedProperty)) return;
-        window.SetValue(AttachedProperty, true);
+        Dispatcher.UIThread.VerifyAccess();
+        if (!AttachedWindows.Add(window)) return;
+        if (AttachedWindows.Count == 1) Dispatcher.UIThread.ShutdownStarted += (_, _) => shuttingDown = true;
         _ = new TaskbarIconService(window);
     }
 
     void SourceInitialized(object? sender, EventArgs args)
     {
-        window.SourceInitialized -= SourceInitialized;
-        source = HwndSource.FromHwnd(new WindowInteropHelper(window).Handle);
-        source?.AddHook(WindowMessage);
-        if (source is { IsDisposed: false }) identityApplied = identity.TryApply(source.Handle);
+        window.Opened -= SourceInitialized;
+        if (hooked) return;
+        handle = window.TryGetPlatformHandle()?.Handle ?? IntPtr.Zero;
+        if (handle == IntPtr.Zero) return;
+        hooked = true;
+        Win32Properties.AddWndProcHookCallback(window, hook);
+        identityApplied = identity.TryApply(handle);
         QueueRefresh();
     }
 
-    void VisibleChanged(object sender, DependencyPropertyChangedEventArgs args)
+    void VisibleChanged(object? sender, AvaloniaPropertyChangedEventArgs args)
     {
-        if (window.IsVisible) QueueRefresh();
+        if (args.Property == Visual.IsVisibleProperty && window.IsVisible) QueueRefresh();
     }
 
-    IntPtr WindowMessage(IntPtr handle, int message, IntPtr parameter, IntPtr data, ref bool handled)
+    IntPtr WindowMessage(IntPtr hwnd, uint message, IntPtr parameter, IntPtr data, ref bool handled)
     {
         if (message == 0x0002 && identityApplied) // WM_DESTROY: clear only properties successfully owned by this service.
         {
-            TaskbarIdentityService.Clear(handle);
+            TaskbarIdentityService.Clear(hwnd);
             identityApplied = false;
         }
         if ((taskbarCreatedMessage != 0 && message == taskbarCreatedMessage) || message == 0x02E0)
@@ -64,23 +69,21 @@ internal sealed class TaskbarIconService
 
     void QueueRefresh()
     {
-        if (closed || queued || window.Dispatcher.HasShutdownStarted) return;
+        if (closed || queued || shuttingDown) return;
         queued = true;
-        window.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(Refresh));
+        Dispatcher.UIThread.Post(Refresh, DispatcherPriority.ContextIdle);
     }
 
     void Refresh()
     {
         queued = false;
-        if (closed || !window.IsVisible || source is null || source.IsDisposed) return;
-        if (!identityApplied) identityApplied = identity.TryApply(source.Handle);
+        if (closed || !window.IsVisible || handle == IntPtr.Zero) return;
+        if (!identityApplied) identityApplied = identity.TryApply(handle);
         try
         {
-            // Use a new decoded ICO frame so WPF updates both native icon handles.
-            var icon = BitmapFrame.Create(new Uri("pack://application:,,,/Assets/SnipFlow-v3.ico"),
-                BitmapCreateOptions.IgnoreImageCache, BitmapCacheOption.OnLoad);
-            icon.Freeze();
-            window.SetCurrentValue(Window.IconProperty, icon);
+            // Use a newly decoded ICO so Windows updates both native icon handles.
+            using var stream = AssetLoader.Open(new Uri("avares://SnipFlow/Assets/SnipFlow-v3.ico"));
+            window.Icon = new WindowIcon(stream);
             if (shellNotified || !identityApplied) return;
             shellNotified = true;
             foreach (var path in identity.NotificationPaths) NotifyIconItem(path);
@@ -100,11 +103,13 @@ internal sealed class TaskbarIconService
     void Closed(object? sender, EventArgs args)
     {
         closed = true;
-        window.SourceInitialized -= SourceInitialized;
-        window.IsVisibleChanged -= VisibleChanged;
+        window.Opened -= SourceInitialized;
+        window.PropertyChanged -= VisibleChanged;
         window.Closed -= Closed;
-        if (source is { IsDisposed: false }) source.RemoveHook(WindowMessage);
-        source = null;
+        if (hooked) Win32Properties.RemoveWndProcHookCallback(window, hook);
+        hooked = false;
+        handle = IntPtr.Zero;
+        AttachedWindows.Remove(window);
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "RegisterWindowMessageW")]

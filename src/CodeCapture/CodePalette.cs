@@ -1,5 +1,5 @@
-using ICSharpCode.AvalonEdit.Highlighting;
-using ICSharpCode.AvalonEdit.Rendering;
+using AvaloniaEdit.Highlighting;
+using AvaloniaEdit.Rendering;
 
 namespace SnipFlow.CodeCapture;
 
@@ -38,8 +38,8 @@ internal sealed class CodePalette
                 : name.Contains("type") ? (dark ? "#8DC8D1" : "#236A76")
                 : name.Contains("tag") || name.Contains("attribute") || name.Contains("property") ? (dark ? "#ACC8E4" : "#335F89")
                 : null;
-            var color = value != null ? (Color)ColorConverter.ConvertFromString(value)
-                : original.Foreground.GetColor(null) ?? ((SolidColorBrush)Foreground).Color;
+            var color = value != null ? Color.Parse(value)
+                : original.Foreground.GetColor(null!) ?? ((SolidColorBrush)Foreground).Color;
             result.Foreground = new SimpleHighlightingBrush(Readable(color));
         }
         result.Freeze(); mapped.Add(original, result); return result;
@@ -47,7 +47,7 @@ internal sealed class CodePalette
 
     Color Readable(Color color)
     {
-        color.A = 255;
+        color = Color.FromRgb(color.R, color.G, color.B);
         var background = ((SolidColorBrush)Background).Color;
         for (int step = 0; step < 20 && Contrast(color, background) < 4.5; step++)
         {
@@ -68,11 +68,7 @@ internal sealed class CodePalette
         return (Math.Max(first, second) + .05) / (Math.Min(first, second) + .05);
     }
 
-    static SolidColorBrush Brush(string color)
-    {
-        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color));
-        brush.Freeze(); return brush;
-    }
+    static SolidColorBrush Brush(string color) => new(Color.Parse(color));
 }
 
 internal sealed class CodeColorizer(IHighlightingDefinition definition, CodePalette palette)

@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Avalonia.Controls.ApplicationLifetimes;
 using Velopack;
 using Velopack.Locators;
 using Velopack.Sources;
@@ -13,13 +14,16 @@ public enum UpdateState { Idle, Checking, Available, Downloading, ReadyToRestart
 public sealed class UpdateService
 {
     const string DefaultRepositoryUrl = "https://github.com/YuLiangLin/SnipFlow";
-    const string DefaultChannel = "win";
+    // Velopack channel per operating system: Windows installers and Linux AppImages are separate feeds.
+    static readonly string DefaultChannel = PlatformInfo.IsWindows ? "win" : "linux";
     const string LatestReleaseApi = "https://api.github.com/repos/YuLiangLin/SnipFlow/releases/latest";
     static readonly HttpClient releaseClient = CreateReleaseClient();
     readonly SemaphoreSlim gate = new(1, 1);
     readonly UpdateManager? manager;
     readonly SemanticVersion currentVersion;
-    readonly bool canBootstrap = string.Equals(Path.GetFileName(Environment.ProcessPath), "SnipFlow.exe", StringComparison.OrdinalIgnoreCase);
+    // Only the raw Windows publish can convert itself into an installed copy; Linux has no bootstrap installer.
+    readonly bool canBootstrap = PlatformInfo.IsWindows
+        && string.Equals(Path.GetFileName(Environment.ProcessPath), "SnipFlow.exe", StringComparison.OrdinalIgnoreCase);
     UpdateInfo? available;
     LatestRelease? latestRelease;
     string? bootstrapInstallerPath;
@@ -36,6 +40,11 @@ public sealed class UpdateService
     public bool IsBusy { get; private set; }
     public int? DownloadProgress { get; private set; }
     public bool IsInstalled { get; }
+    /// <summary>
+    /// True on Linux when SnipFlow was not started from its AppImage: a distribution package or a build
+    /// folder is updated by its package manager or source, so SnipFlow never checks or downloads updates.
+    /// </summary>
+    public bool IsManagedExternally => PlatformInfo.IsLinux && !IsInstalled;
     public bool ReadyToRestart { get; private set; }
     public string RepositoryUrl { get; }
     public string CurrentVersion => currentVersion.ToString().Split('+')[0];
@@ -58,7 +67,7 @@ public sealed class UpdateService
             {
                 manager = new UpdateManager(new GithubSource(RepositoryUrl, null, false),
                     new UpdateOptions { ExplicitChannel = DefaultChannel });
-                // Proper Velopack portable builds have their own updater and support in-place updates.
+                // Proper Velopack portable builds and AppImages have their own updater and support in-place updates.
                 IsInstalled = manager.IsInstalled;
                 if (IsInstalled && manager.CurrentVersion is { } installedVersion) currentVersion = installedVersion;
                 if (IsInstalled && manager.UpdatePendingRestart is { } pending && pending.Version > currentVersion)
@@ -77,10 +86,13 @@ public sealed class UpdateService
                 SetStatus("尚未檢查更新");
             }
         }
+        if (IsManagedExternally) status = new("由套件管理員更新", Array.Empty<object?>());
     }
 
     public async Task CheckAsync(bool download)
     {
+        // Package-managed Linux installs never contact the update feed.
+        if (IsManagedExternally) return;
         if (!await gate.WaitAsync(0)) return;
         try
         {
@@ -228,7 +240,7 @@ public sealed class UpdateService
                 UpdateBootstrapper.Start(bootstrapInstallerPath ?? throw new InvalidOperationException("The update has not been downloaded."),
                     asset.Sha256, restartArgs);
             }
-            Application.Current?.Shutdown();
+            (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
         }
         catch (Exception ex) { SetError(ex, "更新尚未套用"); throw; }
     }
@@ -244,6 +256,7 @@ public sealed class UpdateService
     {
         // This official build always uses its embedded, trusted source. An absent,
         // malformed or edited adjacent JSON file cannot disable or redirect updates.
+        // The channel follows the operating system; the file names the Windows channel.
         try
         {
             using var stream = typeof(UpdateService).Assembly.GetManifestResourceStream("SnipFlow.update-source.json");
@@ -251,7 +264,7 @@ public sealed class UpdateService
             using var json = JsonDocument.Parse(stream);
             var root = json.RootElement;
             if (root.GetProperty("RepositoryUrl").GetString() != DefaultRepositoryUrl ||
-                root.GetProperty("Channel").GetString() != DefaultChannel)
+                root.GetProperty("Channel").GetString() is not ("win" or "linux"))
                 throw new InvalidDataException("The embedded update source does not match the official SnipFlow repository/channel.");
         }
         catch (Exception ex) { SettingsStore.Log(ex); }
@@ -286,7 +299,9 @@ public sealed class UpdateService
             !SemanticVersion.TryParse(tag.TrimStart('v', 'V'), out var version) || version.IsPrerelease)
             throw new InvalidDataException("GitHub returned an invalid stable SnipFlow release.");
         InstallerAsset? installer = null;
-        foreach (var asset in root.GetProperty("assets").EnumerateArray())
+        // The bootstrap installer is a Windows asset; Linux AppImages update through Velopack's feed only.
+        var assets = PlatformInfo.IsWindows ? root.GetProperty("assets").EnumerateArray().ToArray() : Array.Empty<JsonElement>();
+        foreach (var asset in assets)
         {
             if (asset.GetProperty("name").GetString() != "SnipFlow-win-Setup.exe") continue;
             var value = asset.GetProperty("browser_download_url").GetString();

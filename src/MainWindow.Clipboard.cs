@@ -5,9 +5,9 @@ namespace SnipFlow;
 
 public partial class MainWindow
 {
-    async void OpenClipboardClick(object sender, RoutedEventArgs e) => await OpenClipboardImageAsync();
+    async void OpenClipboardClick(object? sender, RoutedEventArgs e) => await OpenClipboardImageAsync();
 
-    async void PasteImagesClick(object sender, RoutedEventArgs e) => await PasteClipboardImagesAsync();
+    async void PasteImagesClick(object? sender, RoutedEventArgs e) => await PasteClipboardImagesAsync();
 
     public Task OpenClipboardImageAsync() => PasteClipboardImagesAsync(openAsNewDocument: true);
 
@@ -21,11 +21,12 @@ public partial class MainWindow
         try
         {
             RefreshDocumentState();
-            // Reading happens only after a click or Ctrl + V, on the UI's STA thread.
+            var clipboard = Clipboard ?? throw new InvalidOperationException(I18n.T("剪貼簿目前無法使用。"));
+            // Reading happens only after a click or Ctrl + V, on the UI thread.
             for (int attempt = 0; ; attempt++)
             {
                 historyLifetime.Token.ThrowIfCancellationRequested();
-                try { content = ClipboardImageService.Read(); break; }
+                try { content = await ClipboardImageService.ReadAsync(clipboard); break; }
                 catch (ExternalException) when (attempt < 4)
                 { await Task.Delay(100, historyLifetime.Token); }
             }

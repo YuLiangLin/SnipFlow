@@ -1,6 +1,5 @@
 using SnipFlow.Capture;
 using SnipFlow.Services;
-using DrawingRectangle = System.Drawing.Rectangle;
 
 namespace SnipFlow.Scroll;
 
@@ -13,7 +12,7 @@ public sealed partial class ScrollCaptureWindow
     private int? _rangeEnd;
     private bool _pickingBoundary;
     private BoundaryPickWindow? _activePicker;
-    private BitmapSource? _pendingAlignedRaw;
+    private Bitmap? _pendingAlignedRaw;
     private int _pendingAlignedPosition;
 
     private StackPanel CreateRangeControls()
@@ -23,8 +22,8 @@ public sealed partial class ScrollCaptureWindow
         var actions = new WrapPanel();
         _startButton = MakeButton(isCode ? "起點" : "首頁選起點");
         _endButton = MakeButton(isCode ? "終點" : "末頁選終點");
-        _startButton.ToolTip = I18n.T("從已收集的第一頁調整起點。");
-        _endButton.ToolTip = I18n.T("從已收集的最後一頁調整終點。");
+        ToolTip.SetTip(_startButton, I18n.T("從已收集的第一頁調整起點。"));
+        ToolTip.SetTip(_endButton, I18n.T("從已收集的最後一頁調整終點。"));
         _startButton.Click += async (_, _) => await PickBoundaryAsync(isStart: true);
         _endButton.Click += async (_, _) => await PickBoundaryAsync(isStart: false);
         actions.Children.Add(_startButton);
@@ -41,7 +40,7 @@ public sealed partial class ScrollCaptureWindow
 
     private async Task PickBoundaryAsync(bool isStart)
     {
-        if (_finishing || _closed || _pickingBoundary || _manualPanel.Visibility == Visibility.Visible) return;
+        if (_finishing || _closed || _pickingBoundary || _manualPanel.IsVisible) return;
         if (!isStart && NeedsStart) return;
         bool wasPaused = _userPaused;
         bool startWasRequired = NeedsStart;
@@ -53,13 +52,16 @@ public sealed partial class ScrollCaptureWindow
         UpdateButtons();
         try
         {
+            // Let the button's click finish first: Avalonia keeps the pointer captured by the button until
+            // its release is handled, and a picker shown inside the click would send its pointer input there.
+            await Task.Yield();
             while (_busy) await Task.Delay(30, _lifetime.Token);
             if (_closed) return;
             _busy = ownsBusy = true;
             if (_frames.Count == 0)
             {
                 if (!CanInspectTarget()) return;
-                var first = ScreenshotService.CaptureRectangle(_targetBounds);
+                var first = await CaptureTargetAsync();
                 if (!CanInspectTarget()) return;
                 AddFirstFrame(first);
             }
@@ -73,12 +75,14 @@ public sealed partial class ScrollCaptureWindow
             var initialPixel = oldBoundary is not null
                 ? Math.Clamp(oldBoundary.Value - position - _topTrim, 0, isStart ? BodyHeight - 1 : BodyHeight)
                 : isStart ? 0 : BodyHeight;
-            var visibleBounds = new DrawingRectangle(_targetBounds.X, _targetBounds.Y + _topTrim, _targetBounds.Width, BodyHeight);
-            _activePicker = new BoundaryPickWindow(visibleBounds, Crop(raw), isStart,
-                initialPixel, fromCollectedFrame: true) { Owner = this };
-            bool confirmed = _activePicker.ShowDialog() == true;
+            _activePicker = new BoundaryPickWindow(BodyDesktopBounds(), Crop(raw).ToBitmap(), isStart,
+                initialPixel, fromCollectedFrame: true);
+            // X11 window managers may center or attach modal (transient) dialogs on their owner, so the
+            // picker that must cover the region exactly is shown without one there.
+            bool confirmed = (PlatformInfo.IsWindows ? _activePicker.ShowModal(this) : _activePicker.ShowModal()) == true;
             var pixel = _activePicker.SelectedPixel;
             _activePicker = null;
+            DelayObservation();
             if (_closed || !confirmed || pixel is null) return;
             var boundary = checked(position + _topTrim + pixel.Value);
             if (isStart)
@@ -90,7 +94,7 @@ public sealed partial class ScrollCaptureWindow
                 }
                 _rangeStart = boundary;
                 _userPaused = startWasRequired ? false : wasPaused;
-                if (!_userPaused && _rangeEnd is null) _timer.Start();
+                if (!_userPaused && _rangeEnd is null) StartTimer();
                 SetStatus("起點已調整；已收集內容會保留。");
             }
             else
@@ -126,17 +130,29 @@ public sealed partial class ScrollCaptureWindow
                 {
                     // A memory-limit pause discovered while flushing the tail must stay paused.
                     _userPaused = wasPaused || _limitReached;
-                    if (timerWasRunning && !NeedsStart && _rangeEnd is null && !_userPaused) _timer.Start();
+                    if (timerWasRunning && !NeedsStart && _rangeEnd is null && !_userPaused) StartTimer();
                 }
                 RefreshPreview(); UpdateDimensions(); UpdateButtons();
             }
         }
     }
 
+    /// <summary>
+    /// The desktop rectangle that shows the trimmed body rows. Trims are frame pixels, which are
+    /// scaled from desktop pixels on scaled Wayland desktops.
+    /// </summary>
+    private PixelRect BodyDesktopBounds()
+    {
+        var scale = FrameHeight / (double)_targetBounds.Height;
+        var top = _targetBounds.Y + (int)Math.Round(_topTrim / scale);
+        var bottom = _targetBounds.Y + (int)Math.Round((FrameHeight - _bottomTrim) / scale);
+        return new PixelRect(_targetBounds.X, top, _targetBounds.Width, Math.Max(1, bottom - top));
+    }
+
     private bool CanInspectTarget()
     {
         if (_closed || _finishing) return false;
-        if (_target.CanObserve(_handle, _toolbarExcluded, out var reason, allowToolbarForeground: true)) return true;
+        if (CanObserveTarget(out var reason, allowToolbarForeground: true)) return true;
         SetStatus(reason, warning: true);
         return false;
     }
@@ -145,7 +161,7 @@ public sealed partial class ScrollCaptureWindow
     {
         if (_frames.Count == 0) return true;
         var first = checked(_positions[0] + top);
-        var end = checked(_positions[^1] + _targetBounds.Height - bottom);
+        var end = checked(_positions[^1] + FrameHeight - bottom);
         if ((_rangeStart is null || (_rangeStart >= first && _rangeStart < end))
             && (_rangeEnd is null || (_rangeEnd > (_rangeStart ?? first) && _rangeEnd <= end))) return true;
         SetStatus("裁切會排除已選起點或終點，請減少裁切或重新選取範圍。", warning: true);
@@ -156,14 +172,14 @@ public sealed partial class ScrollCaptureWindow
     {
         _rangeEnd = null;
         if (_rangeStart is not null && _frames.Count > 0
-            && (_rangeStart < _positions[0] + _topTrim || _rangeStart >= _positions[^1] + _targetBounds.Height - _bottomTrim))
+            && (_rangeStart < _positions[0] + _topTrim || _rangeStart >= _positions[^1] + FrameHeight - _bottomTrim))
             _rangeStart = null;
     }
 
     private void UpdateRangeControls()
     {
         if (_startButton is null) return;
-        bool idle = !_finishing && !_closed && !_pickingBoundary && _manualPanel.Visibility != Visibility.Visible;
+        bool idle = !_finishing && !_closed && !_pickingBoundary && !_manualPanel.IsVisible;
         _startButton.IsEnabled = idle;
         _endButton.IsEnabled = idle && _frames.Count > 0 && !NeedsStart;
         _rangeSummary.Text = I18n.T(_rangeEnd is not null ? "只保留已收集內容到選定終點。"

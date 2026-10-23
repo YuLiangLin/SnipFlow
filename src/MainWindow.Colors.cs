@@ -1,4 +1,4 @@
-using System.Windows.Controls.Primitives;
+using Avalonia.Controls.Primitives;
 using SnipFlow.Editor;
 using SnipFlow.Services;
 
@@ -8,7 +8,7 @@ public partial class MainWindow
 {
     Popup? colorPalette;
 
-    void MoreColorsClick(object sender, RoutedEventArgs e)
+    void MoreColorsClick(object? sender, RoutedEventArgs e)
     {
         if (busy || capturePending) return;
         if (colorPalette?.IsOpen == true) { CloseColorPalette(); return; }
@@ -18,13 +18,20 @@ public partial class MainWindow
         var popup = new Popup
         {
             PlacementTarget = MoreColorsButton, Placement = PlacementMode.Bottom,
-            VerticalOffset = 8, StaysOpen = false, AllowsTransparency = true, Child = view
+            VerticalOffset = 8, IsLightDismissEnabled = true, Child = view
         };
         view.ColorChosen += color => { ApplyAnnotationColor(color); popup.IsOpen = false; Editor.Focus(); };
         view.Cancelled += () => { popup.IsOpen = false; Editor.Focus(); };
         popup.Opened += (_, _) => view.FocusInput();
-        popup.Closed += (_, _) => { popup.Child = null; if (colorPalette == popup) colorPalette = null; };
+        popup.Closed += (_, _) =>
+        {
+            popup.Child = null;
+            if (colorPalette == popup) colorPalette = null;
+            // The popup lives in the window only while it is open, so it inherits the theme resources.
+            Dispatcher.UIThread.Post(() => RootGrid.Children.Remove(popup));
+        };
         colorPalette = popup;
+        RootGrid.Children.Add(popup);
         popup.IsOpen = true;
     }
 

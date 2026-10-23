@@ -1,0 +1,17 @@
+Package: snipflow
+Version: @VERSION@
+Section: graphics
+Priority: optional
+Architecture: amd64
+Installed-Size: @INSTALLED_SIZE@
+Maintainer: SnipFlow <https://github.com/YuLiangLin/SnipFlow>
+Homepage: https://github.com/YuLiangLin/SnipFlow
+Depends: libc6 (>= 2.35), libgcc-s1, libstdc++6, zlib1g, libicu74 | libicu72 | libicu70, libssl3 | libssl3t64, libx11-6, libxext6, libxrandr2, libxcomposite1, libxi6, libxcursor1, libice6, libsm6, libfontconfig1, libglib2.0-0 | libglib2.0-0t64, xdg-utils
+Recommends: ffmpeg, libvlc5, vlc-plugin-base, tesseract-ocr, tesseract-ocr-eng, tesseract-ocr-chi-tra, tesseract-ocr-chi-sim, pulseaudio-utils, xdg-desktop-portal, xdg-desktop-portal-gnome | xdg-desktop-portal-kde | xdg-desktop-portal-wlr | xdg-desktop-portal-gtk, pipewire, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, fonts-noto-cjk, fonts-dejavu-core
+Suggests: gnome-shell-extension-appindicator
+Description: Screenshots, annotations, scrolling capture and screen recording
+ SnipFlow captures regions, windows and screens, annotates them with arrows,
+ shapes, text and mosaic, stitches scrolling pages, recognizes text locally,
+ records the screen to MP4 and edits recordings with text and image overlays.
+ Works in GNOME, KDE and other desktops on X11 and Wayland (through
+ xdg-desktop-portal).

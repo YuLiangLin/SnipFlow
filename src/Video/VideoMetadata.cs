@@ -1,10 +1,9 @@
 using SnipFlow.Services;
-using Windows.Media.Editing;
-using Windows.Storage;
 
 namespace SnipFlow.Video;
 
-internal static class VideoMetadata
+/// <remarks>Windows reads MediaClip encoding properties; Linux reads the streams with ffprobe.</remarks>
+internal static partial class VideoMetadata
 {
     internal static async Task<VideoInfo> LoadAsync(string path, CancellationToken cancellationToken = default)
     {
@@ -17,11 +16,11 @@ internal static class VideoMetadata
         if (fileInfo.Length < 128 || fileInfo.Length > 32L * 1024 * 1024 * 1024)
             throw new InvalidOperationException(I18n.T("影片檔案無效或超過 32 GB。"));
         full = VideoFileGuard.ResolveFile(full);
-        var file = await VideoNativeOperation.AwaitAsync(StorageFile.GetFileFromPathAsync(full), cancellationToken);
-        var clip = await VideoNativeOperation.AwaitAsync(MediaClip.CreateFromFileAsync(file), cancellationToken);
-        var properties = clip.GetVideoEncodingProperties();
-        var source = new VideoInfo(full, checked((int)properties.Width), checked((int)properties.Height), clip.OriginalDuration);
+        var source = await LoadNativeAsync(full, cancellationToken);
         new VideoEditDocument(source).Validate();
         return source;
     }
+
+    /// <summary>Reads the encoded size and duration of a resolved local MP4.</summary>
+    private static partial Task<VideoInfo> LoadNativeAsync(string full, CancellationToken cancellationToken);
 }

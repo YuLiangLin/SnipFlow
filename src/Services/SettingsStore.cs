@@ -11,6 +11,7 @@ public sealed class UserSettings
     public bool AutoSaveCaptures { get; set; } = true;
     public string CaptureSaveDirectory { get; set; } = SettingsStore.DefaultCaptureSaveDirectory;
     public bool KeepHistory { get; set; } = true;
+    // Login start on every platform; the JSON name is kept so existing Windows settings still load.
     public bool StartWithWindows { get; set; }
     public string Hotkey { get; set; } = HotkeyGesture.DefaultShortcut;
     public int HistoryLimit { get; set; } = 80;
@@ -20,7 +21,10 @@ public sealed class UserSettings
 public static class SettingsStore
 {
     // Outside Velopack's replaced install directory. Captures never enter the repository.
-    public static string DataRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SnipFlowData");
+    // Windows: %LocalAppData%\SnipFlowData. Linux: $XDG_DATA_HOME/SnipFlow (~/.local/share/SnipFlow).
+    public static string DataRoot => PlatformInfo.IsWindows
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SnipFlowData")
+        : Path.Combine(LinuxPaths.DataHome, "SnipFlow");
     public static string HistoryDirectory => Path.Combine(DataRoot, "History");
     public static string DefaultCaptureSaveDirectory
     {
@@ -57,12 +61,15 @@ public static class SettingsStore
     static void RefreshStartupPreference(UserSettings settings)
     {
         try { settings.StartWithWindows = StartupService.ReadRegistration().IsEnabled; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
+            or InvalidOperationException or PlatformNotSupportedException) { }
     }
     public static string NormalizeCaptureSaveDirectory(string directory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         var expanded = Environment.ExpandEnvironmentVariables(directory.Trim());
+        if (!PlatformInfo.IsWindows && (expanded == "~" || expanded.StartsWith("~/", StringComparison.Ordinal)))
+            expanded = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), expanded.Length > 2 ? expanded[2..] : "");
         if (!Path.IsPathFullyQualified(expanded)) throw new ArgumentException("The capture folder must be an absolute path.", nameof(directory));
         return Path.TrimEndingDirectorySeparator(Path.GetFullPath(expanded));
     }

@@ -1,4 +1,3 @@
-using System.Windows.Controls.Primitives;
 using SnipFlow.Editor;
 using SnipFlow.Services;
 
@@ -6,13 +5,13 @@ namespace SnipFlow;
 
 public partial class MainWindow
 {
-    void ImageTransformMenuClick(object sender, RoutedEventArgs e)
+    void ImageTransformMenuClick(object? sender, RoutedEventArgs e)
     {
         if (!CanChangeHistory || !Editor.HasImage || sender is not Button button) return;
         Editor.CommitTextEdit();
         int generation = documentGeneration;
         bool selectedImages = Editor.SelectedImageCount > 0;
-        var menu = new ContextMenu { PlacementTarget = button, Placement = PlacementMode.Bottom };
+        var menu = new ContextMenu { Placement = PlacementMode.Bottom };
         menu.Items.Add(new MenuItem { Header = I18n.T(selectedImages ? "選取的圖片" : "整張圖面"), IsEnabled = false });
         foreach (var option in ImageTransformOptions())
             menu.Items.Add(ImageTransformEntry(option.Label, option.Command, !selectedImages, generation));
@@ -23,7 +22,7 @@ public partial class MainWindow
             foreach (var option in ImageTransformOptions())
                 menu.Items.Add(ImageTransformEntry(option.Label, option.Command, true, generation));
         }
-        menu.IsOpen = true;
+        menu.Open(button);
     }
 
     static IEnumerable<(string Label, ImageTransformCommand Command)> ImageTransformOptions()

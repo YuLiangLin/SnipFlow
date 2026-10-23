@@ -1,6 +1,5 @@
-using System.Windows.Automation;
-using System.Windows.Controls.Primitives;
-using System.Windows.Input;
+using Avalonia.Automation;
+using Avalonia.Input;
 
 namespace SnipFlow.Video;
 
@@ -8,12 +7,13 @@ namespace SnipFlow.Video;
 internal sealed class VideoEditorRangeBar : UserControl
 {
     readonly Canvas surface = new() { Background = Brushes.Transparent };
-    readonly Border track = new() { Height = 4, CornerRadius = new CornerRadius(2) };
-    readonly Border range = new() { Height = 4, CornerRadius = new CornerRadius(2) };
+    readonly Border track = new() { Height = 4, CornerRadius = new CornerRadius(2), IsHitTestVisible = false };
+    readonly Border range = new() { Height = 4, CornerRadius = new CornerRadius(2), IsHitTestVisible = false };
     readonly Border playhead = new() { Width = 1, Height = 28, IsHitTestVisible = false };
-    readonly Thumb startHandle = new() { Width = 10, Height = 24, Focusable = true };
-    readonly Thumb endHandle = new() { Width = 10, Height = 24, Focusable = true };
-    double duration = 1, start, end = 1, position;
+    readonly Border startHandle = new() { Width = 10, Height = 24, Focusable = true };
+    readonly Border endHandle = new() { Width = 10, Height = 24, Focusable = true };
+    double duration = 1, start, end = 1, position, grabOffset;
+    Border? dragging;
 
     public event Action<double, double>? RangeChanged;
     public event Action<double>? SeekRequested;
@@ -21,24 +21,37 @@ internal sealed class VideoEditorRangeBar : UserControl
     public VideoEditorRangeBar()
     {
         Height = 32; MinWidth = 96; Content = surface;
-        track.Background = BrushResource("Line", "#383838");
-        range.Background = BrushResource("Muted", "#A3A3A3");
-        playhead.Background = BrushResource("Ink", "#ECECEC");
+        track.Background = ThemeService.Brush("Line");
+        range.Background = ThemeService.Brush("Muted");
+        playhead.Background = ThemeService.Brush("Ink");
         foreach (var handle in new[] { startHandle, endHandle })
         {
-            var border = new FrameworkElementFactory(typeof(Border));
-            border.SetValue(Border.BackgroundProperty, BrushResource("Accent", "#E8E8E8"));
-            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
-            handle.Template = new ControlTemplate(typeof(Thumb)) { VisualTree = border };
-            handle.Cursor = Cursors.SizeWE;
-            handle.DragDelta += (_, args) =>
+            handle.Background = ThemeService.Brush("Accent");
+            handle.CornerRadius = new CornerRadius(3);
+            handle.Cursor = new Cursor(StandardCursorType.SizeWestEast);
+            // The handle follows the pointer; the grab offset keeps it from jumping under the cursor.
+            handle.PointerPressed += (_, args) =>
             {
-                var seconds = args.HorizontalChange / UsableWidth * duration;
-                MoveHandle(handle == startHandle, (handle == startHandle ? start : end) + seconds);
+                if (!IsEnabled || !args.GetCurrentPoint(handle).Properties.IsLeftButtonPressed) return;
+                dragging = handle; handle.Focus();
+                grabOffset = args.GetPosition(surface).X - (Canvas.GetLeft(handle) + handle.Width / 2);
+                args.Pointer.Capture(handle); args.Handled = true;
             };
-            handle.PreviewKeyDown += (_, args) =>
+            handle.PointerMoved += (_, args) =>
             {
-                var step = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? 1d : .1d;
+                if (dragging != handle) return;
+                var seconds = (args.GetPosition(surface).X - grabOffset - 8) / UsableWidth * duration;
+                MoveHandle(handle == startHandle, seconds); args.Handled = true;
+            };
+            handle.PointerReleased += (_, args) =>
+            {
+                if (dragging != handle) return;
+                dragging = null; args.Pointer.Capture(null); args.Handled = true;
+            };
+            handle.PointerCaptureLost += (_, _) => { if (dragging == handle) dragging = null; };
+            handle.AddHandler(KeyDownEvent, (_, args) =>
+            {
+                var step = args.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 1d : .1d;
                 var value = handle == startHandle ? start : end;
                 if (args.Key == Key.Left) value -= step;
                 else if (args.Key == Key.Right) value += step;
@@ -46,14 +59,17 @@ internal sealed class VideoEditorRangeBar : UserControl
                 else if (args.Key == Key.End) value = duration;
                 else return;
                 MoveHandle(handle == startHandle, value); args.Handled = true;
-            };
+            }, RoutingStrategies.Tunnel);
+            handle.GotFocus += (_, _) => handle.BorderThickness = new Thickness(1);
+            handle.LostFocus += (_, _) => handle.BorderThickness = new Thickness(0);
+            handle.BorderBrush = ThemeService.Brush("Panel");
         }
         surface.Children.Add(track); surface.Children.Add(range); surface.Children.Add(playhead);
         surface.Children.Add(startHandle); surface.Children.Add(endHandle);
         surface.SizeChanged += (_, _) => ArrangeRange();
-        surface.MouseLeftButtonDown += (_, args) =>
+        surface.PointerPressed += (_, args) =>
         {
-            if (!IsEnabled || args.OriginalSource is Thumb) return;
+            if (!IsEnabled || args.Handled || !args.GetCurrentPoint(surface).Properties.IsLeftButtonPressed) return;
             var seconds = (args.GetPosition(surface).X - 8) / UsableWidth * duration;
             SeekRequested?.Invoke(Math.Clamp(seconds, start, end));
             args.Handled = true;
@@ -62,7 +78,7 @@ internal sealed class VideoEditorRangeBar : UserControl
 
     public void SetLabels(string startLabel, string endLabel)
     {
-        startHandle.ToolTip = startLabel; endHandle.ToolTip = endLabel;
+        ToolTip.SetTip(startHandle, startLabel); ToolTip.SetTip(endHandle, endLabel);
         AutomationProperties.SetName(startHandle, startLabel);
         AutomationProperties.SetName(endHandle, endLabel);
     }
@@ -76,7 +92,7 @@ internal sealed class VideoEditorRangeBar : UserControl
         ArrangeRange();
     }
 
-    double UsableWidth => Math.Max(1, surface.ActualWidth - 16);
+    double UsableWidth => Math.Max(1, surface.Bounds.Width - 16);
 
     void MoveHandle(bool isStart, double value)
     {
@@ -97,8 +113,4 @@ internal sealed class VideoEditorRangeBar : UserControl
         Canvas.SetLeft(endHandle, right - 5); Canvas.SetTop(endHandle, 4);
         Canvas.SetLeft(playhead, 8 + position / duration * UsableWidth); Canvas.SetTop(playhead, 2);
     }
-
-    static Brush BrushResource(string key, string fallback)
-        => Application.Current?.TryFindResource(key) as Brush
-            ?? new SolidColorBrush((Color)ColorConverter.ConvertFromString(fallback));
 }

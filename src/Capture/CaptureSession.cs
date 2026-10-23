@@ -1,31 +1,37 @@
-using System.Windows.Input;
-using System.Windows.Threading;
-using SnipFlow.Services;
-using DrawingPoint = System.Drawing.Point;
-using DrawingRectangle = System.Drawing.Rectangle;
+using Avalonia.Input;
 
 namespace SnipFlow.Capture;
 
 internal sealed class CaptureSession : IDisposable
 {
+    // Activation is asynchronous on X11 and may be asynchronous through Avalonia on Windows.
+    // Windows keeps the original rule (cancel when no overlay can take the foreground) after this
+    // grace period; X11 window managers that never report focus keep the session open instead.
+    private static readonly TimeSpan ActivationGrace = TimeSpan.FromSeconds(1);
+    // Focus can move between two of the overlays (one per monitor) through a brief unfocused state.
+    private static readonly TimeSpan DeactivationGrace = PlatformInfo.IsWindows ? TimeSpan.Zero : TimeSpan.FromMilliseconds(400);
+
     private readonly IReadOnlyList<CaptureMonitor> _monitors;
-    private readonly DrawingRectangle _desktopBounds;
-    private readonly BitmapSource _desktopImage;
+    private readonly PixelRect _desktopBounds;
+    private readonly Bitmap _desktopImage;
     private readonly IReadOnlyList<CaptureWindow> _desktopWindows;
     private readonly WindowCaptureTarget? _restrictedTarget;
     private readonly List<SelectionOverlayWindow> _windows = new();
-    private readonly TaskCompletionSource<DrawingRectangle?> _completion =
+    private readonly TaskCompletionSource<PixelRect?> _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly DispatcherTimer _cursorTimer;
     private SelectionOverlayWindow? _captureWindow;
-    private DrawingPoint _origin;
+    private IPointer? _capturePointer;
+    private PixelPoint _origin;
+    private DateTime _shownAt;
+    private DateTime? _inactiveSince;
     private bool _closed;
     private bool _wasActive;
     private bool _clickSelecting;
 
-    internal DrawingPoint Cursor { get; private set; }
+    internal PixelPoint Cursor { get; private set; }
     internal bool IsSelecting { get; private set; }
-    internal DrawingRectangle? Selection { get; private set; }
+    internal PixelRect? Selection { get; private set; }
     internal CaptureMode Mode { get; private set; }
     internal bool AllowModeSwitch { get; }
     internal bool SelectWindowOnly { get; }
@@ -34,19 +40,30 @@ internal sealed class CaptureSession : IDisposable
     internal CaptureWindow? SelectedWindow { get; private set; }
     internal string? StatusHint { get; private set; }
 
-    internal CaptureSession(IReadOnlyList<CaptureMonitor> monitors, DrawingRectangle desktopBounds,
-        BitmapSource desktopImage, IReadOnlyList<CaptureWindow> desktopWindows, CaptureMode mode,
-        bool allowModeSwitch, bool selectWindowOnly = false, WindowCaptureTarget? restrictedTarget = null)
+    /// <summary>Wayland: the user chose window mode, which only the desktop's own picker can serve.</summary>
+    internal bool UseSystemWindowPicker { get; private set; }
+
+    /// <summary>Image pixels per desktop pixel (1 except for scaled XWayland desktops).</summary>
+    internal Vector ImageScale { get; }
+    internal PixelRect DesktopBounds => _desktopBounds;
+
+    internal CaptureSession(IReadOnlyList<CaptureMonitor> monitors, PixelRect desktopBounds,
+        Bitmap desktopImage, IReadOnlyList<CaptureWindow> desktopWindows, CaptureMode mode,
+        bool allowModeSwitch, bool selectWindowOnly = false, WindowCaptureTarget? restrictedTarget = null,
+        string? initialHint = null)
     {
         _monitors = monitors;
         _desktopBounds = desktopBounds;
         _desktopImage = desktopImage;
         _desktopWindows = desktopWindows;
         _restrictedTarget = restrictedTarget;
+        ImageScale = new Vector(desktopImage.PixelSize.Width / (double)desktopBounds.Width,
+            desktopImage.PixelSize.Height / (double)desktopBounds.Height);
         Selection = restrictedTarget?.ClientBounds;
         Mode = mode;
         AllowModeSwitch = allowModeSwitch;
         SelectWindowOnly = selectWindowOnly;
+        StatusHint = initialHint;
         Cursor = CaptureNative.CursorPosition();
         _cursorTimer = new DispatcherTimer(DispatcherPriority.Input)
         {
@@ -55,31 +72,22 @@ internal sealed class CaptureSession : IDisposable
         _cursorTimer.Tick += OnCursorTick;
     }
 
-    internal Task<DrawingRectangle?> SelectAsync()
+    internal Task<PixelRect?> SelectAsync()
     {
         try
         {
             foreach (var monitor in _monitors)
-            {
-                var pixels = new Int32Rect(monitor.Bounds.X - _desktopBounds.X,
-                    monitor.Bounds.Y - _desktopBounds.Y, monitor.Bounds.Width, monitor.Bounds.Height);
-                var image = new CroppedBitmap(_desktopImage, pixels);
-                image.Freeze();
-                _windows.Add(new SelectionOverlayWindow(this, monitor, image));
-            }
+                _windows.Add(new SelectionOverlayWindow(this, monitor, _desktopImage));
 
             foreach (var window in _windows)
                 window.Show();
 
-            var activeWindow = _windows.FirstOrDefault(window => window.MonitorBounds.Contains(Cursor))
+            var activeWindow = _windows.FirstOrDefault(window => CaptureGeometry.Contains(window.MonitorBounds, Cursor))
                 ?? _windows.First();
-            _wasActive = activeWindow.Activate() || activeWindow.IsActive;
+            activeWindow.Activate();
             activeWindow.Focus();
-            if (!_wasActive && !_windows.Any(window => window.IsActive))
-            {
-                Cancel();
-                return _completion.Task;
-            }
+            _wasActive = _windows.Any(window => window.IsActive);
+            _shownAt = DateTime.UtcNow;
             RefreshSelection();
             _cursorTimer.Start();
         }
@@ -92,14 +100,16 @@ internal sealed class CaptureSession : IDisposable
         return _completion.Task;
     }
 
-    internal void BeginSelection(SelectionOverlayWindow window)
+    /// <param name="position">The event's physical position where the platform reports it exactly
+    /// (Linux); null polls the cursor like the original Windows implementation.</param>
+    internal void BeginSelection(SelectionOverlayWindow window, IPointer pointer, PixelPoint? position)
     {
         if (_closed || IsSelecting || _clickSelecting)
             return;
 
         try
         {
-            Cursor = CaptureNative.CursorPosition();
+            Cursor = position ?? CaptureNative.CursorPosition();
             if (Mode != CaptureMode.Region)
             {
                 RefreshSelection();
@@ -107,11 +117,11 @@ internal sealed class CaptureSession : IDisposable
                 _clickSelecting = true;
                 window.Activate();
                 window.Focus();
-                if (!window.CaptureMouse())
+                if (!CapturePointer(window, pointer))
                     Cancel();
                 return;
             }
-            if (_restrictedTarget is not null && !_restrictedTarget.ClientBounds.Contains(Cursor))
+            if (_restrictedTarget is not null && !CaptureGeometry.Contains(_restrictedTarget.ClientBounds, Cursor))
             {
                 StatusHint = I18n.T("請在選定視窗的內容區內框選。");
                 RefreshSelection();
@@ -123,7 +133,7 @@ internal sealed class CaptureSession : IDisposable
             IsSelecting = true;
             window.Activate();
             window.Focus();
-            if (!window.CaptureMouse())
+            if (!CapturePointer(window, pointer))
             {
                 Cancel();
                 return;
@@ -136,27 +146,25 @@ internal sealed class CaptureSession : IDisposable
         }
     }
 
-    internal void EndSelection()
+    internal void EndSelection(PixelPoint? position)
     {
         if (_closed || (!IsSelecting && !_clickSelecting))
             return;
 
         try
         {
-            Cursor = CaptureNative.CursorPosition();
+            Cursor = position ?? CaptureNative.CursorPosition();
             RefreshSelection();
             if (_clickSelecting)
             {
                 _clickSelecting = false;
-                if (_captureWindow?.IsMouseCaptured == true)
-                    _captureWindow.ReleaseMouseCapture();
-                _captureWindow = null;
+                ReleasePointer();
                 ConfirmChoice();
                 return;
             }
             if (_restrictedTarget is not null && Selection is { } region)
             {
-                var overlays = _windows.Select(window => window.Handle).ToArray();
+                var overlays = _windows.Select(window => window.Handle).Where(handle => handle != 0).ToArray();
                 var reason = "";
                 if (region.Width < 32 || region.Height < 48)
                     reason = "請選取至少 32 × 48 像素的捲動內容範圍。";
@@ -167,9 +175,7 @@ internal sealed class CaptureSession : IDisposable
                     return;
                 }
                 IsSelecting = false;
-                if (_captureWindow?.IsMouseCaptured == true)
-                    _captureWindow.ReleaseMouseCapture();
-                _captureWindow = null;
+                ReleasePointer();
                 StatusHint = I18n.T(reason);
                 RefreshSelection();
                 return;
@@ -192,9 +198,7 @@ internal sealed class CaptureSession : IDisposable
         {
             IsSelecting = false;
             _clickSelecting = false;
-            if (_captureWindow?.IsMouseCaptured == true)
-                _captureWindow.ReleaseMouseCapture();
-            _captureWindow = null;
+            ReleasePointer();
             Mode = mode;
             Selection = null;
             HoveredWindow = null;
@@ -211,10 +215,20 @@ internal sealed class CaptureSession : IDisposable
 
     internal void ConfirmChoice()
     {
-        if (_closed || _clickSelecting || Mode == CaptureMode.Region || Selection is not { } bounds)
+        if (_closed || _clickSelecting || Mode == CaptureMode.Region)
             return;
         try
         {
+            if (Mode == CaptureMode.Window && PlatformInfo.IsWayland && !SelectWindowOnly)
+            {
+                // Other applications' windows are invisible to XWayland clients; the portal's
+                // interactive screenshot lets the desktop itself pick a window.
+                UseSystemWindowPicker = true;
+                Complete(_desktopBounds);
+                return;
+            }
+            if (Selection is not { } bounds)
+                return;
             if (Mode == CaptureMode.Window)
             {
                 if (!SelectWindowOnly && !WindowScreenshotService.IsSupported)
@@ -253,6 +267,36 @@ internal sealed class CaptureSession : IDisposable
             Cancel();
     }
 
+    /// <summary>Pointer movement over an overlay; the timer also polls when no events arrive.</summary>
+    internal void PointerMoved(PixelPoint? position)
+    {
+        if (_closed)
+            return;
+        if (position is { } current && current != Cursor)
+        {
+            Cursor = current;
+            RefreshSelection();
+            return;
+        }
+        OnCursorTick(null, EventArgs.Empty);
+    }
+
+    private bool CapturePointer(SelectionOverlayWindow window, IPointer pointer)
+    {
+        _capturePointer = pointer;
+        pointer.Capture(window.Surface);
+        return pointer.Captured == window.Surface;
+    }
+
+    private void ReleasePointer()
+    {
+        var pointer = _capturePointer;
+        _capturePointer = null;
+        _captureWindow = null;
+        if (pointer?.Captured is not null)
+            pointer.Capture(null);
+    }
+
     private void OnCursorTick(object? sender, EventArgs args)
     {
         if (_closed)
@@ -261,8 +305,21 @@ internal sealed class CaptureSession : IDisposable
         try
         {
             if (_windows.Any(window => window.IsActive))
+            {
                 _wasActive = true;
+                _inactiveSince = null;
+            }
             else if (_wasActive)
+            {
+                var now = DateTime.UtcNow;
+                _inactiveSince ??= now;
+                if (now - _inactiveSince.Value >= DeactivationGrace)
+                {
+                    Cancel();
+                    return;
+                }
+            }
+            else if (PlatformInfo.IsWindows && DateTime.UtcNow - _shownAt > ActivationGrace)
             {
                 Cancel();
                 return;
@@ -291,14 +348,14 @@ internal sealed class CaptureSession : IDisposable
         if (Mode == CaptureMode.Region && IsSelecting)
         {
             var end = Clamp(Cursor);
-            var selection = DrawingRectangle.FromLTRB(Math.Min(_origin.X, end.X),
+            var selection = CaptureGeometry.FromLTRB(Math.Min(_origin.X, end.X),
                 Math.Min(_origin.Y, end.Y), Math.Max(_origin.X, end.X), Math.Max(_origin.Y, end.Y));
             Selection = selection.Width > 0 && selection.Height > 0 ? selection : null;
         }
         else if (Mode == CaptureMode.Window)
         {
             var previous = HoveredWindow;
-            var topWindow = _desktopWindows.FirstOrDefault(window => window.Bounds.Contains(Cursor));
+            var topWindow = _desktopWindows.FirstOrDefault(window => CaptureGeometry.Contains(window.Bounds, Cursor));
             HoveredWindow = topWindow?.CanSelect == true ? topWindow : null;
             Selection = HoveredWindow?.Bounds;
             if (previous?.Handle != HoveredWindow?.Handle)
@@ -306,7 +363,7 @@ internal sealed class CaptureSession : IDisposable
         }
         else if (Mode == CaptureMode.Monitor)
         {
-            Selection = _monitors.FirstOrDefault(monitor => monitor.Bounds.Contains(Cursor))?.Bounds;
+            Selection = _monitors.FirstOrDefault(monitor => CaptureGeometry.Contains(monitor.Bounds, Cursor))?.Bounds;
         }
         else if (Mode == CaptureMode.AllMonitors)
         {
@@ -316,14 +373,14 @@ internal sealed class CaptureSession : IDisposable
             window.RefreshSelection();
     }
 
-    private DrawingPoint Clamp(DrawingPoint point)
+    private PixelPoint Clamp(PixelPoint point)
     {
         var bounds = _restrictedTarget?.ClientBounds ?? _desktopBounds;
-        return new DrawingPoint(Math.Clamp(point.X, bounds.Left, bounds.Right),
-            Math.Clamp(point.Y, bounds.Top, bounds.Bottom));
+        return new PixelPoint(Math.Clamp(point.X, bounds.X, bounds.Right),
+            Math.Clamp(point.Y, bounds.Y, bounds.Bottom));
     }
 
-    private void Complete(DrawingRectangle? selection)
+    private void Complete(PixelRect? selection)
     {
         if (_closed)
             return;
@@ -346,9 +403,7 @@ internal sealed class CaptureSession : IDisposable
         _clickSelecting = false;
         _cursorTimer.Stop();
         _cursorTimer.Tick -= OnCursorTick;
-        if (_captureWindow?.IsMouseCaptured == true)
-            _captureWindow.ReleaseMouseCapture();
-        _captureWindow = null;
+        ReleasePointer();
         foreach (var window in _windows)
             window.CloseOverlay();
         _windows.Clear();

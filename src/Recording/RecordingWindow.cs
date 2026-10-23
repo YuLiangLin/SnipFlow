@@ -1,22 +1,25 @@
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Windows.Data;
-using System.Windows.Input;
-using System.Windows.Interop;
-using System.Windows.Threading;
-using Microsoft.Win32;
-using SnipFlow.Services;
-using DrawingRectangle = System.Drawing.Rectangle;
+using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
+using Avalonia.Data;
+using Avalonia.Input;
+using Avalonia.Styling;
 
 namespace SnipFlow.Recording;
 
 /// <summary>A small recording toolbar. Opening it does not start video or audio capture.</summary>
-public sealed class RecordingWindow : Window
+/// <remarks>
+/// Windows excludes the toolbar and the region border from capture (<c>RecordingWindow.Windows.cs</c>). Linux has
+/// no capture exclusion, so the toolbar and the border are placed outside the recorded rectangle
+/// (<c>RecordingWindow.Linux.cs</c>).
+/// </remarks>
+public sealed partial class RecordingWindow : DialogWindow
 {
+    private static readonly ControlTheme ButtonTheme = CreateButtonTheme();
     private readonly Func<string, string> _translate;
     private readonly ScreenRecordingService _service;
     private readonly RecordingRegionHighlight _highlight;
-    private readonly DrawingRectangle _bounds;
+    private readonly PixelRect _bounds;
     private readonly string? _suggestedPath;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly DispatcherTimer _timer;
@@ -30,6 +33,7 @@ public sealed class RecordingWindow : Window
     private readonly Button _recordButton;
     private readonly Button _cancelButton;
     private bool _busy;
+    private bool _loaded;
     private bool _recordingStarted;
     private bool _allowClose;
     private bool _closingRequested;
@@ -41,9 +45,14 @@ public sealed class RecordingWindow : Window
     private DateTime _startedAt;
 
     public string? ResultPath { get; private set; }
-    public DrawingRectangle CaptureBounds => _bounds;
+    public PixelRect CaptureBounds => _bounds;
 
-    public RecordingWindow(DrawingRectangle targetPhysicalBounds, string? outputPath = null, Func<string, string>? translate = null)
+    public RecordingWindow(PixelRect targetPhysicalBounds, Func<string, string>? translate = null)
+        : this(targetPhysicalBounds, null, translate)
+    {
+    }
+
+    public RecordingWindow(PixelRect targetPhysicalBounds, string? outputPath, Func<string, string>? translate = null)
     {
         _translate = translate ?? (text => text);
         _bounds = ScreenRecordingService.NormalizeBounds(targetPhysicalBounds, _translate);
@@ -53,15 +62,17 @@ public sealed class RecordingWindow : Window
         Title = "SnipFlow · " + T("螢幕錄影");
         Width = 444;
         SizeToContent = SizeToContent.Height;
-        WindowStyle = WindowStyle.None;
-        ResizeMode = ResizeMode.NoResize;
+        WindowDecorations = WindowDecorations.None;
+        CanResize = false;
+        CanMinimize = false;
+        CanMaximize = false;
         Background = ColorBrush("Panel");
         Foreground = ColorBrush("Ink");
-        FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI");
+        FontFamily = UiThemes.AppFont;
         FontSize = 13;
         Topmost = true;
         ShowInTaskbar = false;
-        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        WindowStartupLocation = WindowStartupLocation.Manual;
 
         var shell = new Border
         {
@@ -72,16 +83,18 @@ public sealed class RecordingWindow : Window
         shell.Child = layout;
         Content = shell;
 
-        var heading = new Grid { Margin = new Thickness(0, 0, 0, 12) };
-        heading.ColumnDefinitions.Add(new ColumnDefinition());
-        heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var title = new TextBlock { Text = T("螢幕錄影"), FontSize = 20, FontWeight = FontWeights.SemiBold };
-        title.MouseLeftButtonDown += (_, args) => { if (args.ButtonState == MouseButtonState.Pressed) DragMove(); };
+        var heading = new Grid { Margin = new Thickness(0, 0, 0, 12), ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var title = new TextBlock
+        {
+            Text = T("螢幕錄影"), FontSize = 20, FontWeight = FontWeight.SemiBold, Background = Brushes.Transparent
+        };
+        WindowChrome.EnableTitleBarDrag(this, title, allowMaximize: false);
+        title.AddHandler(PointerPressedEvent, (_, _) => OnUserMove(), RoutingStrategies.Bubble, handledEventsToo: true);
         heading.Children.Add(title);
         _clock = new TextBlock
         {
-            Text = "00:00:00", FontFamily = new FontFamily("Consolas"), FontSize = 24,
-            FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center
+            Text = "00:00:00", FontFamily = UiThemes.MonoFont, FontSize = 24,
+            FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center
         };
         Grid.SetColumn(_clock, 1);
         heading.Children.Add(_clock);
@@ -114,9 +127,7 @@ public sealed class RecordingWindow : Window
         };
         layout.Children.Add(_status);
 
-        var actions = new Grid();
-        actions.ColumnDefinitions.Add(new ColumnDefinition());
-        actions.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var actions = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         _recordButton = MakeButton(T("開始錄影"), primary: true);
         _recordButton.IsEnabled = false;
         _recordButton.Click += async (_, _) =>
@@ -147,45 +158,63 @@ public sealed class RecordingWindow : Window
             if (_recordingStarted && !_busy && !_highlight.IsExcludedFromCapture)
                 await HandleRangeInvalidatedAsync();
         };
-        _service.StateChanged += (_, state) =>
+        _service.StateChanged += (_, state) => Dispatcher.UIThread.Post(() => ShowState(state));
+        _service.Interrupted += (_, message) => Dispatcher.UIThread.Post(async () => await HandleSourceEndedAsync(message));
+        // The toolbar window exists before it is shown: place it (and on Windows exclude it from capture)
+        // before the first frame, then again once its real size and scale are known.
+        ConfigureToolbarWindow();
+        Opened += (_, _) =>
         {
-            if (!Dispatcher.HasShutdownStarted)
-                _ = Dispatcher.BeginInvoke(() => ShowState(state));
-        };
-        SourceInitialized += (_, _) =>
-        {
-            // Native appearance calls can dispatch Loaded before this handler returns.
-            // Establish capture exclusion first; refresh readiness when setup completes.
             ConfigureToolbarWindow();
             WindowAppearance.Apply(this);
-        };
-        Loaded += (_, _) =>
-        {
-            try { _highlight.Show(this); }
-            catch (Exception exception)
-            {
-                _rangeInvalidated = true;
-                _highlight.Hide();
-                SetStatus(T("無法顯示錄影範圍，請關閉後重新框選。") + " " + exception.Message, error: true);
-            }
-            if (!_highlight.IsExcludedFromCapture)
-            {
-                _rangeInvalidated = true;
-                SetStatus(T("無法顯示或排除錄影範圍提示，請關閉後重新框選。"), error: true);
-            }
-            SetBusy(false);
+            // WPF Loaded: show the border once the toolbar is on screen.
+            Dispatcher.UIThread.Post(OnToolbarLoaded, DispatcherPriority.Background);
         };
         _highlight.Invalidated += async (_, _) => await HandleRangeInvalidatedAsync();
         Closing += OnClosing;
         Closed += (_, _) => { _timer.Stop(); _highlight.Dispose(); _lifetime.Cancel(); _lifetime.Dispose(); };
-        PreviewKeyDown += async (_, args) =>
+        AddHandler(KeyDownEvent, async (_, args) =>
         {
             if (args.Key == Key.Escape)
             {
                 args.Handled = true;
                 await DiscardAndCloseAsync();
             }
-        };
+        }, RoutingStrategies.Tunnel);
+    }
+
+    /// <summary>Places the toolbar; on Windows also excludes it from capture. Sets <see cref="_excludedFromCapture"/>.</summary>
+    partial void ConfigureToolbarWindow();
+
+    /// <summary>The user started dragging the toolbar by its title.</summary>
+    partial void OnUserMove();
+
+    /// <summary>
+    /// Linux: a toolbar that overlaps the recorded rectangle appears in the video; say so. <paramref name="started"/>
+    /// adds the warning in front of the status shown when recording starts.
+    /// </summary>
+    partial void CheckToolbarPlacement(bool started);
+
+    private void OnToolbarLoaded()
+    {
+        if (_closingRequested || _allowClose)
+            return;
+        _loaded = true;
+        try { _highlight.Show(this); }
+        catch (Exception exception)
+        {
+            _rangeInvalidated = true;
+            _highlight.Hide();
+            SetStatus(T("無法顯示錄影範圍，請關閉後重新框選。") + " " + exception.Message, error: true);
+        }
+        if (!_highlight.IsExcludedFromCapture)
+        {
+            _rangeInvalidated = true;
+            SetStatus(T("無法顯示或排除錄影範圍提示，請關閉後重新框選。"), error: true);
+        }
+        else
+            CheckToolbarPlacement(started: false);
+        SetBusy(false);
     }
 
     private async Task StartRecordingAsync()
@@ -228,7 +257,12 @@ public sealed class RecordingWindow : Window
             _recordButton.Background = ColorBrush("Error");
             _cancelButton.Content = T("放棄錄影");
             _timer.Start();
-            SetStatus(T("紅色外框內為錄影範圍；停止後選擇儲存位置。"));
+            // A non-fatal note, such as recording without sound when no sound server is reachable, comes first.
+            if (_service.Notice is { } notice)
+                SetStatus(notice + " " + T("紅色外框內為錄影範圍；停止後選擇儲存位置。"), error: true);
+            else
+                SetStatus(T("紅色外框內為錄影範圍；停止後選擇儲存位置。"));
+            CheckToolbarPlacement(started: true);
             _ = ObserveCompletionAsync();
         }
         catch (OperationCanceledException) when (_closingRequested) { }
@@ -264,7 +298,7 @@ public sealed class RecordingWindow : Window
             _recordButton.Background = ColorBrush("Accent");
             _cancelButton.Content = T("放棄影片");
             _pathLabel.Text = T("影片尚未儲存");
-            _pathLabel.ToolTip = null;
+            ToolTip.SetTip(_pathLabel, null);
             SetStatus(T("影片已保留，按「儲存影片」可選擇位置。"));
             if (showSaveDialog) await SaveCompletedRecordingCoreAsync();
         }
@@ -298,18 +332,13 @@ public sealed class RecordingWindow : Window
             {
                 var folder = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
                 if (string.IsNullOrWhiteSpace(folder)) folder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                var dialog = new SaveFileDialog
-                {
-                    Title = T("儲存錄影"), Filter = T("MP4 影片") + "|*.mp4", DefaultExt = ".mp4", AddExtension = true,
-                    FileName = $"SnipFlow-{_startedAt:yyyyMMdd-HHmmss}.mp4", InitialDirectory = folder,
-                    OverwritePrompt = true, CheckPathExists = true
-                };
-                if (dialog.ShowDialog(this) != true)
+                path = FileDialogs.SaveFile(this, T("儲存錄影"), T("MP4 影片") + "|*.mp4",
+                    $"SnipFlow-{_startedAt:yyyyMMdd-HHmmss}.mp4", ".mp4", folder);
+                if (path is null)
                 {
                     SetStatus(T("影片已保留，按「儲存影片」可選擇位置。"));
                     return;
                 }
-                path = dialog.FileName;
                 overwrite = File.Exists(path); // The dialog confirms replacement before export.
             }
             if (_closingRequested) return;
@@ -319,7 +348,7 @@ public sealed class RecordingWindow : Window
             ResultPath = savedPath;
             _savePending = false;
             _pathLabel.Text = savedPath;
-            _pathLabel.ToolTip = savedPath;
+            ToolTip.SetTip(_pathLabel, savedPath);
             try { await CleanupDraftAsync(); }
             catch (Exception exception) { SettingsStore.Log(exception); }
             if (_closingRequested) return;
@@ -351,6 +380,15 @@ public sealed class RecordingWindow : Window
             SetStatus(T("無法顯示或排除錄影範圍提示，請關閉後重新框選。"), error: true);
             SetBusy(false);
         }
+    }
+
+    /// <summary>The captured source ended on its own (Wayland "Stop sharing"): keep what was recorded.</summary>
+    private async Task HandleSourceEndedAsync(string message)
+    {
+        if (_closingRequested || _allowClose || _savePending || !_recordingStarted || _busy) return;
+        await FinishRecordingAsync(showSaveDialog: false);
+        if (!_closingRequested && _savePending)
+            SetStatus(message, error: true);
     }
 
     private async Task CleanupDraftAsync()
@@ -414,14 +452,14 @@ public sealed class RecordingWindow : Window
         }
     }
 
-    private void OnClosing(object? sender, CancelEventArgs args)
+    private void OnClosing(object? sender, WindowClosingEventArgs args)
     {
         if (_allowClose)
             return;
         args.Cancel = true;
         // A ready/completed service can finish cleanup synchronously. Defer it until
-        // this Closing event returns so Close does not reenter WPF while it is closing.
-        Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(async () => await DiscardAndCloseAsync()));
+        // this Closing event returns so Close does not reenter the window while it is closing.
+        Dispatcher.UIThread.Post(async () => await DiscardAndCloseAsync(), DispatcherPriority.Normal);
     }
 
     private void ShowState(RecordingState state)
@@ -453,7 +491,7 @@ public sealed class RecordingWindow : Window
     {
         _busy = busy;
         _recordButton.IsEnabled = !busy && !_closingRequested
-            && (_recordingStarted || _savePending || (IsLoaded && !_rangeInvalidated && _excludedFromCapture));
+            && (_recordingStarted || _savePending || (_loaded && !_rangeInvalidated && _excludedFromCapture));
         _systemAudio.IsEnabled = !busy && !_recordingStarted && !_savePending;
         _microphone.IsEnabled = !busy && !_recordingStarted && !_savePending;
         _cursor.IsEnabled = !busy && !_recordingStarted && !_savePending;
@@ -465,73 +503,54 @@ public sealed class RecordingWindow : Window
         _status.Foreground = ColorBrush(error ? "Error" : "Muted");
     }
 
-    private void ConfigureToolbarWindow()
-    {
-        var handle = new WindowInteropHelper(this).Handle;
-        _excludedFromCapture = SetWindowDisplayAffinity(handle, 0x11)
-            && GetWindowDisplayAffinity(handle, out var affinity) && affinity == 0x11;
-        var area = System.Windows.Forms.Screen.FromRectangle(_bounds).WorkingArea;
-        var dpi = GetDpiForWindow(handle);
-        var scale = dpi == 0 ? 1d : dpi / 96d;
-        var physicalWidth = (int)Math.Ceiling(Width * scale);
-        var x = Math.Max(area.Left, area.Right - physicalWidth - 16);
-        var y = area.Top + 16;
-        _ = SetWindowPos(handle, IntPtr.Zero, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010);
-        // Loaded may already have disabled Start while exclusion was still being initialized.
-        SetBusy(_busy);
-    }
-
     private static CheckBox MakeToggle(string label, bool selected) => new()
     {
         Content = label, IsChecked = selected, VerticalContentAlignment = VerticalAlignment.Center,
         Foreground = ColorBrush("Ink"), Margin = new Thickness(0, 0, 17, 5), FontSize = 12
     };
 
-    private static Button MakeButton(string text, bool primary)
+    private static Button MakeButton(string text, bool primary) => new()
     {
-        var button = new Button
+        Content = text, Padding = new Thickness(15, 10, 15, 10),
+        Background = ColorBrush(primary ? "Accent" : "Raised"),
+        Foreground = ColorBrush(primary ? "AccentInk" : "Ink"),
+        BorderThickness = new Thickness(0), FontWeight = FontWeight.SemiBold,
+        FontSize = 12, Cursor = new Cursor(StandardCursorType.Hand),
+        HorizontalAlignment = HorizontalAlignment.Stretch,
+        Theme = ButtonTheme
+    };
+
+    /// <summary>The WPF template of the original: a rounded background, 88 % opacity on hover, 40 % when disabled.</summary>
+    private static ControlTheme CreateButtonTheme()
+    {
+        var theme = new ControlTheme(typeof(Button));
+        theme.Setters.Add(new Setter(TemplatedControl.TemplateProperty, new FuncControlTemplate<Button>((_, _) =>
         {
-            Content = text, Padding = new Thickness(15, 10, 15, 10),
-            Background = ColorBrush(primary ? "Accent" : "Raised"),
-            Foreground = ColorBrush(primary ? "AccentInk" : "Ink"),
-            BorderThickness = new Thickness(0), FontWeight = FontWeights.SemiBold,
-            FontSize = 12, Cursor = Cursors.Hand
-        };
-        var border = new FrameworkElementFactory(typeof(Border));
-        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(7));
-        border.SetBinding(Border.BackgroundProperty, new Binding(nameof(Button.Background)) { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
-        border.SetBinding(Border.PaddingProperty, new Binding(nameof(Button.Padding)) { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
-        var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
-        presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-        presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-        border.AppendChild(presenter);
-        var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
-        var disabled = new Trigger { Property = IsEnabledProperty, Value = false };
-        disabled.Setters.Add(new Setter(OpacityProperty, 0.4));
-        template.Triggers.Add(disabled);
-        var hover = new Trigger { Property = IsMouseOverProperty, Value = true };
-        hover.Setters.Add(new Setter(OpacityProperty, 0.88));
-        template.Triggers.Add(hover);
-        button.Template = template;
-        return button;
+            var presenter = new ContentPresenter
+            {
+                Name = "PART_ContentPresenter",
+                CornerRadius = new CornerRadius(7),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+            presenter.Bind(ContentPresenter.BackgroundProperty, new TemplateBinding(TemplatedControl.BackgroundProperty));
+            presenter.Bind(ContentPresenter.PaddingProperty, new TemplateBinding(TemplatedControl.PaddingProperty));
+            presenter.Bind(ContentPresenter.ContentProperty, new TemplateBinding(ContentControl.ContentProperty));
+            presenter.Bind(ContentPresenter.ContentTemplateProperty, new TemplateBinding(ContentControl.ContentTemplateProperty));
+            return presenter;
+        })));
+        theme.Children.Add(new Style(selector => selector.Nesting().Class(":pointerover"))
+        {
+            Setters = { new Setter(Visual.OpacityProperty, 0.88) }
+        });
+        theme.Children.Add(new Style(selector => selector.Nesting().Class(":disabled"))
+        {
+            Setters = { new Setter(Visual.OpacityProperty, 0.4) }
+        });
+        return theme;
     }
 
     private string T(string text) => _translate(text);
 
-    private static Brush ColorBrush(string key) => ThemeService.Brush(key);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetWindowDisplayAffinity(IntPtr windowHandle, uint affinity);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetWindowDisplayAffinity(IntPtr windowHandle, out uint affinity);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetDpiForWindow(IntPtr windowHandle);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetWindowPos(IntPtr windowHandle, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+    private static IBrush ColorBrush(string key) => ThemeService.Brush(key);
 }

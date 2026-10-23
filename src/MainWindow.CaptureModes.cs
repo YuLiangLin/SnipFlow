@@ -1,4 +1,3 @@
-using System.Windows.Controls.Primitives;
 using SnipFlow.Capture;
 using SnipFlow.Services;
 
@@ -6,12 +5,11 @@ namespace SnipFlow;
 
 public partial class MainWindow
 {
-    void CaptureMenuClick(object sender, RoutedEventArgs e)
+    void CaptureMenuClick(object? sender, RoutedEventArgs e)
     {
         if (busy || capturePending || !CanStartCapture || sender is not Button button) return;
         var menu = new ContextMenu
         {
-            PlacementTarget = button,
             Placement = button.Tag is "CaptureRight" ? PlacementMode.Right : PlacementMode.Bottom
         };
         foreach (var option in new[]
@@ -28,18 +26,18 @@ public partial class MainWindow
         }
         menu.Items.Add(new Separator());
         AddScrollCaptureOptions(menu, code: false);
-        menu.IsOpen = true;
+        menu.Open(button);
     }
 
-    void ScrollMenuClick(object sender, RoutedEventArgs e) => ShowScrollCaptureMenu(sender, code: false);
-    void CodeMenuClick(object sender, RoutedEventArgs e) => ShowScrollCaptureMenu(sender, code: true);
+    void ScrollMenuClick(object? sender, RoutedEventArgs e) => ShowScrollCaptureMenu(sender, code: false);
+    void CodeMenuClick(object? sender, RoutedEventArgs e) => ShowScrollCaptureMenu(sender, code: true);
 
-    void ShowScrollCaptureMenu(object sender, bool code)
+    void ShowScrollCaptureMenu(object? sender, bool code)
     {
         if (busy || capturePending || !CanStartCapture || sender is not Button button) return;
-        var menu = new ContextMenu { PlacementTarget = button, Placement = PlacementMode.Bottom };
+        var menu = new ContextMenu { Placement = PlacementMode.Bottom };
         AddScrollCaptureOptions(menu, code);
-        menu.IsOpen = true;
+        menu.Open(button);
     }
 
     void AddScrollCaptureOptions(ContextMenu menu, bool code)
@@ -56,8 +54,8 @@ public partial class MainWindow
         }
     }
 
-    async void WindowScrollMenuItemClick(object sender, RoutedEventArgs e) => await StartScrollCaptureAsync(CaptureMode.Window);
-    async void RegionScrollMenuItemClick(object sender, RoutedEventArgs e) => await StartScrollCaptureAsync(CaptureMode.Region);
-    async void WindowCodeMenuItemClick(object sender, RoutedEventArgs e) => await StartCodeCaptureAsync(CaptureMode.Window);
-    async void RegionCodeMenuItemClick(object sender, RoutedEventArgs e) => await StartCodeCaptureAsync(CaptureMode.Region);
+    async void WindowScrollMenuItemClick(object? sender, RoutedEventArgs e) => await StartScrollCaptureAsync(CaptureMode.Window);
+    async void RegionScrollMenuItemClick(object? sender, RoutedEventArgs e) => await StartScrollCaptureAsync(CaptureMode.Region);
+    async void WindowCodeMenuItemClick(object? sender, RoutedEventArgs e) => await StartCodeCaptureAsync(CaptureMode.Window);
+    async void RegionCodeMenuItemClick(object? sender, RoutedEventArgs e) => await StartCodeCaptureAsync(CaptureMode.Region);
 }

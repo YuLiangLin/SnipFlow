@@ -1,5 +1,4 @@
-using Windows.Foundation;
-using SnipFlow.Services;
+using global::Windows.Foundation;
 
 namespace SnipFlow.Video;
 

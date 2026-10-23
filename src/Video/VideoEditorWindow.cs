@@ -1,25 +1,29 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
-using System.Windows.Controls.Primitives;
-using System.Windows.Input;
-using System.Windows.Shell;
-using System.Windows.Threading;
-using Microsoft.Win32;
+using Avalonia.Automation;
+using Avalonia.Input;
 using SnipFlow.Services;
 
 namespace SnipFlow.Video;
 
-public sealed partial class VideoEditorWindow : Window
+/// <summary>
+/// Trims a video and places timed text and image overlays. Shown modally with
+/// <see cref="DialogWindow.ShowModal"/>; <see cref="ExportedPaths"/> lists the MP4s written meanwhile.
+/// </summary>
+public sealed partial class VideoEditorWindow : DialogWindow
 {
     readonly DispatcherTimer playbackTimer = new(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(40) };
     readonly CancellationTokenSource lifetime = new();
     readonly List<string> exportedPaths = [];
     VideoEditDocument document;
-    CancellationTokenSource? operationCancellation;
+    VideoPreviewPlayer? player;
+    VideoPreviewPlayer.PreviewError? playerError;
+    CancellationTokenSource? operationCancellation, posterCancellation;
     string? lastExportedPath, activeOperationKey;
     TimeSpan position;
-    bool playing, mediaReady, busy, synchronizing, closed, pendingClose, allowClose, savingBeforeClose, exportingOperation;
+    bool playing, mediaReady, busy, synchronizing, opened, closed, pendingClose, allowClose, savingBeforeClose,
+        promptingClose, exportingOperation;
     string? statusKey;
     object?[] statusValues = [];
     bool statusError;
@@ -38,63 +42,84 @@ public sealed partial class VideoEditorWindow : Window
     VideoEditorWindow(VideoEditDocument value)
     {
         document = value; document.Validate();
-        Style = Resource<Style>("AppWindow");
         Title = I18n.T("SnipFlow · 影片編輯");
         Width = 1240; Height = 820; MinWidth = 980; MinHeight = 660;
-        WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.CanResize;
+        WindowDecorations = WindowDecorations.None; CanResize = true;
         WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
-        WindowChrome.SetWindowChrome(this, new WindowChrome
-        {
-            CaptionHeight = 48, ResizeBorderThickness = new Thickness(6),
-            CornerRadius = new CornerRadius(12), GlassFrameThickness = new Thickness(0), UseAeroCaptionButtons = false
-        });
+        if (Application.Current?.TryGetResource("SnipFlowIcon", null, out var icon) == true && icon is WindowIcon windowIcon)
+            Icon = windowIcon;
+        WindowChrome.EnableResizeBorder(this);
         WindowBoundsService.Attach(this);
-        SourceInitialized += (_, _) => WindowAppearance.Apply(this);
+        WindowAppearance.Apply(this);
         BuildLayout(); AttachHandlers();
+        player = VideoPreviewPlayer.TryCreate(frameView, out playerError);
+        AttachPlayer();
         try { BindDocument(value); }
         catch
         {
-            media.Close(); lifetime.Dispose(); Close(); throw;
+            player?.Dispose(); lifetime.Dispose(); throw;
         }
-        Loaded += (_, _) =>
+        Opened += (_, _) =>
         {
+            opened = true;
             FitWorkArea();
             OpenPreview(); playbackTimer.Start(); UpdatePreviewScale();
         };
-        LocationChanged += (_, _) => { if (IsLoaded && !closed) FitWorkArea(); };
+        PositionChanged += (_, _) => { if (opened && !closed) FitWorkArea(); };
         Closing += OnClosing;
         Closed += (_, _) =>
         {
             closed = true; playing = false; playbackTimer.Stop();
-            media.Close(); media.Source = null;
+            posterCancellation?.Cancel();
+            player?.Dispose(); player = null;
             document.PropertyChanged -= DocumentChanged;
             document.Overlays.CollectionChanged -= OverlaysChanged;
             I18n.Changed -= LanguageChanged;
             lifetime.Cancel(); lifetime.Dispose();
         };
         I18n.Changed += LanguageChanged;
-        ApplyLanguage(); ShowStatus("匯出會保留原影片的音訊。");
+        ApplyLanguage();
+        if (playerError is not null) ShowStatus(playerError.Key, true, playerError.Detail is null ? [] : [playerError.Detail]);
+        else ShowStatus("匯出會保留原影片的音訊。");
+    }
+
+    void AttachPlayer()
+    {
+        if (player is null)
+        {
+            // Without libvlc the editor keeps working; ffmpeg stills follow the playhead instead.
+            previewNotice.IsVisible = true;
+            RefreshPreviewNotice();
+            return;
+        }
+        player.Opened += () =>
+        {
+            if (closed || mediaReady) return;
+            mediaReady = true; SetPosition(document.TrimStart); RefreshActions();
+        };
+        player.Ended += () => { if (!closed) { PausePlayback(); SetPosition(document.TrimStart); } };
+        player.Failed += message =>
+        {
+            if (closed) return;
+            PausePlayback(); mediaReady = false; RefreshActions();
+            ShowStatus("影片預覽失敗：{0}", true, message);
+            RequestPoster(position);
+        };
+    }
+
+    void RefreshPreviewNotice()
+    {
+        if (playerError is null) return;
+        previewNoticeText.Text = playerError.Text
+            + (VideoPosterFrame.IsAvailable ? "" : "\n" + I18n.T("預覽畫面需要 ffmpeg。請安裝：sudo apt install ffmpeg"));
     }
 
     void AttachHandlers()
     {
-        media.MediaOpened += (_, _) =>
-        {
-            if (closed || media.Source?.LocalPath is not { } path
-                || !path.Equals(document.Source.SourcePath, StringComparison.OrdinalIgnoreCase)) return;
-            mediaReady = true; media.Pause(); SetPosition(document.TrimStart); RefreshActions();
-        };
-        media.MediaEnded += (_, _) => { if (!closed) { PausePlayback(); SetPosition(document.TrimStart); } };
-        media.MediaFailed += (_, args) =>
-        {
-            if (closed) return;
-            PausePlayback(); mediaReady = false; RefreshActions();
-            ShowStatus("影片預覽失敗：{0}", true, args.ErrorException.Message);
-        };
         playbackTimer.Tick += (_, _) =>
         {
-            if (!playing || !mediaReady || closed) return;
-            var current = media.Position;
+            if (!playing || !mediaReady || closed || player is null) return;
+            var current = player.Time;
             if (current >= document.TrimEnd) { PausePlayback(); SetPosition(document.TrimStart); return; }
             position = current < document.TrimStart ? document.TrimStart : current;
             RefreshTimeline(); overlayCanvas.SetPlaybackPosition(position, false);
@@ -120,8 +145,7 @@ public sealed partial class VideoEditorWindow : Window
         AttachField(color, CommitColor);
         AttachField(objectStart, () => CommitObjectTime(true));
         AttachField(objectEnd, () => CommitObjectTime(false));
-        entireVideo.Checked += (_, _) => SetEntireVideo(true);
-        entireVideo.Unchecked += (_, _) => SetEntireVideo(false);
+        entireVideo.IsCheckedChanged += (_, _) => SetEntireVideo(entireVideo.IsChecked == true);
         objectList.SelectionChanged += (_, _) =>
         {
             if (synchronizing || busy) return;
@@ -136,7 +160,7 @@ public sealed partial class VideoEditorWindow : Window
             RefreshInspector(); RefreshObjectList(); RefreshTitle();
         };
         previewHost.SizeChanged += (_, _) => UpdatePreviewScale();
-        PreviewKeyDown += WindowKeyDown;
+        AddHandler(KeyDownEvent, WindowKeyDown, RoutingStrategies.Tunnel);
     }
 
     void BindDocument(VideoEditDocument value)
@@ -144,7 +168,7 @@ public sealed partial class VideoEditorWindow : Window
         PausePlayback();
         // Prepare the new visuals before releasing the old source or document subscriptions.
         overlayCanvas.SetDocument(value);
-        mediaReady = false; media.Close();
+        mediaReady = false; player?.Close(); frameView.Clear();
         document.PropertyChanged -= DocumentChanged;
         document.Overlays.CollectionChanged -= OverlaysChanged;
         document = value;
@@ -152,18 +176,55 @@ public sealed partial class VideoEditorWindow : Window
         document.Overlays.CollectionChanged += OverlaysChanged;
         position = document.TrimStart;
         sourceSurface.Width = document.Source.Width; sourceSurface.Height = document.Source.Height;
-        media.Width = document.Source.Width; media.Height = document.Source.Height;
+        frameView.Width = document.Source.Width; frameView.Height = document.Source.Height;
         overlayCanvas.SetPlaybackPosition(position, !busy);
         RefreshObjectList(); RefreshInspector(); RefreshTimeline(); RefreshTitle(); RefreshActions();
         UpdatePreviewScale();
-        if (IsLoaded) OpenPreview();
+        if (opened) OpenPreview();
     }
 
     void OpenPreview()
     {
-        media.Source = new Uri(document.Source.SourcePath, UriKind.Absolute);
-        // Pause loads the user's selected media without autoplay or an initial audio burst.
-        media.Pause();
+        if (player is null) { RequestPoster(position); return; }
+        // Loads the user's selected media paused, without autoplay or an initial audio burst.
+        try { player.Open(document.Source.SourcePath, document.Source.Width, document.Source.Height); }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            SettingsStore.Log(exception);
+            ShowStatus("影片預覽失敗：{0}", true, exception.Message);
+            RequestPoster(position);
+        }
+    }
+
+    /// <summary>
+    /// Shows the exact frame at <paramref name="time"/> from ffmpeg: as the only preview when libvlc is
+    /// unavailable, and after a paused seek, because libvlc 3 can stop up to three frames early in
+    /// videos with B-frames.
+    /// </summary>
+    void RequestPoster(TimeSpan time)
+    {
+        posterCancellation?.Cancel();
+        if (closed || playing || !VideoPosterFrame.IsAvailable) return;
+        var cancellation = posterCancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        var source = document.Source;
+        var refine = player is not null && mediaReady;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Coalesce scrubbing into one decode per pause in pointer movement.
+                await Task.Delay(refine ? 250 : 120, cancellation.Token);
+                var frame = await VideoPosterFrame.ExtractAsync(source, time, cancellation.Token);
+                if (frame is null) return;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!closed && !cancellation.IsCancellationRequested && ReferenceEquals(source, document.Source)
+                        && !playing && position == time) frameView.ShowStill(frame);
+                });
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception exception) { SettingsStore.Log(exception); }
+        });
     }
 
     void FitWorkArea()
@@ -187,8 +248,8 @@ public sealed partial class VideoEditorWindow : Window
 
     void DocumentChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (!Dispatcher.CheckAccess())
-        { _ = Dispatcher.BeginInvoke(new Action(() => DocumentChanged(sender, args))); return; }
+        if (!Dispatcher.UIThread.CheckAccess())
+        { Dispatcher.UIThread.Post(() => DocumentChanged(sender, args)); return; }
         if (closed || sender != document) return;
         RefreshTitle();
         if (args.PropertyName is nameof(VideoEditDocument.TrimStart) or nameof(VideoEditDocument.TrimEnd))
@@ -197,25 +258,29 @@ public sealed partial class VideoEditorWindow : Window
 
     void OverlaysChanged(object? sender, NotifyCollectionChangedEventArgs args)
     {
-        if (!Dispatcher.CheckAccess())
-        { _ = Dispatcher.BeginInvoke(new Action(() => OverlaysChanged(sender, args))); return; }
+        if (!Dispatcher.UIThread.CheckAccess())
+        { Dispatcher.UIThread.Post(() => OverlaysChanged(sender, args)); return; }
         if (closed) return;
         overlayCanvas.Refresh(); RefreshObjectList(); RefreshInspector(); RefreshActions();
     }
 
     void TogglePlayback()
     {
-        if (busy || !mediaReady) return;
+        if (busy || !mediaReady || player is null) return;
         if (playing) { PausePlayback(); return; }
         overlayCanvas.EndTextEditing(true);
         if (position < document.TrimStart || position >= document.TrimEnd) SetPosition(document.TrimStart);
-        playing = true; media.Play(); overlayCanvas.SetPlaybackPosition(position, false); RefreshActions();
+        posterCancellation?.Cancel(); frameView.ReleaseStill();
+        playing = true; player.Play(); overlayCanvas.SetPlaybackPosition(position, false); RefreshActions();
     }
 
     void PausePlayback()
     {
+        // Settle the picture on the playhead the editor shows; libvlc's own clock lags by up to 250 ms.
+        var wasPlaying = playing;
         playing = false;
-        if (mediaReady) media.Pause();
+        if (mediaReady) player?.Pause(wasPlaying ? position : null);
+        if (wasPlaying) RequestPoster(position);
         if (!closed) { overlayCanvas.SetPlaybackPosition(position, !busy); RefreshActions(); }
     }
 
@@ -223,7 +288,8 @@ public sealed partial class VideoEditorWindow : Window
     {
         var last = document.TrimEnd - TimeSpan.FromTicks(1);
         position = Min(Max(requested, document.TrimStart), last);
-        if (mediaReady) media.Position = position;
+        if (mediaReady && player is not null) { frameView.ReleaseStill(); player.Seek(position); }
+        RequestPoster(position);
         overlayCanvas.SetPlaybackPosition(position, !playing && !busy);
         RefreshTimeline();
     }
@@ -245,7 +311,7 @@ public sealed partial class VideoEditorWindow : Window
     void CommitTrimField(bool start)
     {
         if (synchronizing || busy) return;
-        if (!TryTime((start ? trimStart : trimEnd).Text, out var value))
+        if (!TryTime((start ? trimStart : trimEnd).Text ?? "", out var value))
         { ShowStatus("請輸入秒數或 分:秒.毫秒。", true); RefreshTimeline(); return; }
         ApplyTrim(start ? value : document.TrimStart, start ? document.TrimEnd : value);
     }
@@ -272,12 +338,12 @@ public sealed partial class VideoEditorWindow : Window
     {
         if (busy || !CanAddOverlay()) return;
         PausePlayback(); overlayCanvas.EndTextEditing(true);
-        var dialog = new OpenFileDialog { Title = I18n.T("加入圖片"),
-            Filter = I18n.T("PNG／JPEG 圖片") + " (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg", CheckFileExists = true };
-        if (dialog.ShowDialog(this) != true) return;
+        var file = FileDialogs.OpenFile(this, I18n.T("加入圖片"),
+            I18n.T("PNG／JPEG 圖片") + " (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg");
+        if (file is null || closed) return;
         try
         {
-            var image = VideoOverlayRenderer.LoadImagePng(dialog.FileName);
+            var image = VideoOverlayRenderer.LoadImagePng(file);
             var existingBytes = document.Overlays.Sum(item => (long)(item.ImagePng?.Length ?? 0));
             if (image.Png.Length > VideoEditDocument.MaximumImageBytes
                 || existingBytes + image.Png.Length > VideoEditDocument.MaximumTotalImageBytes)
@@ -329,7 +395,7 @@ public sealed partial class VideoEditorWindow : Window
     void CommitNumber(TextBox field, string property)
     {
         if (synchronizing || busy || overlayCanvas.Selected is not { } overlay) return;
-        if (!TryNumber(field.Text, out var value))
+        if (!TryNumber(field.Text ?? "", out var value))
         { ShowStatus("請輸入有效數值。", true); RefreshInspector(); return; }
         PausePlayback(); overlayCanvas.EndTextEditing(true);
         switch (property)
@@ -357,7 +423,7 @@ public sealed partial class VideoEditorWindow : Window
     void CommitColor()
     {
         if (synchronizing || busy) return;
-        var value = color.Text.Trim().ToUpperInvariant();
+        var value = (color.Text ?? "").Trim().ToUpperInvariant();
         if (!VideoEditDocument.IsColor(value))
         { ShowStatus("顏色請使用 #RRGGBB 或 #AARRGGBB。", true); RefreshInspector(); return; }
         SetTextColor(value);
@@ -376,7 +442,7 @@ public sealed partial class VideoEditorWindow : Window
     void CommitObjectTime(bool start)
     {
         if (synchronizing || busy || overlayCanvas.Selected is not { } overlay) return;
-        if (!TryTime((start ? objectStart : objectEnd).Text, out var value))
+        if (!TryTime((start ? objectStart : objectEnd).Text ?? "", out var value))
         { ShowStatus("請輸入秒數或 分:秒.毫秒。", true); RefreshInspector(); return; }
         var from = start ? value : overlay.Start; var to = start ? overlay.End : value;
         if (from < TimeSpan.Zero || to > document.Source.Duration || to <= from)
@@ -391,21 +457,21 @@ public sealed partial class VideoEditorWindow : Window
         if (busy) return;
         PausePlayback(); overlayCanvas.EndTextEditing(true);
         if (!await ConfirmReplacementAsync()) return;
-        var dialog = new OpenFileDialog { Title = I18n.T("開啟影片／專案"), CheckFileExists = true,
-            Filter = I18n.T("影片／專案") + " (*.mp4;*.snipvideo)|*.mp4;*.snipvideo|" +
-                I18n.T("MP4 影片") + " (*.mp4)|*.mp4|" + I18n.T("SnipFlow 影片專案") + " (*.snipvideo)|*.snipvideo" };
-        if (dialog.ShowDialog(this) != true) return;
+        var file = FileDialogs.OpenFile(this, I18n.T("開啟影片／專案"),
+            I18n.T("影片／專案") + " (*.mp4;*.snipvideo)|*.mp4;*.snipvideo|" +
+            I18n.T("MP4 影片") + " (*.mp4)|*.mp4|" + I18n.T("SnipFlow 影片專案") + " (*.snipvideo)|*.snipvideo");
+        if (file is null || closed) return;
         await RunOperationAsync("正在開啟影片…", false, async token =>
         {
-            var next = await VideoProjectStore.OpenAsync(dialog.FileName, token);
-            token.ThrowIfCancellationRequested(); BindDocument(next); ShowStatus("已開啟 {0}", false, Path.GetFileName(dialog.FileName));
+            var next = await VideoProjectStore.OpenAsync(file, token);
+            token.ThrowIfCancellationRequested(); BindDocument(next); ShowStatus("已開啟 {0}", false, Path.GetFileName(file));
         });
     }
 
     async Task<bool> ConfirmReplacementAsync()
     {
         if (!document.IsDirty) return true;
-        var answer = AppDialog.Show(this, I18n.T("尚有未儲存的影片專案變更。是否儲存？"), I18n.T("影片編輯"), MessageBoxButton.YesNoCancel);
+        var answer = MessageBox.Show(this, I18n.T("尚有未儲存的影片專案變更。是否儲存？"), I18n.T("影片編輯"), MessageBoxButton.YesNoCancel);
         if (answer == MessageBoxResult.Cancel) return false;
         return answer != MessageBoxResult.Yes || await SaveProjectAsync();
     }
@@ -414,21 +480,17 @@ public sealed partial class VideoEditorWindow : Window
     {
         if (busy) return false;
         PausePlayback(); overlayCanvas.EndTextEditing(true);
-        var dialog = new SaveFileDialog
-        {
-            Title = I18n.T("儲存專案"),
-            Filter = I18n.T("SnipFlow 影片專案") + " (*.snipvideo)|*.snipvideo",
-            DefaultExt = ".snipvideo", AddExtension = true, OverwritePrompt = false,
-            FileName = document.ProjectPath is { } project ? Path.GetFileName(project)
-                : Path.GetFileNameWithoutExtension(document.Source.SourcePath) + ".snipvideo"
-        };
-        if (document.ProjectPath is { } existing) dialog.InitialDirectory = Path.GetDirectoryName(existing);
-        if (dialog.ShowDialog(this) != true) return false;
-        if (!ConfirmOverwrite(dialog.FileName, "儲存專案", out var overwrite)) return false;
+        var suggested = document.ProjectPath is { } project ? Path.GetFileName(project)
+            : Path.GetFileNameWithoutExtension(document.Source.SourcePath) + ".snipvideo";
+        var initial = document.ProjectPath is { } existing ? Path.GetDirectoryName(existing)
+            : Path.GetDirectoryName(document.Source.SourcePath);
+        if (ChooseDestination("儲存專案", I18n.T("SnipFlow 影片專案") + " (*.snipvideo)|*.snipvideo", suggested,
+                ".snipvideo", initial) is not { } target) return false;
+        var (path, overwrite) = target;
         return await RunOperationAsync("正在儲存專案…", false, async token =>
         {
-            var path = await VideoProjectStore.SaveAsync(document, dialog.FileName, overwrite, token);
-            ShowStatus("專案已儲存：{0}", false, Path.GetFileName(path));
+            var saved = await VideoProjectStore.SaveAsync(document, path, overwrite, token);
+            ShowStatus("專案已儲存：{0}", false, Path.GetFileName(saved));
         });
     }
 
@@ -436,16 +498,10 @@ public sealed partial class VideoEditorWindow : Window
     {
         if (busy) return;
         PausePlayback(); overlayCanvas.EndTextEditing(true);
-        var dialog = new SaveFileDialog
-        {
-            Title = I18n.T("匯出 MP4"),
-            Filter = I18n.T("MP4 影片") + " (*.mp4)|*.mp4", DefaultExt = ".mp4", AddExtension = true,
-            OverwritePrompt = false, FileName = Path.GetFileNameWithoutExtension(document.Source.SourcePath) + "-edited.mp4"
-        };
-        if (dialog.ShowDialog(this) != true) return;
-        if (Path.GetFullPath(dialog.FileName).Equals(document.Source.SourcePath, StringComparison.OrdinalIgnoreCase))
-        { ShowStatus("請另存新檔，原始影片不會被覆寫。", true); return; }
-        if (!ConfirmOverwrite(dialog.FileName, "匯出 MP4", out var overwrite)) return;
+        if (ChooseDestination("匯出 MP4", I18n.T("MP4 影片") + " (*.mp4)|*.mp4",
+                Path.GetFileNameWithoutExtension(document.Source.SourcePath) + "-edited.mp4", ".mp4",
+                Path.GetDirectoryName(document.Source.SourcePath)) is not { } target) return;
+        var (destination, overwrite) = target;
         await RunOperationAsync("正在匯出影片…", true, async token =>
         {
             var report = new Progress<double>(value =>
@@ -455,9 +511,9 @@ public sealed partial class VideoEditorWindow : Window
                 progress.IsIndeterminate = false; progress.Value = Math.Clamp(value, 0, 100);
                 progressLabel.Text = I18n.F("匯出 {0:0}%", progress.Value);
             });
-            // Keep this await on the WPF dispatcher: preview/export share WPF visuals.
-            var path = await VideoExportService.ExportAsync(document, dialog.FileName, overwrite, report, token);
-            if (!exportedPaths.Contains(path, StringComparer.OrdinalIgnoreCase)) exportedPaths.Add(path);
+            // Keep this await on the UI dispatcher: preview and export share the overlay renderer.
+            var path = await VideoExportService.ExportAsync(document, destination, overwrite, report, token);
+            if (!exportedPaths.Contains(path, PlatformInfo.PathComparer)) exportedPaths.Add(path);
             lastExportedPath = path;
             ShowStatus("影片已匯出：{0}", false, Path.GetFileName(path));
             // A subscriber cannot turn an already-published MP4 into an export failure.
@@ -466,12 +522,27 @@ public sealed partial class VideoEditorWindow : Window
         });
     }
 
-    bool ConfirmOverwrite(string path, string caption, out bool overwrite)
+    /// <summary>Asks for a destination; null when cancelled, refused, or the source itself was chosen.</summary>
+    (string Path, bool Overwrite)? ChooseDestination(string caption, string filter, string suggested, string extension,
+        string? initialDirectory)
+    {
+        var chosen = FileDialogs.SaveFile(this, I18n.T(caption), filter, suggested, defaultExtension: null, initialDirectory);
+        if (chosen is null || closed) return null;
+        // The picker confirmed overwriting the name it returned; an extension added here was not shown to it.
+        var appended = string.IsNullOrEmpty(Path.GetExtension(chosen));
+        var path = appended ? chosen + extension : chosen;
+        if (extension == ".mp4" && Path.GetFullPath(path).Equals(document.Source.SourcePath, PlatformInfo.PathComparison))
+        { ShowStatus("請另存新檔，原始影片不會被覆寫。", true); return null; }
+        if (!ConfirmOverwrite(path, caption, confirmedByPicker: !appended, out var overwrite)) return null;
+        return (path, overwrite);
+    }
+
+    bool ConfirmOverwrite(string path, string caption, bool confirmedByPicker, out bool overwrite)
     {
         overwrite = File.Exists(path);
-        if (!overwrite) return true;
+        if (!overwrite || confirmedByPicker) return true;
         // Authorization is tied to this displayed destination, not a later File.Exists check.
-        return AppDialog.Show(this, I18n.F("檔案「{0}」已存在。是否覆寫？", Path.GetFileName(path)),
+        return MessageBox.Show(this, I18n.F("檔案「{0}」已存在。是否覆寫？", Path.GetFileName(path)),
             I18n.T(caption), MessageBoxButton.YesNo) == MessageBoxResult.Yes;
     }
 
@@ -497,7 +568,7 @@ public sealed partial class VideoEditorWindow : Window
             {
                 pendingClose = false;
                 // Leave the current await/Closing callback before entering another close sequence.
-                _ = Dispatcher.BeginInvoke(new Action(() => { if (!closed) Close(); }));
+                Dispatcher.UIThread.Post(() => { if (!closed) Close(); });
             }
         }
         return success;
@@ -513,47 +584,51 @@ public sealed partial class VideoEditorWindow : Window
     {
         busy = value;
         foreach (var control in busyControls) control.IsEnabled = !value;
-        progressHost.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
-        cancelOperation.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+        progressHost.IsVisible = value;
+        cancelOperation.IsVisible = value;
         cancelOperation.IsEnabled = value;
         overlayCanvas.SetPlaybackPosition(position, !value && !playing); RefreshActions();
     }
 
-    void OnClosing(object? sender, CancelEventArgs args)
+    void OnClosing(object? sender, WindowClosingEventArgs args)
     {
         if (allowClose) return;
         if (busy)
         {
             args.Cancel = true; pendingClose = true; CancelCurrentOperation(); return;
         }
-        if (savingBeforeClose) { args.Cancel = true; return; }
+        if (savingBeforeClose || promptingClose) { args.Cancel = true; return; }
         PausePlayback(); overlayCanvas.EndTextEditing(true);
         if (!document.IsDirty) return;
-        var answer = AppDialog.Show(this, I18n.T("尚有未儲存的影片專案變更。是否儲存？"), I18n.T("影片編輯"), MessageBoxButton.YesNoCancel);
-        if (answer == MessageBoxResult.No) return;
-        args.Cancel = true;
-        if (answer != MessageBoxResult.Yes) return;
-        savingBeforeClose = true;
-        _ = Dispatcher.BeginInvoke(new Action(async () =>
+        // Ask after the close request returns; a modal prompt must not run inside the platform's close callback.
+        args.Cancel = true; promptingClose = true;
+        Dispatcher.UIThread.Post(async () =>
         {
+            var answer = MessageBox.Show(this, I18n.T("尚有未儲存的影片專案變更。是否儲存？"), I18n.T("影片編輯"), MessageBoxButton.YesNoCancel);
+            promptingClose = false;
+            if (closed) return;
+            if (answer == MessageBoxResult.No) { allowClose = true; Close(); return; }
+            if (answer != MessageBoxResult.Yes) return;
+            savingBeforeClose = true;
             var saved = await SaveProjectAsync(); savingBeforeClose = false;
             if (saved && !closed) { allowClose = true; Close(); }
-        }));
+        });
     }
 
-    void WindowKeyDown(object sender, KeyEventArgs args)
+    void WindowKeyDown(object? sender, KeyEventArgs args)
     {
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && args.Key == Key.S)
+        if (args.KeyModifiers.HasFlag(KeyModifiers.Control) && args.Key == Key.S)
         { args.Handled = true; if (!busy) _ = SaveProjectAsync(); return; }
-        if (args.OriginalSource is TextBox || Keyboard.FocusedElement is TextBox) return;
+        if (args.Source is TextBox || FocusManager?.GetFocusedElement() is TextBox) return;
         if (args.Key == Key.Space) { TogglePlayback(); args.Handled = true; }
         else if (args.Key == Key.Delete && !busy) { DeleteSelection(); args.Handled = true; }
     }
 
     void RefreshActions()
     {
-        play.IsEnabled = mediaReady && !busy; play.Content = I18n.T(playing ? "暫停" : "播放");
-        play.ToolTip = play.Content; System.Windows.Automation.AutomationProperties.SetName(play, (string)play.Content);
+        play.IsEnabled = mediaReady && player is not null && !busy;
+        var label = I18n.T(playing ? "暫停" : "播放");
+        play.Content = label; ToolTip.SetTip(play, label); AutomationProperties.SetName(play, label);
         addText.IsEnabled = !busy && document.Overlays.Count < VideoEditDocument.MaximumOverlays;
         addImage.IsEnabled = addText.IsEnabled;
     }
@@ -586,18 +661,18 @@ public sealed partial class VideoEditorWindow : Window
         try
         {
             var overlay = overlayCanvas.Selected;
-            properties.Visibility = overlay is null ? Visibility.Collapsed : Visibility.Visible;
-            emptyProperties.Visibility = overlay is null ? Visibility.Visible : Visibility.Collapsed;
+            properties.IsVisible = overlay is not null;
+            emptyProperties.IsVisible = overlay is null;
             if (overlay is null) { objectList.SelectedItem = null; return; }
-            textProperties.Visibility = overlay.Kind == VideoOverlayKind.Text ? Visibility.Visible : Visibility.Collapsed;
-            editText.Visibility = overlay.Kind == VideoOverlayKind.Text ? Visibility.Visible : Visibility.Collapsed;
+            textProperties.IsVisible = overlay.Kind == VideoOverlayKind.Text;
+            editText.IsVisible = overlay.Kind == VideoOverlayKind.Text;
             x.Text = Number(overlay.X); y.Text = Number(overlay.Y);
             objectWidth.Text = Number(overlay.Width); objectHeight.Text = Number(overlay.Height);
             fontSize.Text = Number(overlay.FontSize); color.Text = overlay.ColorHex;
             entireVideo.IsChecked = overlay.ShowEntireVideo;
             objectStart.Text = FormatTime(overlay.Start); objectEnd.Text = FormatTime(overlay.End);
             objectStart.IsEnabled = !overlay.ShowEntireVideo; objectEnd.IsEnabled = !overlay.ShowEntireVideo;
-            objectList.SelectedItem = objectList.Items.Cast<ListBoxItem>().FirstOrDefault(item => item.Tag == overlay);
+            objectList.SelectedItem = objectList.Items.OfType<ListBoxItem>().FirstOrDefault(item => item.Tag == overlay);
         }
         finally { synchronizing = previous; }
     }
@@ -613,10 +688,12 @@ public sealed partial class VideoEditorWindow : Window
                 var caption = overlay.Kind == VideoOverlayKind.Text ? overlay.Text.Replace("\r", "").Replace("\n", " ") : I18n.T("圖片");
                 if (string.IsNullOrWhiteSpace(caption)) caption = I18n.T("文字");
                 var row = new DockPanel();
-                row.Children.Add(new TextBlock { Text = overlay.Kind == VideoOverlayKind.Text ? "T" : "\uEB9F",
-                    FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), Width = 24, Foreground = Resource<Brush>("Muted") });
-                row.Children.Add(new TextBlock { Text = caption, TextTrimming = TextTrimming.CharacterEllipsis });
-                var item = new ListBoxItem { Tag = overlay, Content = row, ToolTip = caption };
+                var glyph = new Border { Width = 24, Child = Icons.Create(overlay.Kind == VideoOverlayKind.Text ? IconKind.TextT : IconKind.Image,
+                    14, ThemeService.Brush("Muted")), HorizontalAlignment = HorizontalAlignment.Left };
+                DockPanel.SetDock(glyph, Dock.Left);
+                row.Children.Add(glyph);
+                row.Children.Add(new TextBlock { Text = caption, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center });
+                var item = CreateListItem(row); item.Tag = overlay; ToolTip.SetTip(item, caption);
                 objectList.Items.Add(item); if (overlay == selected) objectList.SelectedItem = item;
             }
         }
@@ -625,22 +702,23 @@ public sealed partial class VideoEditorWindow : Window
 
     void UpdatePreviewScale()
     {
-        var scale = Math.Min(previewHost.ActualWidth / document.Source.Width, previewHost.ActualHeight / document.Source.Height);
-        overlayCanvas.SetScreenScale(scale);
+        var size = previewHost.Bounds.Size;
+        var scale = Math.Min(size.Width / document.Source.Width, size.Height / document.Source.Height);
+        overlayCanvas.SetScreenScale(double.IsFinite(scale) && scale > 0 ? scale : 1);
     }
 
     void ShowStatus(string key, bool error = false, params object?[] values)
     {
         statusKey = key; statusValues = values; statusError = error;
         status.Text = values.Length == 0 ? I18n.T(key) : I18n.F(key, values);
-        status.Foreground = error ? Resource<Brush>("Error") : Resource<Brush>("Muted");
+        status.Foreground = error ? ThemeService.Brush("Error") : ThemeService.Brush("Muted");
     }
 
     void LanguageChanged(object? sender, EventArgs args)
     {
         if (closed) return;
-        if (Dispatcher.CheckAccess()) ApplyLanguage();
-        else _ = Dispatcher.BeginInvoke(new Action(ApplyLanguage));
+        if (Dispatcher.UIThread.CheckAccess()) ApplyLanguage();
+        else Dispatcher.UIThread.Post(ApplyLanguage);
     }
 
     void ApplyLanguage()
@@ -648,8 +726,9 @@ public sealed partial class VideoEditorWindow : Window
         if (closed) return;
         foreach (var (control, key) in localizedText) control.Text = I18n.T(key);
         foreach (var (control, key) in localizedContent) control.Content = I18n.T(key);
-        foreach (var (control, key) in localizedNames) { control.ToolTip = I18n.T(key); System.Windows.Automation.AutomationProperties.SetName(control, I18n.T(key)); }
+        foreach (var (control, key) in localizedNames) { ToolTip.SetTip(control, I18n.T(key)); AutomationProperties.SetName(control, I18n.T(key)); }
         trimRange.SetLabels(I18n.T("裁切片頭"), I18n.T("裁切片尾"));
+        RefreshPreviewNotice();
         RefreshTitle(); RefreshTimeline(); RefreshObjectList(); RefreshInspector(); RefreshActions();
         if (busy)
         {
@@ -661,13 +740,13 @@ public sealed partial class VideoEditorWindow : Window
 
     void AttachField(TextBox field, Action commit)
     {
-        field.GotKeyboardFocus += (_, _) => { if (!synchronizing && !busy) PausePlayback(); };
-        field.LostKeyboardFocus += (_, _) => commit();
-        field.PreviewKeyDown += (_, args) =>
+        field.GotFocus += (_, _) => { if (!synchronizing && !busy) PausePlayback(); };
+        field.LostFocus += (_, _) => commit();
+        field.AddHandler(KeyDownEvent, (_, args) =>
         {
             if (args.Key == Key.Enter) { commit(); args.Handled = true; }
             else if (args.Key == Key.Escape) { RefreshTimeline(); RefreshInspector(); args.Handled = true; }
-        };
+        }, RoutingStrategies.Tunnel);
     }
 
     static string Number(double value) => value.ToString("0.##", CultureInfo.CurrentCulture);

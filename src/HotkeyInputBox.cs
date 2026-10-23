@@ -1,18 +1,21 @@
-using System.Windows.Input;
+using Avalonia.Input;
 using SnipFlow.Services;
 
 namespace SnipFlow;
 
 public sealed class HotkeyInputBox : TextBox
 {
-    public string Shortcut => Text;
+    public string Shortcut => Text ?? "";
+
+    protected override Type StyleKeyOverride => typeof(TextBox);
 
     public HotkeyInputBox(string shortcut)
     {
         Text = shortcut; IsReadOnly = true;
-        FontFamily = new FontFamily("Consolas");
+        FontFamily = UiThemes.MonoFont;
         HorizontalContentAlignment = HorizontalAlignment.Center;
-        GotKeyboardFocus += (_, _) => SelectAll();
+        TextAlignment = TextAlignment.Center;
+        GotFocus += (_, _) => SelectAll();
     }
 
     public void SetGesture(HotkeyGesture gesture)
@@ -20,11 +23,10 @@ public sealed class HotkeyInputBox : TextBox
         Text = gesture.ToString(); SelectAll();
     }
 
-    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    protected override void OnKeyDown(KeyEventArgs e)
     {
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (key is Key.Tab or Key.Escape) { base.OnPreviewKeyDown(e); return; }
+        if (e.Key is Key.Tab or Key.Escape) { base.OnKeyDown(e); return; }
         e.Handled = true;
-        if (HotkeyGesture.TryCreate(Keyboard.Modifiers, key, out var gesture)) SetGesture(gesture);
+        if (HotkeyGesture.TryCreate(e.KeyModifiers, e.Key, out var gesture)) SetGesture(gesture);
     }
 }

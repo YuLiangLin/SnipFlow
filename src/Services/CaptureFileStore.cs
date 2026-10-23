@@ -7,7 +7,7 @@ public static class CaptureFileStore
         SettingsStore.NormalizeCaptureSaveDirectory(directory),
         $"SnipFlow_{DateTime.Now:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}.png");
 
-    public static void Save(BitmapSource image, string path)
+    public static void Save(Bitmap image, string path)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";

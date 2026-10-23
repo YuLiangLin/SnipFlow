@@ -1,7 +1,7 @@
 using System.Globalization;
-using System.Windows.Automation;
-using System.Windows.Controls.Primitives;
-using System.Windows.Input;
+using Avalonia.Automation;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using SnipFlow.Services;
 
 namespace SnipFlow.Editor;
@@ -19,9 +19,9 @@ public sealed class ColorPaletteView : Border
         "#312E81", "#6366F1", "#8B5CF6", "#A78BFA", "#C084FC", "#D946EF", "#EC4899", "#F9A8D4"
     };
 
-    readonly TextBox hexBox = new() { MaxLength = 7, FontFamily = new FontFamily("Consolas"), Padding = new Thickness(8, 5, 8, 5), VerticalContentAlignment = VerticalAlignment.Center };
+    readonly TextBox hexBox = new() { MaxLength = 7, FontFamily = UiThemes.MonoFont, Padding = new Thickness(8, 5, 8, 5), VerticalContentAlignment = VerticalAlignment.Center };
     readonly Border preview = new() { Width = 32, Height = 32, CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 8, 0) };
-    readonly TextBlock feedback = new() { FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 0), Visibility = Visibility.Collapsed };
+    readonly TextBlock feedback = new() { FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 0), IsVisible = false };
     readonly Slider[] channels = new Slider[3];
     readonly TextBlock[] channelValues = new TextBlock[3];
     Color draft;
@@ -33,9 +33,9 @@ public sealed class ColorPaletteView : Border
     public ColorPaletteView(Color selected, IEnumerable<string> recent)
     {
         Width = 310; Padding = new Thickness(16); CornerRadius = new CornerRadius(12);
-        Background = Theme("Panel"); BorderBrush = Theme("Line"); BorderThickness = new Thickness(1);
-        SnapsToDevicePixels = UseLayoutRounding = true;
-        preview.BorderBrush = Theme("Muted"); feedback.Foreground = Theme("Ink");
+        Background = ThemeBrush("Panel"); BorderBrush = ThemeBrush("Line"); BorderThickness = new Thickness(1);
+        UseLayoutRounding = true;
+        preview.BorderBrush = ThemeBrush("Muted"); feedback.Foreground = ThemeBrush("Ink");
         var content = new StackPanel();
         Child = new ScrollViewer { Content = content, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         content.Children.Add(Heading("常用色彩"));
@@ -46,18 +46,18 @@ public sealed class ColorPaletteView : Border
             content.Children.Add(Heading("最近使用", 12));
             content.Children.Add(Swatches(recentColors, selected));
         }
-        content.Children.Add(new Border { Height = 1, Background = Theme("Line"), Margin = new Thickness(0, 14, 0, 0) });
+        content.Children.Add(new Border { Height = 1, Background = ThemeBrush("Line"), Margin = new Thickness(0, 14, 0, 0) });
         content.Children.Add(Heading("自訂色彩", 12));
         var hexRow = new DockPanel();
         DockPanel.SetDock(preview, Dock.Left); hexRow.Children.Add(preview); hexRow.Children.Add(hexBox);
-        hexBox.ToolTip = I18n.T("HEX 色碼"); AutomationProperties.SetName(hexBox, I18n.T("HEX 色碼"));
+        ToolTip.SetTip(hexBox, I18n.T("HEX 色碼")); AutomationProperties.SetName(hexBox, I18n.T("HEX 色碼"));
         content.Children.Add(hexRow); content.Children.Add(feedback);
         for (int index = 0; index < channels.Length; index++)
         {
             string name = new[] { "R", "G", "B" }[index];
             var row = new DockPanel { Margin = new Thickness(0, 9, 0, 0) };
-            var label = new TextBlock { Text = name, Width = 20, Foreground = Theme("Muted"), VerticalAlignment = VerticalAlignment.Center };
-            var value = new TextBlock { Width = 30, TextAlignment = TextAlignment.Right, Foreground = Theme("Muted"), VerticalAlignment = VerticalAlignment.Center };
+            var label = new TextBlock { Text = name, Width = 20, Foreground = ThemeBrush("Muted"), VerticalAlignment = VerticalAlignment.Center };
+            var value = new TextBlock { Width = 30, TextAlignment = TextAlignment.Right, Foreground = ThemeBrush("Muted"), VerticalAlignment = VerticalAlignment.Center };
             var slider = new Slider { Minimum = 0, Maximum = 255, TickFrequency = 1, IsSnapToTickEnabled = true, VerticalAlignment = VerticalAlignment.Center };
             DockPanel.SetDock(label, Dock.Left); DockPanel.SetDock(value, Dock.Right);
             row.Children.Add(label); row.Children.Add(value); row.Children.Add(slider); content.Children.Add(row);
@@ -65,21 +65,21 @@ public sealed class ColorPaletteView : Border
             AutomationProperties.SetName(slider, "RGB " + name);
             slider.ValueChanged += ChannelChanged;
         }
-        var apply = new Button { Content = I18n.T("套用"), Style = (Style)Application.Current.FindResource("Primary"), Margin = new Thickness(0, 14, 0, 0), HorizontalAlignment = HorizontalAlignment.Right, MinWidth = 72 };
+        var apply = new Button { Content = I18n.T("套用"), Margin = new Thickness(0, 14, 0, 0), HorizontalAlignment = HorizontalAlignment.Right, MinWidth = 72 }.WithTheme("Primary");
         apply.Click += (_, _) => ApplyDraft(); content.Children.Add(apply);
         Synchronize(selected, updateHex: true);
         hexBox.TextChanged += (_, _) =>
         {
             if (!synchronizing && TryParseHex(hexBox.Text, out var color)) Synchronize(color, updateHex: false);
         };
-        PreviewKeyDown += PaletteKeyDown;
+        AddHandler(KeyDownEvent, PaletteKeyDown, RoutingStrategies.Tunnel);
     }
 
-    static Brush Theme(string key) => (Brush)Application.Current.FindResource(key);
+    static IBrush ThemeBrush(string key) => ThemeService.Brush(key);
     static TextBlock Heading(string key, double top = 0) => new()
     {
-        Text = I18n.T(key), FontSize = 12, FontWeight = FontWeights.SemiBold,
-        Foreground = Theme("Ink"), Margin = new Thickness(0, top, 0, 8)
+        Text = I18n.T(key), FontSize = 12, FontWeight = FontWeight.SemiBold,
+        Foreground = ThemeBrush("Ink"), Margin = new Thickness(0, top, 0, 8)
     };
 
     UniformGrid Swatches(IEnumerable<string> values, Color selected)
@@ -91,17 +91,18 @@ public sealed class ColorPaletteView : Border
             if (!TryParseHex(hex, out var color)) continue;
             var button = new Button
             {
-                Style = (Style)Application.Current.FindResource("ColorSwatch"), Background = new SolidColorBrush(color),
-                Width = 28, Height = 26, Margin = new Thickness(2, 2, 2, 2), ToolTip = ToHex(color),
-                BorderBrush = Theme(color == selected ? "Accent" : "Muted"), BorderThickness = new Thickness(color == selected ? 2 : 1)
-            };
+                Background = new SolidColorBrush(color),
+                Width = 28, Height = 26, Margin = new Thickness(2, 2, 2, 2),
+                BorderBrush = ThemeBrush(color == selected ? "Accent" : "Muted"), BorderThickness = new Thickness(color == selected ? 2 : 1)
+            }.WithTheme("ColorSwatch");
+            ToolTip.SetTip(button, ToHex(color));
             AutomationProperties.SetName(button, ToHex(color));
             button.Click += (_, _) => ColorChosen?.Invoke(color); grid.Children.Add(button);
         }
         return grid;
     }
 
-    void ChannelChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    void ChannelChanged(object? sender, RangeBaseValueChangedEventArgs e)
     {
         if (synchronizing) return;
         Synchronize(Color.FromRgb((byte)channels[0].Value, (byte)channels[1].Value, (byte)channels[2].Value), updateHex: true);
@@ -120,7 +121,7 @@ public sealed class ColorPaletteView : Border
             {
                 channels[i].Value = values[i]; channelValues[i].Text = values[i].ToString(CultureInfo.InvariantCulture);
             }
-            feedback.Visibility = Visibility.Collapsed;
+            feedback.IsVisible = false;
         }
         finally { synchronizing = false; }
     }
@@ -130,15 +131,15 @@ public sealed class ColorPaletteView : Border
         if (TryParseHex(hexBox.Text, out var color)) ColorChosen?.Invoke(color);
         else
         {
-            feedback.Text = I18n.T("請輸入六位 HEX 色碼，例如 #3B82F6。"); feedback.Visibility = Visibility.Visible;
+            feedback.Text = I18n.T("請輸入六位 HEX 色碼，例如 #3B82F6。"); feedback.IsVisible = true;
             hexBox.Focus(); hexBox.SelectAll();
         }
     }
 
-    void PaletteKeyDown(object sender, KeyEventArgs e)
+    void PaletteKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Escape) { Cancelled?.Invoke(); e.Handled = true; }
-        else if (e.Key == Key.Enter && Keyboard.FocusedElement is not Button) { ApplyDraft(); e.Handled = true; }
+        else if (e.Key == Key.Enter && TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is not Button) { ApplyDraft(); e.Handled = true; }
     }
 
     public void FocusInput() { hexBox.Focus(); hexBox.SelectAll(); }

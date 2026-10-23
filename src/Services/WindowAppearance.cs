@@ -1,55 +1,53 @@
-using System;
-using System.Runtime.InteropServices;
-using System.Windows;
-using System.Windows.Interop;
-
 namespace SnipFlow.Services;
 
-public static class WindowAppearance
+/// <summary>
+/// Native window frame styling that follows the app theme. On Windows 11 this sets the DWM
+/// dark mode, rounded corners and border/caption colors; other platforms draw their own frames
+/// (SnipFlow windows are frameless), so there is nothing to apply.
+/// </summary>
+public static partial class WindowAppearance
 {
+    static readonly List<WeakReference<Window>> Tracked = new();
+    static bool listening;
+
     public static void Apply(Window window)
     {
         ArgumentNullException.ThrowIfNull(window);
-        var handle = new WindowInteropHelper(window).Handle;
-        if (handle == IntPtr.Zero)
+        Track(window);
+        if (window.TryGetPlatformHandle() is null)
         {
-            window.SourceInitialized -= SourceInitialized;
-            window.SourceInitialized += SourceInitialized;
+            window.Opened -= Opened;
+            window.Opened += Opened;
             return;
         }
-
-        // Windows 10 ignores unsupported attributes; custom chrome remains usable.
-        var dark = ThemeService.IsDark;
-        var enabled = dark ? 1 : 0;
-        if (DwmSetWindowAttribute(handle, 20, ref enabled, sizeof(int)) < 0)
-            DwmSetWindowAttribute(handle, 19, ref enabled, sizeof(int));
-
-        var roundedCorners = 2;
-        DwmSetWindowAttribute(handle, 33, ref roundedCorners, sizeof(int));
-        var border = ResourceColorRef("Line");
-        var caption = ResourceColorRef("Panel");
-        var text = ResourceColorRef("Ink");
-        DwmSetWindowAttribute(handle, 34, ref border, sizeof(int));
-        DwmSetWindowAttribute(handle, 35, ref caption, sizeof(int));
-        DwmSetWindowAttribute(handle, 36, ref text, sizeof(int));
+        ApplyNative(window);
     }
 
-    private static int ResourceColorRef(string key)
-    {
-        // Read the published palette directly; WPF bindings may still be queued
-        // when native caption colors are applied during a theme change.
-        var color = ThemeService.Colors[key];
-        // DWM takes COLORREF (0x00BBGGRR), not WPF's ARGB representation.
-        return color.R | (color.G << 8) | (color.B << 16);
-    }
+    static partial void ApplyNative(Window window);
 
-    private static void SourceInitialized(object? sender, EventArgs e)
+    static void Opened(object? sender, EventArgs e)
     {
         if (sender is not Window window) return;
-        window.SourceInitialized -= SourceInitialized;
-        Apply(window);
+        window.Opened -= Opened;
+        ApplyNative(window);
     }
 
-    [DllImport("dwmapi.dll", PreserveSig = true)]
-    private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+    static void Track(Window window)
+    {
+        lock (Tracked)
+        {
+            Tracked.RemoveAll(reference => !reference.TryGetTarget(out _));
+            if (!Tracked.Any(reference => reference.TryGetTarget(out var existing) && ReferenceEquals(existing, window)))
+                Tracked.Add(new WeakReference<Window>(window));
+            if (listening) return;
+            listening = true;
+        }
+        ThemeService.Changed += (_, _) =>
+        {
+            Window[] windows;
+            lock (Tracked) windows = Tracked.Select(reference => reference.TryGetTarget(out var target) ? target : null).OfType<Window>().ToArray();
+            foreach (var target in windows)
+                if (target.TryGetPlatformHandle() is not null) ApplyNative(target);
+        };
+    }
 }

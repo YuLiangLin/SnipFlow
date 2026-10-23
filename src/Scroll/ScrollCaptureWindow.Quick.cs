@@ -15,7 +15,7 @@ public sealed partial class ScrollCaptureWindow
 
     private StackPanel CreateFinishNotice()
     {
-        var panel = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 10, 0, 0) };
+        var panel = new StackPanel { IsVisible = false, Margin = new Thickness(0, 10, 0, 0) };
         _finishNoticeText = new TextBlock
         {
             Foreground = Brush("Warning"), TextWrapping = TextWrapping.Wrap,
@@ -42,16 +42,17 @@ public sealed partial class ScrollCaptureWindow
         return panel;
     }
 
-    private void HideFinishNotice() => _finishNotice.Visibility = Visibility.Collapsed;
+    private void HideFinishNotice() => _finishNotice.IsVisible = false;
 
     private void ShowFinishNotice()
     {
         _userPaused = true;
+        ExpandToolbar();
         _finishNoticeText.Text = I18n.T(_unmatchedRaw is not null
             ? "有畫面尚未對齊，不會加入長圖。請處理接縫，或只完成已收集內容。"
             : "已達上限，新畫面未加入。可微調範圍，或只完成已收集內容。");
         _resolveFinishButton.Content = new TextBlock { Text = I18n.T(_unmatchedRaw is not null ? "處理接縫" : "微調範圍") };
-        _finishNotice.Visibility = Visibility.Visible;
+        _finishNotice.IsVisible = true;
         SetStatus("部分畫面尚未加入；請確認後完成。", warning: true);
     }
 
@@ -79,14 +80,15 @@ public sealed partial class ScrollCaptureWindow
     private bool CanInspectFinalTarget()
     {
         if (_closed) return false;
-        return _target.CanObserve(_handle, _toolbarExcluded, out _, allowToolbarForeground: true);
+        // Without a running screen stream (Wayland) a final capture would ask the screenshot portal.
+        return IsLiveCaptureRunning() && CanObserveTarget(out _, allowToolbarForeground: true);
     }
 
     private async Task CollectFinalViewportAsync()
     {
         if (!CanInspectFinalTarget()) return;
-        var raw = ScreenshotService.CaptureRectangle(_targetBounds);
-        if (!CanInspectFinalTarget()) return;
+        var raw = await CaptureTargetAsync();
+        if (!CanInspectFinalTarget() || raw.PixelSize != _frameSize) return;
         var body = Crop(raw);
         var anchor = Crop(_anchorRaw ?? _frames[^1]);
         var anchorPosition = _anchorPosition;
@@ -114,7 +116,7 @@ public sealed partial class ScrollCaptureWindow
     private async Task FinishAsync(bool allowIncompleteTail = false)
     {
         if (_finishing || _pickingBoundary || _closed || _frames.Count == 0 || !HasFinishRange
-            || _manualPanel.Visibility == Visibility.Visible) return;
+            || _manualPanel.IsVisible) return;
         var wasCollecting = !_userPaused && _rangeEnd is null;
         _finishing = true;
         _timer.Stop();
@@ -142,7 +144,7 @@ public sealed partial class ScrollCaptureWindow
             }
             SetStatus("正在產生長截圖…");
             var firstDocumentRow = checked(_positions[0] + _topTrim);
-            var lastDocumentRow = checked(_positions[^1] + _targetBounds.Height - _bottomTrim);
+            var lastDocumentRow = checked(_positions[^1] + FrameHeight - _bottomTrim);
             var firstRow = checked((_rangeStart ?? firstDocumentRow) - firstDocumentRow);
             var endRow = checked((_rangeEnd ?? lastDocumentRow) - firstDocumentRow);
             var frames = _frames.Select(Crop).ToArray();

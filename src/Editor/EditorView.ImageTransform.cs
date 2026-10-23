@@ -1,6 +1,4 @@
 using SnipFlow.Services;
-using WpfPoint = System.Windows.Point;
-using WpfRect = System.Windows.Rect;
 
 namespace SnipFlow.Editor;
 
@@ -21,6 +19,8 @@ public sealed partial class EditorView
         var prepared = _annotations.Select(item => item.Clone()).ToList();
         foreach (var item in prepared) ValidateTransformAnnotation(item);
         var board = _image;
+        var boardWidth = board.PixelSize.Width;
+        var boardHeight = board.PixelSize.Height;
         if (transformSelection)
         {
             foreach (var index in imageIndices)
@@ -33,16 +33,16 @@ public sealed partial class EditorView
                 var width = ImageOrientation.SwapsAxes(orientation) ? bounds.Height : bounds.Width;
                 var height = ImageOrientation.SwapsAxes(orientation) ? bounds.Width : bounds.Height;
                 // Keep the center and scale when possible; fit the entire image inside this board.
-                var scale = Math.Min(1, Math.Min(board.PixelWidth / width, board.PixelHeight / height));
+                var scale = Math.Min(1, Math.Min(boardWidth / width, boardHeight / height));
                 width *= scale;
                 height *= scale;
-                var left = Math.Clamp(bounds.X + bounds.Width / 2 - width / 2, 0, Math.Max(0, board.PixelWidth - width));
-                var top = Math.Clamp(bounds.Y + bounds.Height / 2 - height / 2, 0, Math.Max(0, board.PixelHeight - height));
-                item.Start = new WpfPoint(left, top);
-                item.End = new WpfPoint(left + width, top + height);
+                var left = Math.Clamp(bounds.X + bounds.Width / 2 - width / 2, 0, Math.Max(0, boardWidth - width));
+                var top = Math.Clamp(bounds.Y + bounds.Height / 2 - height / 2, 0, Math.Max(0, boardHeight - height));
+                item.Start = new Point(left, top);
+                item.End = new Point(left + width, top + height);
             }
             // A moved image changes the pixels beneath a mask. Prepare replacement masks off-state.
-            BitmapSource? pixelCache = null;
+            PixelBuffer? pixelCache = null;
             foreach (var item in prepared.Where(item => item.Tool == AnnotationTool.Mosaic))
             {
                 var start = item.Start;
@@ -54,8 +54,11 @@ public sealed partial class EditorView
         }
         else
         {
-            var matrix = ImageOrientation.InFrame(orientation, board.PixelWidth, board.PixelHeight);
-            board = ImageOrientation.TransformBitmap(board, orientation);
+            var matrix = ImageOrientation.InFrame(orientation, boardWidth, boardHeight);
+            // A blank collage board stays a shared blank board; only its dimensions change.
+            board = IsBoard(board)
+                ? CreateBoard(ImageOrientation.SwapsAxes(orientation) ? boardHeight : boardWidth, ImageOrientation.SwapsAxes(orientation) ? boardWidth : boardHeight)
+                : ImageOrientation.TransformBitmap(board, orientation);
             foreach (var item in prepared)
             {
                 if (item.Tool == AnnotationTool.Text)
@@ -107,16 +110,16 @@ public sealed partial class EditorView
             ValidateTransformBounds(item.Bounds);
     }
 
-    private static void ValidateTransformPoint(WpfPoint point)
+    private static void ValidateTransformPoint(Point point)
     {
         if (!double.IsFinite(point.X) || !double.IsFinite(point.Y)
             || Math.Abs(point.X) > 1_000_000 || Math.Abs(point.Y) > 1_000_000)
             throw new InvalidOperationException(I18n.T("圖面座標超出可旋轉或翻轉的範圍。"));
     }
 
-    private static void ValidateTransformBounds(WpfRect bounds)
+    private static void ValidateTransformBounds(Rect bounds)
     {
-        if (bounds.IsEmpty || !double.IsFinite(bounds.Width) || !double.IsFinite(bounds.Height)
+        if (!double.IsFinite(bounds.Width) || !double.IsFinite(bounds.Height)
             || bounds.Width <= 0 || bounds.Height <= 0)
             throw new InvalidOperationException(I18n.T("圖面座標超出可旋轉或翻轉的範圍。"));
         ValidateTransformPoint(bounds.TopLeft);

@@ -1,16 +1,21 @@
 using System.Runtime.InteropServices;
-using System.Text;
+using System.Runtime.InteropServices.Marshalling;
 
 namespace SnipFlow.Services;
 
-/// <summary>Owns the main HWND's Shell identity without replacing WPF's native icons.</summary>
-internal sealed class TaskbarIdentityService
+/// <summary>Owns the main HWND's Shell identity without replacing Avalonia's native icons.</summary>
+/// <remarks>
+/// SnipFlow disables built-in COM interop (BuiltInComInteropSupport=false), so the Shell interfaces
+/// below use source-generated COM wrappers instead of [ComImport] runtime callable wrappers.
+/// </remarks>
+internal sealed unsafe partial class TaskbarIdentityService
 {
     // Matches Velopack's packId=SnipFlow shortcut identity, including portable fallback.
     const string DefaultAppId = "velopack.SnipFlow";
     static readonly Guid AppProperties = new("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
     static readonly PropertyKey[] Keys = { new(AppProperties, 2), new(AppProperties, 3), new(AppProperties, 4), new(AppProperties, 5) };
     static readonly PropertyKey LinkTarget = new(new Guid("B9B4B3FC-2B51-4A42-B5D8-324146AFCF25"), 2);
+    static readonly StrategyBasedComWrappers ComWrappers = new();
     internal IReadOnlyList<string> NotificationPaths { get; private set; } = Array.Empty<string>();
 
     internal bool TryApply(IntPtr handle)
@@ -27,8 +32,8 @@ internal sealed class TaskbarIdentityService
             var (appId, shortcut) = ReadOwnedShortcut(executable, launcher);
             var values = new[] { $"\"{launcher}\"", icon + ",0", "SnipFlow", appId ?? DefaultAppId };
             var iid = typeof(IPropertyStore).GUID;
-            Check(SHGetPropertyStoreForWindow(handle, ref iid, out store), "SHGetPropertyStoreForWindow");
-            if (store == null) throw new COMException("The window property store is unavailable.");
+            Check(SHGetPropertyStoreForWindow(handle, in iid, out var pointer), "SHGetPropertyStoreForWindow");
+            store = Wrap<IPropertyStore>(pointer) ?? throw new COMException("The window property store is unavailable.");
             for (int index = 0; index < Keys.Length; index++)
             {
                 var key = Keys[index];
@@ -64,12 +69,12 @@ internal sealed class TaskbarIdentityService
         finally
         {
             for (int index = 0; index < previous.Length; index++) ClearVariant(ref previous[index]);
-            ReleaseStore(store);
+            ReleaseObject(store);
         }
     }
 
     // Called from WM_DESTROY while the HWND is still valid, not from Closed after
-    // WPF disposes HwndSource. Shell-owned property allocations must be released.
+    // the platform window is gone. Shell-owned property allocations must be released.
     internal static void Clear(IntPtr handle)
     {
         if (handle == IntPtr.Zero || !IsWindow(handle)) return;
@@ -77,7 +82,8 @@ internal sealed class TaskbarIdentityService
         try
         {
             var iid = typeof(IPropertyStore).GUID;
-            Check(SHGetPropertyStoreForWindow(handle, ref iid, out store), "SHGetPropertyStoreForWindow during destruction");
+            Check(SHGetPropertyStoreForWindow(handle, in iid, out var pointer), "SHGetPropertyStoreForWindow during destruction");
+            store = Wrap<IPropertyStore>(pointer);
             if (store == null) return;
             foreach (var originalKey in Keys)
             {
@@ -88,7 +94,7 @@ internal sealed class TaskbarIdentityService
             }
         }
         catch (Exception error) { SettingsStore.Log(error); }
-        finally { ReleaseStore(store); }
+        finally { ReleaseObject(store); }
     }
 
     static (string? AppId, string? Path) ReadOwnedShortcut(string executable, string launcher)
@@ -103,8 +109,8 @@ internal sealed class TaskbarIdentityService
         try
         {
             var iid = typeof(IPropertyStore).GUID;
-            Check(SHGetPropertyStoreFromParsingName(shortcut, IntPtr.Zero, 0, ref iid, out store), "Read the SnipFlow shortcut");
-            if (store == null) throw new COMException("The shortcut property store is unavailable.");
+            Check(SHGetPropertyStoreFromParsingName(shortcut, IntPtr.Zero, 0, in iid, out var pointer), "Read the SnipFlow shortcut");
+            store = Wrap<IPropertyStore>(pointer) ?? throw new COMException("The shortcut property store is unavailable.");
             var target = ReadString(store, LinkTarget);
             if (string.IsNullOrWhiteSpace(target) || !Path.IsPathFullyQualified(target)) return (null, null);
             var resolved = StartupService.ResolveExistingFile(target);
@@ -114,7 +120,7 @@ internal sealed class TaskbarIdentityService
             if (string.IsNullOrWhiteSpace(appId) || appId.Length > 128 || appId.Any(value => char.IsWhiteSpace(value) || char.IsControl(value))) appId = null;
             return (appId, StartupService.ResolveExistingFile(shortcut));
         }
-        finally { ReleaseStore(store); }
+        finally { ReleaseObject(store); }
     }
 
     static void RepairOwnedShortcut(string shortcut, string executable, string launcher, string icon)
@@ -191,8 +197,8 @@ internal sealed class TaskbarIdentityService
         {
             var classId = new Guid("00021401-0000-0000-C000-000000000046");
             var iid = typeof(IShellLink).GUID;
-            Check(CoCreateInstance(ref classId, IntPtr.Zero, 1, ref iid, out link), "Create the Shell link reader");
-            if (link == null) throw new COMException("The Shell link reader is unavailable.");
+            Check(CoCreateInstance(in classId, IntPtr.Zero, 1, in iid, out var pointer), "Create the Shell link reader");
+            link = Wrap<IShellLink>(pointer) ?? throw new COMException("The Shell link reader is unavailable.");
             Check(((IPersistLink)link).Load(path, 0), "Load the shortcut");
             return link;
         }
@@ -201,13 +207,19 @@ internal sealed class TaskbarIdentityService
 
     static LinkData ReadLink(IShellLink link)
     {
-        var path = new StringBuilder(32_768); var arguments = new StringBuilder(32_768);
-        var icon = new StringBuilder(32_768); var workingDirectory = new StringBuilder(32_768);
-        Check(link.GetPath(path, path.Capacity, IntPtr.Zero, 4), "Read the shortcut target"); // SLGP_RAWPATH.
-        Check(link.GetArguments(arguments, arguments.Capacity), "Read the shortcut arguments");
-        Check(link.GetIconLocation(icon, icon.Capacity, out var iconIndex), "Read the shortcut icon");
-        Check(link.GetWorkingDirectory(workingDirectory, workingDirectory.Capacity), "Read the shortcut working directory");
-        return new(path.ToString(), arguments.ToString(), icon.ToString(), iconIndex, workingDirectory.ToString(), ReadString((IPropertyStore)link, Keys[^1]));
+        const int capacity = 32_768;
+        var path = new char[capacity]; var arguments = new char[capacity];
+        var icon = new char[capacity]; var workingDirectory = new char[capacity];
+        int iconIndex;
+        fixed (char* pathBuffer = path, argumentBuffer = arguments, iconBuffer = icon, directoryBuffer = workingDirectory)
+        {
+            Check(link.GetPath(pathBuffer, capacity, IntPtr.Zero, 4), "Read the shortcut target"); // SLGP_RAWPATH.
+            Check(link.GetArguments(argumentBuffer, capacity), "Read the shortcut arguments");
+            Check(link.GetIconLocation(iconBuffer, capacity, out iconIndex), "Read the shortcut icon");
+            Check(link.GetWorkingDirectory(directoryBuffer, capacity), "Read the shortcut working directory");
+            return new(new string(pathBuffer), new string(argumentBuffer), new string(iconBuffer), iconIndex, new string(directoryBuffer),
+                ReadString((IPropertyStore)link, Keys[^1]));
+        }
     }
 
     static string? ReadString(IPropertyStore store, PropertyKey key)
@@ -245,18 +257,23 @@ internal sealed class TaskbarIdentityService
         catch (Exception error) { SettingsStore.Log(error); }
     }
 
-    static void ReleaseStore(IPropertyStore? store)
-        => ReleaseObject(store);
+    /// <summary>Wraps an owned interface pointer; the wrapper takes its own reference.</summary>
+    static T? Wrap<T>(IntPtr pointer) where T : class
+    {
+        if (pointer == IntPtr.Zero) return null;
+        try { return (T)ComWrappers.GetOrCreateObjectForComInstance(pointer, CreateObjectFlags.UniqueInstance); }
+        finally { Marshal.Release(pointer); }
+    }
 
     static void ReleaseObject(object? value)
     {
-        if (value == null) return;
-        try { Marshal.ReleaseComObject(value); }
+        if (value is not ComObject com) return;
+        try { com.FinalRelease(); }
         catch (Exception error) { SettingsStore.Log(error); }
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    readonly struct PropertyKey(Guid format, uint id)
+    internal readonly struct PropertyKey(Guid format, uint id)
     {
         internal readonly Guid Format = format;
         internal readonly uint Id = id;
@@ -265,14 +282,14 @@ internal sealed class TaskbarIdentityService
     // The application targets x64. PROPVARIANT has an 8-byte header and a
     // 16-byte union (including the counted-array shape) on that architecture.
     [StructLayout(LayoutKind.Explicit, Size = 24)]
-    struct PropVariant
+    internal struct PropVariant
     {
         [FieldOffset(0)] internal ushort Type;
         [FieldOffset(8)] internal IntPtr Pointer;
     }
 
-    [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    interface IPropertyStore
+    [GeneratedComInterface, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
+    internal partial interface IPropertyStore
     {
         [PreserveSig] int GetCount(out uint count);
         [PreserveSig] int GetAt(uint index, out PropertyKey key);
@@ -281,55 +298,53 @@ internal sealed class TaskbarIdentityService
         [PreserveSig] int Commit();
     }
 
-    [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    interface IShellLink
+    [GeneratedComInterface(StringMarshalling = StringMarshalling.Utf16), Guid("000214F9-0000-0000-C000-000000000046")]
+    internal unsafe partial interface IShellLink
     {
-        [PreserveSig] int GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int capacity, IntPtr findData, uint flags);
+        [PreserveSig] int GetPath(char* path, int capacity, IntPtr findData, uint flags);
         [PreserveSig] int GetIdList(out IntPtr list);
         [PreserveSig] int SetIdList(IntPtr list);
-        [PreserveSig] int GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder description, int capacity);
-        [PreserveSig] int SetDescription([MarshalAs(UnmanagedType.LPWStr)] string description);
-        [PreserveSig] int GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int capacity);
-        [PreserveSig] int SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string path);
-        [PreserveSig] int GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder arguments, int capacity);
-        [PreserveSig] int SetArguments([MarshalAs(UnmanagedType.LPWStr)] string arguments);
+        [PreserveSig] int GetDescription(char* description, int capacity);
+        [PreserveSig] int SetDescription(string description);
+        [PreserveSig] int GetWorkingDirectory(char* path, int capacity);
+        [PreserveSig] int SetWorkingDirectory(string path);
+        [PreserveSig] int GetArguments(char* arguments, int capacity);
+        [PreserveSig] int SetArguments(string arguments);
         [PreserveSig] int GetHotkey(out ushort hotkey);
         [PreserveSig] int SetHotkey(ushort hotkey);
         [PreserveSig] int GetShowCommand(out int command);
         [PreserveSig] int SetShowCommand(int command);
-        [PreserveSig] int GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int capacity, out int index);
-        [PreserveSig] int SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string path, int index);
-        [PreserveSig] int SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
+        [PreserveSig] int GetIconLocation(char* path, int capacity, out int index);
+        [PreserveSig] int SetIconLocation(string path, int index);
+        [PreserveSig] int SetRelativePath(string path, uint reserved);
         [PreserveSig] int Resolve(IntPtr window, uint flags);
-        [PreserveSig] int SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
+        [PreserveSig] int SetPath(string path);
     }
 
-    [ComImport, Guid("0000010B-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    interface IPersistLink
+    [GeneratedComInterface(StringMarshalling = StringMarshalling.Utf16), Guid("0000010B-0000-0000-C000-000000000046")]
+    internal partial interface IPersistLink
     {
         [PreserveSig] int GetClassId(out Guid classId);
         [PreserveSig] int IsDirty();
-        [PreserveSig] int Load([MarshalAs(UnmanagedType.LPWStr)] string path, uint mode);
-        [PreserveSig] int Save([MarshalAs(UnmanagedType.LPWStr)] string path, [MarshalAs(UnmanagedType.Bool)] bool remember);
-        [PreserveSig] int SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string path);
+        [PreserveSig] int Load(string path, uint mode);
+        [PreserveSig] int Save(string path, [MarshalAs(UnmanagedType.Bool)] bool remember);
+        [PreserveSig] int SaveCompleted(string path);
         [PreserveSig] int GetCurrentFile(out IntPtr path);
     }
 
-    [DllImport("ole32.dll", ExactSpelling = true)]
-    static extern int CoCreateInstance(ref Guid classId, IntPtr outer, uint context, ref Guid iid,
-        [MarshalAs(UnmanagedType.Interface)] out IShellLink? link);
+    [LibraryImport("ole32.dll")]
+    private static partial int CoCreateInstance(in Guid classId, IntPtr outer, uint context, in Guid iid, out IntPtr instance);
 
-    [DllImport("shell32.dll", ExactSpelling = true)]
-    static extern int SHGetPropertyStoreForWindow(IntPtr window, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore? store);
+    [LibraryImport("shell32.dll")]
+    private static partial int SHGetPropertyStoreForWindow(IntPtr window, in Guid iid, out IntPtr store);
 
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
-    static extern int SHGetPropertyStoreFromParsingName([MarshalAs(UnmanagedType.LPWStr)] string path, IntPtr context, uint flags,
-        ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore? store);
+    [LibraryImport("shell32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial int SHGetPropertyStoreFromParsingName(string path, IntPtr context, uint flags, in Guid iid, out IntPtr store);
 
-    [DllImport("ole32.dll", ExactSpelling = true)]
-    static extern int PropVariantClear(ref PropVariant value);
+    [LibraryImport("ole32.dll")]
+    private static partial int PropVariantClear(ref PropVariant value);
 
-    [DllImport("user32.dll", ExactSpelling = true)]
+    [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    static extern bool IsWindow(IntPtr window);
+    private static partial bool IsWindow(IntPtr window);
 }

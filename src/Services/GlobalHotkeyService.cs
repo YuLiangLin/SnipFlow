@@ -1,72 +1,130 @@
-using System.Runtime.InteropServices;
-using System.Windows.Interop;
-
 namespace SnipFlow.Services;
 
-public sealed class GlobalHotkeyService : IDisposable
+/// <summary>How the global capture shortcut reaches SnipFlow on this desktop.</summary>
+public enum HotkeyBackend
 {
-    readonly HwndSource source;
-    int activeId;
+    /// <summary>Win32 RegisterHotKey on a message-only window.</summary>
+    RegisterHotKey,
+    /// <summary>XGrabKey on the X11 root window (X11 sessions).</summary>
+    X11,
+    /// <summary>org.freedesktop.portal.GlobalShortcuts (Wayland sessions whose portal offers it).</summary>
+    Portal,
+    /// <summary>No in-process shortcut. The desktop's own keyboard settings run <c>SnipFlow --capture</c>.</summary>
+    Desktop,
+}
+
+/// <summary>
+/// The system-wide capture shortcut. Windows registers it with RegisterHotKey; X11 sessions grab the
+/// key on the root window; Wayland sessions ask the GlobalShortcuts portal. When none of these is
+/// available, <see cref="TryRegister"/> reports <see cref="ErrorUnsupported"/> and the desktop's own
+/// shortcut settings launch <c>SnipFlow --capture</c>, which the running instance receives over its pipe.
+/// </summary>
+public sealed partial class GlobalHotkeyService : IDisposable
+{
+    /// <summary>The combination is already taken by another program (Win32 error 1409, X11 BadAccess).</summary>
+    public const int ErrorInUse = 1409;
+    /// <summary>This session has no global shortcut API SnipFlow can use (for example Wayland without the portal).</summary>
+    public const int ErrorUnsupported = -1;
+    /// <summary>The desktop is still confirming the shortcut; <see cref="StateChanged"/> reports the outcome.</summary>
+    public const int ErrorPending = -2;
+
     bool disposed;
     public HotkeyGesture? ActiveGesture { get; private set; }
+    /// <summary>The trigger as the desktop describes it when it may differ from the requested gesture (portal), otherwise null.</summary>
+    public string? ActiveDescription { get; private set; }
+    /// <summary>The last asynchronous failure reported by the desktop (portal), translated; empty when none.</summary>
+    public string PendingError { get; private set; } = "";
+    public bool IsPending { get; private set; }
     public event EventHandler? Pressed;
+    /// <summary>Raised on the UI thread after an asynchronous registration finished or the desktop changed the shortcut.</summary>
+    public event EventHandler? StateChanged;
 
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    static extern bool RegisterHotKey(IntPtr hwnd, int id, uint modifiers, uint virtualKey);
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    static extern bool UnregisterHotKey(IntPtr hwnd, int id);
+    /// <summary>The mechanism this session uses. Portal availability is confirmed during registration.</summary>
+    public static HotkeyBackend Backend => PlatformInfo.IsWindows ? HotkeyBackend.RegisterHotKey
+        : PlatformInfo.IsX11 ? HotkeyBackend.X11
+        : PlatformInfo.IsWayland ? HotkeyBackend.Portal : HotkeyBackend.Desktop;
 
     public GlobalHotkeyService()
     {
-        // HWND_MESSAGE has no visual or focus. Its lifetime is independent of the editor window.
-        source = new HwndSource(new HwndSourceParameters("SnipFlow.GlobalHotkey")
-        {
-            ParentWindow = new IntPtr(-3), WindowStyle = 0, Width = 0, Height = 0,
-            HwndSourceHook = ReceiveMessage
-        });
+        Dispatcher.UIThread.VerifyAccess();
+        InitializeNative();
     }
 
     public bool TryRegister(HotkeyGesture gesture, out int errorCode)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        source.Dispatcher.VerifyAccess();
+        Dispatcher.UIThread.VerifyAccess();
         errorCode = 0;
-        if (ActiveGesture == gesture) return true;
-        int nextId = activeId == 1 ? 2 : 1;
-        if (!RegisterHotKey(source.Handle, nextId, gesture.NativeModifiers, gesture.VirtualKey))
-        {
-            errorCode = Marshal.GetLastWin32Error(); return false;
-        }
-        // A failed replacement must leave the previously registered shortcut usable.
-        if (ActiveGesture != null && !UnregisterHotKey(source.Handle, activeId))
-        {
-            errorCode = Marshal.GetLastWin32Error();
-            UnregisterHotKey(source.Handle, nextId); return false;
-        }
-        activeId = nextId; ActiveGesture = gesture; return true;
+        if (ActiveGesture == gesture && !IsPending) return true;
+        return TryRegisterNative(gesture, out errorCode);
     }
 
-    IntPtr ReceiveMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    void SetActive(HotkeyGesture? gesture, string? description = null)
     {
-        if (message == 0x0312 && ActiveGesture != null && wParam.ToInt32() == activeId)
-        {
-            handled = true;
-            int receivedId = activeId;
-            source.Dispatcher.BeginInvoke(() =>
-            {
-                if (!disposed && activeId == receivedId) Pressed?.Invoke(this, EventArgs.Empty);
-            });
-        }
-        return IntPtr.Zero;
+        ActiveGesture = gesture;
+        ActiveDescription = description;
+    }
+
+    void SetPending(bool pending, string error = "")
+    {
+        IsPending = pending;
+        PendingError = error;
+    }
+
+    void RaisePressed()
+    {
+        if (!disposed) Pressed?.Invoke(this, EventArgs.Empty);
+    }
+
+    void RaiseStateChanged()
+    {
+        if (!disposed) StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void Dispose()
     {
         if (disposed) return;
-        source.Dispatcher.VerifyAccess(); disposed = true;
-        if (ActiveGesture != null) UnregisterHotKey(source.Handle, activeId);
-        ActiveGesture = null; Pressed = null; source.Dispose();
+        Dispatcher.UIThread.VerifyAccess();
+        disposed = true;
+        DisposeNative();
+        ActiveGesture = null; ActiveDescription = null; Pressed = null; StateChanged = null;
     }
+
+    /// <summary>True once this session turned out to have no global shortcut API (see <see cref="ErrorUnsupported"/>).</summary>
+    public bool IsUnsupported { get; private set; }
+
+    /// <summary>
+    /// Whether SnipFlow can write a desktop keyboard shortcut that runs <c>SnipFlow --capture</c>
+    /// (GNOME custom shortcuts). Only done when the user asks for it in Settings.
+    /// </summary>
+    public static bool CanRegisterDesktopShortcut
+    {
+        get { var result = false; CanRegisterDesktopShortcutNative(ref result); return result; }
+    }
+
+    /// <summary>SnipFlow's desktop keyboard shortcut, or null when the desktop has none SnipFlow can read.</summary>
+    public static Task<DesktopShortcut?> ReadDesktopShortcutAsync()
+    {
+        Task<DesktopShortcut?> result = Task.FromResult<DesktopShortcut?>(null);
+        ReadDesktopShortcutNative(ref result);
+        return result;
+    }
+
+    /// <summary>Creates or updates the desktop keyboard shortcut for <paramref name="gesture"/>.</summary>
+    public static Task RegisterDesktopShortcutAsync(HotkeyGesture gesture)
+    {
+        Task? result = null;
+        RegisterDesktopShortcutNative(gesture, ref result);
+        return result ?? Task.FromException(new PlatformNotSupportedException());
+    }
+
+    partial void InitializeNative();
+    private partial bool TryRegisterNative(HotkeyGesture gesture, out int errorCode);
+    partial void DisposeNative();
+    static partial void CanRegisterDesktopShortcutNative(ref bool result);
+    static partial void ReadDesktopShortcutNative(ref Task<DesktopShortcut?> result);
+    static partial void RegisterDesktopShortcutNative(HotkeyGesture gesture, ref Task? result);
 }
+
+/// <summary>SnipFlow's shortcut in the desktop's keyboard settings. <see cref="IsCurrent"/> is false when it starts another SnipFlow copy.</summary>
+public sealed record DesktopShortcut(bool Registered, HotkeyGesture? Gesture, bool IsCurrent);

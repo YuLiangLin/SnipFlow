@@ -1,10 +1,12 @@
 # SnipFlow · 快剪
 
-Windows 截圖、標註、錄影與影片後製工具，以 C# / WPF 開發。支援直接擷取程式碼長圖、本機 OCR、跟隨捲動的長對話截圖與 GitHub Releases 自動更新。
+Windows 與 Linux（Ubuntu）的截圖、標註、錄影與影片後製工具，以 C# / Avalonia 開發。支援直接擷取程式碼長圖、本機 OCR、跟隨捲動的長對話截圖與 GitHub Releases 自動更新。
+
+0.8.0 起介面由 WPF 改為 Avalonia，Windows 與 Linux 共用同一套程式碼；Windows 版的功能與操作維持不變，Linux 的差異見〈Linux（Ubuntu）〉。
 
 ## 使用
 
-首次取得程式可從 [GitHub Releases](https://github.com/YuLiangLin/SnipFlow/releases) 下載 `SnipFlow-win-Setup.exe`，或解壓縮 `SnipFlow-win-Portable.zip`。0.4.2 起兩者都支援程式內一鍵更新。
+首次取得程式可從 [GitHub Releases](https://github.com/YuLiangLin/SnipFlow/releases) 下載 `SnipFlow-win-Setup.exe`，或解壓縮 `SnipFlow-win-Portable.zip`。0.4.2 起兩者都支援程式內一鍵更新。Linux 版請見下方〈Linux（Ubuntu）〉。
 
 - `Ctrl + Alt + S`：預設全域框選截圖。焦點在瀏覽器或其他程式、SnipFlow 最小化或隱藏至系統匣時都可使用；程式須保持執行。
 - 設定的「全域截圖快捷鍵」欄位可直接按下自訂組合：字母／數字搭配 Ctrl、Alt、Shift 中至少兩個鍵，或 F1–F11。輸入完整組合後立即套用並儲存；被其他程式占用時會提示並保留原有綁定。「預設」按鈕可重新註冊預設組合。
@@ -26,6 +28,37 @@ Windows 截圖、標註、錄影與影片後製工具，以 C# / WPF 開發。�
 - 左側操作列使用純圖示；滑鼠停留時顯示功能 tooltip。最大化範圍依目前螢幕工作區調整，設定與結束按鈕保留在底部。
 - 關閉主視窗後留在系統匣；使用系統匣選單或左下角的結束按鈕退出。
 - 再次啟動會喚起既有視窗，同一個 Windows 工作階段只保留一個實例。
+
+## Linux（Ubuntu）
+
+支援 Ubuntu 22.04／24.04（x64）與其他新版 Debian 系發行版，GNOME、KDE 等桌面的 **X11 與 Wayland** 工作階段都可使用。Release 提供三種檔案：
+
+- `snipflow_<版本>_amd64.deb`（建議）：`sudo apt install ./snipflow_<版本>_amd64.deb`，安裝到 `/opt/snipflow`，加入應用程式選單；在 Dock 圖示按右鍵可直接框選截圖、視窗截圖、長截圖或錄影。以 apt 更新，程式內不自動更新。
+- `SnipFlow.AppImage`：`chmod +x SnipFlow.AppImage` 後執行，支援程式內一鍵更新。Ubuntu 24.04 需先 `sudo apt install libfuse2t64`。
+- `SnipFlow-<版本>-linux-x64.tar.gz`：解壓縮後執行 `SnipFlow`；`install-desktop-entry.sh` 可把它加入目前使用者的應用程式選單。
+
+部分功能使用系統元件，.deb 會一併建議安裝；AppImage／壓縮檔請自行安裝：
+
+```bash
+sudo apt install ffmpeg vlc tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-chi-sim pulseaudio-utils \
+  xdg-desktop-portal gstreamer1.0-pipewire gstreamer1.0-plugins-base fonts-noto-cjk
+```
+
+- 錄影、影片匯出與影片縮圖使用 `ffmpeg`；影片編輯器的播放預覽使用 VLC（`libvlc5`、`vlc-plugin-base`），沒有安裝時仍可編輯與匯出。錄音透過 PulseAudio／PipeWire：系統聲音錄製預設輸出裝置，麥克風錄製預設輸入裝置。
+- OCR 使用本機 Tesseract，依介面語言辨識繁體中文（`chi_tra`）或簡體中文（`chi_sim`），並同時辨識英文；截圖不會上傳。辨識品質一般不如 Windows OCR，尤其是小字或深色背景。缺少元件時，程式會顯示需要執行的 apt 指令。
+- 系統匣圖示使用 StatusNotifierItem；Ubuntu 內建的 AppIndicator 擴充功能會顯示它，其他 GNOME 可安裝 `gnome-shell-extension-appindicator`。沒有系統匣時，關閉主視窗後再次啟動 SnipFlow 即可喚回。
+
+**X11 工作階段**：框選、視窗（含被遮住的部分，需有合成管理器）、單一螢幕與全部螢幕截圖、長截圖、錄影與全域快捷鍵都直接運作。
+
+**Wayland 工作階段**（Ubuntu 預設）：Wayland 不允許程式直接讀取其他視窗的畫面或攔截按鍵，SnipFlow 改用桌面的系統服務（xdg-desktop-portal）：
+
+- 第一次截圖時，桌面可能詢問是否允許 SnipFlow 擷取螢幕；長截圖與錄影會出現桌面的「分享螢幕」對話框，可選擇記住，之後不再詢問。
+- 無法列出其他視窗：「視窗截圖」改由桌面的選取介面挑選視窗；「視窗長截圖」改用框選範圍，不追蹤目標視窗是否移動或被遮住，只依畫面內容判斷。
+- 全域快捷鍵：桌面支援 GlobalShortcuts 服務（例如 KDE、GNOME 48 以上）時直接使用；Ubuntu 24.04 的 GNOME 46 可在「設定 → 快捷鍵」按「加入 GNOME 鍵盤快捷鍵」，SnipFlow 只在按下時寫入一筆 GNOME 自訂快捷鍵，保留其他自訂快捷鍵。其他桌面請在系統鍵盤設定把快捷鍵綁定到 `snipflow --capture`。
+
+**指令列**（已有 SnipFlow 執行時會交給原本的程式處理）：`snipflow --capture [region|window|monitor|all]`、`snipflow --scroll`、`snipflow --record`、`snipflow --background`、`snipflow 圖片.png …`（多張圖片會建立合圖）。
+
+Linux 上沒有 Windows 的「擷取排除」，長截圖與錄影的操作條及外框會放在擷取範圍之外；範圍佔滿整個螢幕且沒有其他螢幕時，會提示操作條可能被拍進畫面。設定、歷史與錯誤紀錄位於 `~/.local/share/SnipFlow`（依 `XDG_DATA_HOME`），自動儲存資料夾預設為「圖片」資料夾下的 `SnipFlow`，登入時啟動寫入 `~/.config/autostart/snipflow.desktop`。
 
 ## 視窗與多螢幕截圖
 
@@ -162,7 +195,7 @@ Codex、Claude 與其他可捲動視窗也可使用相同流程。「微調範�
 - 「匯出 MP4」產生 H.264 影片，保留原有錄音，有聲音時輸出 AAC，不覆寫原始影片；匯出完成後加入最近擷取。取消或失敗時保留目前編輯，不發布半成品。
 - 「儲存專案」保存 `.snipvideo`，保留裁切、文字、圖片、位置和時間，之後可繼續修改。圖片內嵌在專案中，原始影片仍參照本機檔案；保留原 MP4 與其位置。影片專案不會上傳。
 
-預覽與匯出沿用 Windows 媒體元件，無須另外下載 FFmpeg。每部影片最多 32 個物件；圖片會縮至最大 4096 px，合計最多 64 MB／40 百萬像素。
+Windows 的匯出沿用 Windows 媒體元件，無須另外下載 FFmpeg；預覽使用隨附的精簡 LibVLC。Linux 使用系統的 FFmpeg 與 VLC。每部影片最多 32 個物件；圖片會縮至最大 4096 px，合計最多 64 MB／40 百萬像素。
 
 ## 更新
 
@@ -188,19 +221,26 @@ Codex、Claude 與其他可捲動視窗也可使用相同流程。「微調範�
 
 ## 開發
 
-需要 Windows 10 2004+ / Windows 11，以及 .NET 10 SDK。
+需要 .NET 10 SDK。專案同時建置兩個目標：`net10.0-windows10.0.19041.0`（Windows 10 2004+ / Windows 11）與 `net10.0`（Linux）。兩者都可以在 Linux 上編譯；Windows 專用程式放在 `src/Platform/Windows` 與 `*.Windows.cs`，Linux 專用程式放在 `src/Platform/Linux` 與 `*.Linux.cs`。
 
-```powershell
-dotnet build src/SnipFlow.csproj -c Release
-dotnet run --project src/SnipFlow.csproj
+```bash
+dotnet build src/SnipFlow.csproj -c Release -f net10.0-windows10.0.19041.0   # Windows
+dotnet build src/SnipFlow.csproj -c Release -f net10.0                       # Linux
+dotnet run --project src/SnipFlow.csproj -f net10.0
 ```
 
-`build-release.ps1` 建立自含執行環境的 Windows x64 發布目錄與 Velopack 安裝包。它只打包本專案程式檔案，不打包使用者資料。`-Version` 決定應用程式與套件版本。產物在 `release/`；發布到 GitHub 後，已安裝的舊版才能取得更新。
+`build-release.ps1`（Windows）建立自含執行環境的 Windows x64 發布目錄與 Velopack 安裝包。`build-linux.sh`（Linux）建立 `.deb`、可攜壓縮檔與 Velopack AppImage，需要 `dpkg-deb` 與 `squashfs-tools`。兩者都只打包本專案程式檔案，不打包使用者資料。版本參數決定應用程式與套件版本，產物在 `release/`；發布到 GitHub 後，已安裝的舊版才能取得更新。
 
 ```powershell
-./build-release.ps1 -Version 0.7.1
+./build-release.ps1 -Version 0.8.0
+```
+
+```bash
+./build-linux.sh 0.8.0
 ```
 
 ## 驗證範圍
 
 建置與預覽版功能的實際驗證結果會記錄在每次 Release 說明。多螢幕混合 DPI、各種網站的長頁拼接與 OCR 語言辨識仍需要依使用情境驗證。
+
+0.8.0 的 Avalonia 版在 Linux X11（虛擬顯示器）實際操作驗證截圖、標註、長截圖、OCR、錄影、影片後製與單一執行個體；Wayland 路徑以 headless sway 與 xdg-desktop-portal 驗證。Windows 版在本次移植僅完成編譯，正式發布前需在 Windows 10／11 實機驗證；GNOME／KDE 實機（Wayland 螢幕分享對話框、系統匣、HiDPI 縮放）也需要實際確認。

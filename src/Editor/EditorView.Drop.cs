@@ -1,17 +1,17 @@
 using SnipFlow.Services;
-using WpfPoint = System.Windows.Point;
-using WpfRect = System.Windows.Rect;
 
 namespace SnipFlow.Editor;
 
+// The editor has no drag-and-drop handlers of its own: file drops and the history thumbnail's
+// in-process format route through it untouched to the handlers MainWindow attaches.
 public sealed partial class EditorView
 {
     private ImageDropPreview? _imageDropPreview;
 
-    internal bool ShowImageDropPreview(BitmapSource image, WpfPoint editorPoint)
+    internal bool ShowImageDropPreview(Bitmap image, Point editorPoint)
     {
         VerifyAccess();
-        if (!TryGetImageDropPoint(editorPoint, out WpfPoint center))
+        if (!TryGetImageDropPoint(editorPoint, out Point center))
         {
             ClearImageDropPreview();
             return false;
@@ -23,10 +23,10 @@ public sealed partial class EditorView
         return true;
     }
 
-    internal bool AddDroppedImage(BitmapSource image, WpfPoint editorPoint)
+    internal bool AddDroppedImage(Bitmap image, Point editorPoint)
     {
         VerifyAccess();
-        if (!TryGetImageDropPoint(editorPoint, out WpfPoint center)) return false;
+        if (!TryGetImageDropPoint(editorPoint, out Point center)) return false;
         // Both the preview and the inserted object use the same image-pixel bounds.
         // Only this final drop passes through the document's mutation/undo path.
         AddImageAt(image, center);
@@ -41,13 +41,14 @@ public sealed partial class EditorView
         _imageDropPreview = null;
     }
 
-    private bool TryGetImageDropPoint(WpfPoint editorPoint, out WpfPoint point)
+    private bool TryGetImageDropPoint(Point editorPoint, out Point point)
     {
         point = default;
         if (!IsCollage || !HasImage || !IsEnabled || !double.IsFinite(editorPoint.X) || !double.IsFinite(editorPoint.Y))
             return false;
-        WpfPoint viewportPoint = TranslatePoint(editorPoint, _viewport);
-        if (viewportPoint.X < 0 || viewportPoint.Y < 0 || viewportPoint.X >= _viewport.ActualWidth || viewportPoint.Y >= _viewport.ActualHeight)
+        if (this.TranslatePoint(editorPoint, _viewport) is not Point viewportPoint)
+            return false;
+        if (viewportPoint.X < 0 || viewportPoint.Y < 0 || viewportPoint.X >= _viewport.Bounds.Width || viewportPoint.Y >= _viewport.Bounds.Height)
             return false;
         point = ViewportToImage(viewportPoint);
         return double.IsFinite(point.X) && double.IsFinite(point.Y) &&
@@ -58,31 +59,30 @@ public sealed partial class EditorView
     {
         // This visual is never part of DrawScene or the annotation/session lists.
         // It shares the document transform, so zoom and pan apply without rounding.
-        var preview = new ImageDropPreview(this) { IsHitTestVisible = false, ClipToBounds = true };
-        System.Windows.Controls.Canvas.SetZIndex(preview, int.MaxValue);
+        var preview = new ImageDropPreview(this) { IsHitTestVisible = false, ClipToBounds = true, UseLayoutRounding = false, ZIndex = int.MaxValue };
         _documentLayer.Children.Add(preview);
         return preview;
     }
 
-    private sealed class ImageDropPreview(EditorView editor) : FrameworkElement
+    private sealed class ImageDropPreview(EditorView editor) : Control
     {
-        private BitmapSource? _image;
-        private WpfRect _bounds;
+        private Bitmap? _image;
+        private Rect _bounds;
 
-        internal void SetImage(BitmapSource image, WpfRect bounds)
+        internal void SetImage(Bitmap image, Rect bounds)
         {
             _image = image;
             _bounds = bounds;
             InvalidateVisual();
         }
 
-        protected override void OnRender(DrawingContext context)
+        public override void Render(DrawingContext context)
         {
             if (_image is null) return;
-            context.PushOpacity(0.45);
-            context.DrawImage(_image, _bounds);
-            context.Pop();
-            context.DrawRectangle(null, new Pen(ThemeService.Brush("SelectionBorder"), 1.5 / editor._zoom) { DashStyle = DashStyles.Dash }, _bounds);
+            using (context.PushRenderOptions(SceneRenderOptions))
+            using (context.PushOpacity(0.45))
+                context.DrawImage(_image, _bounds);
+            context.DrawRectangle(null, new Pen(ThemeService.Brush("SelectionBorder"), 1.5 / editor._zoom, DashStyle.Dash), _bounds);
         }
     }
 }

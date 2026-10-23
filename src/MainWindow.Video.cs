@@ -32,12 +32,11 @@ public partial class MainWindow
             SetStatus("正在開啟影片…");
             var window = await VideoEditorWindow.LoadAsync(Path.GetFullPath(path), historyLifetime.Token);
             if (isClosed) { window.Close(); return; }
-            window.Owner = this;
-            window.ShowDialog();
+            window.ShowModal(this);
             var exported = window.ExportedPaths.Count == 0 && window.ExportedPath is { } last
                 ? new[] { last }
                 : window.ExportedPaths.ToArray();
-            exported = exported.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            exported = exported.Distinct(PlatformInfo.PathComparer).ToArray();
             foreach (var exportedPath in exported)
                 await AddRecordingHistoryAsync(exportedPath);
             if (!isClosed)
@@ -56,13 +55,10 @@ public partial class MainWindow
         }
     }
 
-    async void OpenVideoClick(object sender, RoutedEventArgs e)
+    async void OpenVideoClick(object? sender, RoutedEventArgs e)
     {
         if (!CanChangeHistory) return;
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Filter = I18n.T("影片與 SnipFlow 影片專案|*.mp4;*.snipvideo|所有檔案|*.*")
-        };
-        if (dialog.ShowDialog(this) == true) await OpenVideoEditorAsync(dialog.FileName);
+        var fileName = FileDialogs.OpenFile(this, null, I18n.T("影片與 SnipFlow 影片專案|*.mp4;*.snipvideo|所有檔案|*.*"));
+        if (fileName != null) await OpenVideoEditorAsync(fileName);
     }
 }
