@@ -161,8 +161,11 @@ public sealed partial class EditorView
             double x = padding, available = Math.Max(1, PixelHeight - 2 * padding);
             foreach (AnnotationItem item in images)
             {
-                double scale = Math.Min(1, available / item.Image!.PixelSize.Height);
-                double width = item.Image.PixelSize.Width * scale, height = item.Image.PixelSize.Height * scale;
+                var crop = item.ImageCrop ?? ImageCropGeometry.Full;
+                var sourceWidth = item.Image!.PixelSize.Width * crop.Width;
+                var sourceHeight = item.Image.PixelSize.Height * crop.Height;
+                double scale = Math.Min(1, available / sourceHeight);
+                double width = sourceWidth * scale, height = sourceHeight * scale;
                 placements.Add(new Rect(x, padding, width, height));
                 x += width + gap;
             }
@@ -178,9 +181,12 @@ public sealed partial class EditorView
                 double rowHeight = 0;
                 for (int column = 0; column < columns && row + column < images.Count; column++)
                 {
-                    Bitmap image = images[row + column].Image!;
-                    double scale = Math.Min(1, cell / image.PixelSize.Width);
-                    double width = image.PixelSize.Width * scale, height = image.PixelSize.Height * scale;
+                    var item = images[row + column];
+                    Bitmap image = item.Image!;
+                    var crop = item.ImageCrop ?? ImageCropGeometry.Full;
+                    double sourceWidth = image.PixelSize.Width * crop.Width, sourceHeight = image.PixelSize.Height * crop.Height;
+                    double scale = Math.Min(1, cell / sourceWidth);
+                    double width = sourceWidth * scale, height = sourceHeight * scale;
                     placements.Add(new Rect(padding + column * (cell + gap), y, width, height));
                     rowHeight = Math.Max(rowHeight, height);
                 }
@@ -354,6 +360,7 @@ public sealed partial class EditorView
 
     private void PrepareObjectCommand()
     {
+        CommitImageCrop();
         CompleteGesture();
         CommitTextEdit();
         EndPropertyEdit();
@@ -484,6 +491,7 @@ public sealed partial class EditorView
             menu.Items.Add(entry);
         }
         Add("編輯文字", () => BeginTextEdit(_selected, null, null), _selection.Count == 1 && item.Tool == AnnotationTool.Text);
+        Add("裁剪圖片", () => BeginImageCrop(), IsCollage && _selection.Count == 1 && item.Tool == AnnotationTool.Image);
         Add("複製物件", DuplicateSelection);
         Add("刪除物件", DeleteSelection);
         menu.Items.Add(new Separator());

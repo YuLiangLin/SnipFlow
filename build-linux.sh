@@ -6,7 +6,7 @@
 # Usage: ./build-linux.sh [version] [--skip-appimage] [--skip-deb]
 set -euo pipefail
 
-version="${1:-0.8.0}"
+version="${1:-0.8.1}"
 shift || true
 skip_appimage=0
 skip_deb=0

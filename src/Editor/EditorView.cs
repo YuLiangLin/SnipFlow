@@ -77,13 +77,13 @@ public sealed partial class EditorView : UserControl
     public event EventHandler? SelectionChanged;
 
     public bool HasImage => _image is not null;
-    public bool HasEdits => HasImage && (_revision != _savedRevision || _pending is not null || TransformHasChanges || TextHasChanges || PropertyHasChanges);
-    public bool CanUndo => _undo.Count != 0 || TextHasChanges || PropertyHasChanges;
-    public bool CanRedo => _redo.Count != 0 && !TextHasChanges && !PropertyHasChanges;
+    public bool HasEdits => HasImage && (_revision != _savedRevision || _pending is not null || TransformHasChanges || TextHasChanges || PropertyHasChanges || CropHasChanges);
+    public bool CanUndo => _undo.Count != 0 || TextHasChanges || PropertyHasChanges || CropHasChanges;
+    public bool CanRedo => _redo.Count != 0 && !TextHasChanges && !PropertyHasChanges && !IsImageCropping;
     public double ZoomFactor => _zoom;
     public bool IsTextEditing => _textDraft is not null;
     public long Revision => _revision;
-    public bool IsInteracting => _textDraft is not null || _pending is not null || _transformSource is not null || _propertySource is not null || _marqueeStart is not null;
+    public bool IsInteracting => _textDraft is not null || _pending is not null || _transformSource is not null || _propertySource is not null || _marqueeStart is not null || IsImageCropping;
     public AnnotationTool? SelectedTool => SelectedItem?.Tool;
     public Color? SelectedColor => SelectedItem?.Color;
     public double? SelectedStrokeWidth => SelectedItem?.Width;
@@ -218,6 +218,7 @@ public sealed partial class EditorView : UserControl
         _hintLabel = new TextBlock
         {
             Text = I18n.T(CanvasHint),
+            TextWrapping = TextWrapping.Wrap,
             FontSize = 12,
             Foreground = ThemeService.Brush("Muted"),
             Margin = new Thickness(20, 0, 20, 15),
@@ -226,6 +227,8 @@ public sealed partial class EditorView : UserControl
             IsHitTestVisible = false
         };
         layout.Children.Add(_hintLabel);
+        _cropToolbar = CreateCropToolbar();
+        layout.Children.Add(_cropToolbar);
         Content = layout;
 
         _viewport.AddHandler(PointerPressedEvent, OnMouseDown, RoutingStrategies.Tunnel);
@@ -237,6 +240,7 @@ public sealed partial class EditorView : UserControl
             if (ReferenceEquals(e.Source, _viewport) && ReferenceEquals(e.Pointer, _capturedPointer))
             {
                 _capturedPointer = null;
+                EndImageCropGesture();
                 CompleteGesture();
             }
         };
@@ -285,6 +289,7 @@ public sealed partial class EditorView : UserControl
         if (image.PixelSize.Width < 1 || image.PixelSize.Height < 1)
             throw new ArgumentException(I18n.T("影像尺寸不得為零。"), nameof(image));
 
+        CancelImageCrop();
         CancelTextEdit();
         CancelGesture();
         EndPropertyEdit();
@@ -314,6 +319,7 @@ public sealed partial class EditorView : UserControl
         VerifyAccess();
         if (_image is null)
             throw new InvalidOperationException(I18n.T("請先開啟或擷取影像。"));
+        CommitImageCrop();
         CompleteGesture();
         CommitTextEdit();
         EndPropertyEdit();
@@ -355,6 +361,7 @@ public sealed partial class EditorView : UserControl
         if (_image is null)
             throw new InvalidOperationException(I18n.T("請先開啟或擷取影像。"));
 
+        CommitImageCrop();
         CompleteGesture();
         CommitTextEdit();
         EndPropertyEdit();
@@ -369,6 +376,7 @@ public sealed partial class EditorView : UserControl
     public void MarkSaved()
     {
         VerifyAccess();
+        CommitImageCrop();
         CompleteGesture();
         CommitTextEdit();
         EndPropertyEdit();
@@ -387,6 +395,7 @@ public sealed partial class EditorView : UserControl
     public void Undo()
     {
         VerifyAccess();
+        if (IsImageCropping) { CancelImageCrop(); return; }
         CommitTextEdit();
         EndPropertyEdit();
         CancelGesture();
@@ -400,6 +409,7 @@ public sealed partial class EditorView : UserControl
     public void Redo()
     {
         VerifyAccess();
+        if (IsImageCropping) { CancelImageCrop(); return; }
         CommitTextEdit();
         EndPropertyEdit();
         CancelGesture();
@@ -413,6 +423,7 @@ public sealed partial class EditorView : UserControl
     public void SetTool(AnnotationTool tool)
     {
         VerifyAccess();
+        CommitImageCrop();
         CommitTextEdit();
         EndPropertyEdit();
         CancelGesture();
@@ -437,6 +448,7 @@ public sealed partial class EditorView : UserControl
     public void DeleteSelection()
     {
         VerifyAccess();
+        CommitImageCrop();
         CommitTextEdit();
         EndPropertyEdit();
         CancelGesture();
@@ -511,6 +523,24 @@ public sealed partial class EditorView : UserControl
         EndPropertyEdit();
         Focus();
         Point point = ViewportToImage(e.GetPosition(_viewport));
+        if (IsImageCropping)
+        {
+            var cropHandle = HitImageCrop(point);
+            if (cropHandle != SelectionHandle.None)
+            {
+                BeginImageCropGesture(cropHandle, point);
+                CaptureViewport(e.Pointer);
+                UpdateCursor();
+                e.Handled = true;
+                return;
+            }
+            CommitImageCrop();
+        }
+        if (TryBeginImageCropAt(point, e.ClickCount, e.KeyModifiers))
+        {
+            e.Handled = true;
+            return;
+        }
         SelectionHandle handle = HitSelectionHandle(point);
         if (_selected is not null && handle != SelectionHandle.None)
         {
@@ -602,6 +632,13 @@ public sealed partial class EditorView : UserControl
             return;
 
         Point point = ClampPoint(ViewportToImage(e.GetPosition(_viewport)));
+        if (IsImageCropping)
+        {
+            if (_cropDragSource is not null) UpdateImageCropGesture(point);
+            else { _hoverHandle = HitImageCrop(point); UpdateCursor(); }
+            e.Handled = true;
+            return;
+        }
         if (_marqueeStart is not null)
         {
             _marquee = AnnotationItem.Span(_marqueeStart.Value, point);
@@ -630,6 +667,14 @@ public sealed partial class EditorView : UserControl
     {
         if (ChangedButton(e) is not (MouseButton.Left or MouseButton.Middle))
             return;
+        if (_cropDragSource is not null)
+        {
+            UpdateImageCropGesture(ClampPoint(ViewportToImage(e.GetPosition(_viewport))));
+            EndImageCropGesture();
+            UpdateCursor();
+            e.Handled = true;
+            return;
+        }
         if (_pending is not null)
         {
             Point point = ClampPoint(ViewportToImage(e.GetPosition(_viewport)));
@@ -658,6 +703,16 @@ public sealed partial class EditorView : UserControl
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
         KeyModifiers modifiers = e.KeyModifiers;
+        if (HandleImageCropKey(e)) return;
+        if (IsImageCropping)
+        {
+            if (modifiers == KeyModifiers.Control && e.Key == Key.Z) { Undo(); e.Handled = true; }
+            else if ((modifiers == KeyModifiers.Control && e.Key == Key.Y)
+                || (modifiers == (KeyModifiers.Control | KeyModifiers.Shift) && e.Key == Key.Z)) { Redo(); e.Handled = true; }
+            else if (modifiers == KeyModifiers.None && e.Key == Key.Space)
+            { _spaceDown = true; UpdateCursor(); e.Handled = true; }
+            return;
+        }
         if (IsTextEditing)
         {
             if (modifiers == KeyModifiers.Control && e.Key == Key.Enter)
@@ -946,6 +1001,8 @@ public sealed partial class EditorView : UserControl
 
     private void OnHostMouseDown(object? sender, PointerPressedEventArgs e)
     {
+        if (e.GetCurrentPoint(null).Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed && IsImageCropping && !IsWithin(this, e.Source))
+            CommitImageCrop();
         if (e.GetCurrentPoint(null).Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed && IsTextEditing && !IsWithin(_textEditor, e.Source))
         {
             _outsideTextClick = IsWithin(_viewport, e.Source);
@@ -989,6 +1046,7 @@ public sealed partial class EditorView : UserControl
 
     private void CompleteGesture()
     {
+        EndImageCropGesture();
         Rect? marquee = _marquee;
         HashSet<AnnotationItem>? marqueeOriginal = _marqueeOriginal;
         _marquee = null;
@@ -1470,12 +1528,19 @@ public sealed partial class EditorView : UserControl
                     context.DrawImage(_image, imageBounds);
                 if ((layers & SceneLayers.Annotations) != 0)
                     foreach (AnnotationItem annotation in _annotations)
-                        if (!onScreen || !IsTextEditing || !ReferenceEquals(annotation, _textTarget))
+                        if (onScreen && IsImageCropping && ReferenceEquals(annotation, _cropTarget))
+                            _cropDraft!.Draw(context);
+                        else if (!onScreen || !IsTextEditing || !ReferenceEquals(annotation, _textTarget))
                             annotation.Draw(context);
             }
         }
         if ((layers & SceneLayers.Interaction) != 0)
         {
+            if (onScreen && IsImageCropping)
+            {
+                DrawImageCrop(context, imageBounds);
+                return;
+            }
             if (_pending?.Tool == AnnotationTool.Text)
             {
                 Rect bounds = _pending.Bounds;
@@ -1556,7 +1621,7 @@ public sealed partial class EditorView : UserControl
 
     private void UpdateCursor()
     {
-        _viewport.Cursor = _panning || _spaceDown ? EditorCursor(StandardCursorType.Hand) : (_transformHandle != SelectionHandle.None ? _transformHandle : _hoverHandle) switch
+        _viewport.Cursor = _panning || _spaceDown ? EditorCursor(StandardCursorType.Hand) : (_cropHandle != SelectionHandle.None ? _cropHandle : _transformHandle != SelectionHandle.None ? _transformHandle : _hoverHandle) switch
         {
             SelectionHandle.TopLeft => EditorCursor(StandardCursorType.TopLeftCorner),
             SelectionHandle.BottomRight => EditorCursor(StandardCursorType.BottomRightCorner),
@@ -1659,7 +1724,12 @@ public sealed partial class EditorView : UserControl
         else Dispatcher.UIThread.Post(Redraw);
     }
 
-    private void RefreshLanguage() => _hintLabel.Text = I18n.T(IsTextEditing ? TextHint : IsCollage ? "Ctrl / Shift 多選 · 拖曳空白處框選 · 方向鍵微調 · 右鍵排列" : CanvasHint);
+    private void RefreshLanguage()
+    {
+        _hintLabel.Text = I18n.T(IsImageCropping ? CropHint : IsTextEditing ? TextHint : IsCollage
+            ? "Ctrl / Shift 多選 · 雙擊圖片裁剪 · 拖曳空白處框選 · 方向鍵微調" : CanvasHint);
+        RefreshImageCropLanguage();
+    }
 
     private static Border CreateBadge(TextBlock label, HorizontalAlignment alignment) => new()
     {

@@ -110,6 +110,13 @@ public partial class MainWindow
     }
 
     void SaveProjectClick(object? sender, RoutedEventArgs e) => SaveProjectCurrent();
+    void CropImageClick(object? sender, RoutedEventArgs e)
+    {
+        if (busy || capturePending || historyDragInProgress) return;
+        Editor.BeginImageCrop();
+        Editor.Focus();
+        RefreshDocumentState();
+    }
     bool SaveDocument() => Editor.IsCollage ? SaveProjectCurrent() : SaveCurrent();
 
     void NewCanvasClick(object? sender, RoutedEventArgs e) => OpenBlankCanvas();

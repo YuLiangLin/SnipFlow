@@ -599,6 +599,8 @@ public partial class MainWindow : Window
         refreshingProperties = true;
         try
         {
+            CropImageButton.IsEnabled = !busy && !capturePending && !Editor.IsImageCropping
+                && Editor.SelectionCount == 1 && Editor.SelectedImageCount == 1;
             var shownTool = Editor.SelectedTool ?? activeTool;
             ToolLabel.Text = ToolName(shownTool);
             TextProperties.IsVisible = shownTool == AnnotationTool.Text;
@@ -783,6 +785,22 @@ public partial class MainWindow : Window
     {
         if (busy || capturePending || historyDragInProgress) return;
         var modifiers = e.KeyModifiers;
+        if (Editor.IsImageCropping)
+        {
+            if (modifiers == KeyModifiers.Control && e.Key == Key.S)
+            { Editor.CommitImageCrop(); SaveDocument(); e.Handled = true; }
+            else if (modifiers == (KeyModifiers.Control | KeyModifiers.Shift) && e.Key == Key.S)
+            { Editor.CommitImageCrop(); SaveProjectCurrent(saveAs: true); e.Handled = true; }
+            else if (modifiers == KeyModifiers.Control && e.Key == Key.C)
+            { Editor.CommitImageCrop(); CopyClick(this, new()); e.Handled = true; }
+            else if (modifiers == KeyModifiers.Control && e.Key == Key.Z)
+            { Editor.Undo(); e.Handled = true; }
+            else if ((modifiers == KeyModifiers.Control && e.Key == Key.Y)
+                || (modifiers == (KeyModifiers.Control | KeyModifiers.Shift) && e.Key == Key.Z))
+            { Editor.Redo(); e.Handled = true; }
+            else Editor.HandleImageCropKey(e);
+            return;
+        }
         if (Editor.IsTextEditing)
         {
             if (modifiers == KeyModifiers.Control && e.Key == Key.S) { Editor.CommitTextEdit(); SaveDocument(); e.Handled = true; }

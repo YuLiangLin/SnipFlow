@@ -185,6 +185,7 @@
               </WrapPanel.Styles>
               <Button x:Name="AddImagesButton" Content="{ui:Tr '加入圖片'}" Click="AddImagesClick" ToolTip.Tip="{ui:Tr '多選檔案、拖入圖片或 Ctrl + V'}" />
               <Button x:Name="PasteImagesButton" Content="{ui:Tr '貼上圖片'}" Click="PasteImagesClick" ToolTip.Tip="Ctrl + V" AutomationProperties.Name="{ui:Tr '貼上圖片'}" />
+              <Button x:Name="CropImageButton" Content="{ui:Tr '裁剪圖片'}" Click="CropImageClick" ToolTip.Tip="{ui:Tr '選取一張圖片，或雙擊圖片進入裁剪'}" />
               <Button Content="{ui:Tr '排列 ▾'}" Click="ArrangeMenuClick" />
               <Button Content="{ui:Tr '對齊 ▾'}" Click="AlignmentMenuClick" />
               <Button Content="{ui:Tr '圖層 ▾'}" Click="OrderMenuClick" />

@@ -44,7 +44,7 @@ public sealed partial class EditorView
     private bool TryGetImageDropPoint(Point editorPoint, out Point point)
     {
         point = default;
-        if (!IsCollage || !HasImage || !IsEnabled || !double.IsFinite(editorPoint.X) || !double.IsFinite(editorPoint.Y))
+        if (!IsCollage || !HasImage || !IsEnabled || IsImageCropping || !double.IsFinite(editorPoint.X) || !double.IsFinite(editorPoint.Y))
             return false;
         if (this.TranslatePoint(editorPoint, _viewport) is not Point viewportPoint)
             return false;

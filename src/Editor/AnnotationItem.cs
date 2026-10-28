@@ -44,6 +44,8 @@ internal sealed class AnnotationItem
     internal int TextOrientation { get; set; }
     internal Bitmap? Mosaic { get; set; }
     internal Bitmap? Image { get; set; }
+    // Normalized source coordinates. The complete bitmap is kept so a crop can always be reset.
+    internal Rect? ImageCrop { get; set; }
 
     // Laying out text is the expensive part of Bounds; the cache is keyed by every input of the layout.
     private TextLayout? _layout;
@@ -64,7 +66,8 @@ internal sealed class AnnotationItem
         TextOrientation = TextOrientation,
         // Bitmaps are never modified after they are stored.
         Mosaic = Mosaic,
-        Image = Image
+        Image = Image,
+        ImageCrop = ImageCrop
     };
 
     internal Rect Bounds
@@ -140,6 +143,7 @@ internal sealed class AnnotationItem
         TextOrientation = source.TextOrientation;
         Mosaic = source.Mosaic;
         Image = source.Image;
+        ImageCrop = source.ImageCrop;
         Points.Clear();
         Points.AddRange(source.Points);
     }
@@ -153,6 +157,7 @@ internal sealed class AnnotationItem
             && Near(TextWidth, other.TextWidth) && Near(TextBoxHeight, other.TextBoxHeight)
             && TextOrientation == other.TextOrientation
             && ReferenceEquals(Image, other.Image)
+            && ImageCrop == other.ImageCrop
             && Text.Replace("\r\n", "\n", StringComparison.Ordinal) == other.Text.Replace("\r\n", "\n", StringComparison.Ordinal)
             && Points.Count == other.Points.Count && Points.Zip(other.Points).All(pair => SamePoint(pair.First, pair.Second));
     }
@@ -166,7 +171,7 @@ internal sealed class AnnotationItem
         {
             case AnnotationTool.Image:
                 if (Image is not null)
-                    context.DrawImage(Image, Bounds);
+                    context.DrawImage(Image, ImageCropGeometry.SourceRect(Image, ImageCrop), Bounds);
                 break;
             case AnnotationTool.Arrow:
                 DrawArrow(context, pen, brush);

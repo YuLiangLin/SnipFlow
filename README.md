@@ -128,6 +128,8 @@ Linux 上沒有 Windows 的「擷取排除」，長截圖與錄影的操作條�
 
 - 「加入圖片」可一次選多張；也可拖入檔案、`Ctrl + V` 貼上圖片，或將右側歷史縮圖拖到畫布。在合圖工作區再次截圖或產生程式碼長圖會直接追加圖片。
 - 圖片可自由拖移，四角縮放維持比例。`Ctrl`／`Shift` 點選可多選；在空白處拖曳可框選物件。多選後可一起移動、刪除或複製。
+- 0.8.1 起，雙擊合圖中的圖片，或選取一張圖片後按「裁剪圖片」，可拖動黑色邊界調整可見範圍，再拖動框內的圖片調整內容位置。「完成裁剪」／`Enter` 套用，「取消裁剪」／`Esc` 放棄此次調整；「重設圖片」恢復完整原圖。每次完成可復原／重做，儲存 `.snipflow` 後也保留完整原圖及裁剪範圍，之後可再次調整。
+  裁剪資訊使用新版專案格式，請以 0.8.1 以上版本開啟；既有專案仍可讀取。
 - 「排列」提供網格、直向、橫向排列；至少選取兩張圖片時只排列所選圖片，其餘情況排列所有圖片。排列維持比例，必要時增加畫布；文字與其他標註保持原位置。
 - 「對齊」提供六種對齊與水平／垂直平均分布；「圖層」調整上下順序。右鍵物件也能使用這些操作。雙擊文字直接編輯，`F2`／`Enter` 也可編輯已選文字。
 - `Ctrl + A` 全選、`Ctrl + D` 複製物件、方向鍵移動 1 px、`Shift + 方向鍵` 移動 10 px、`Delete` 刪除。各次修改可復原／重做。
@@ -232,14 +234,16 @@ dotnet run --project src/SnipFlow.csproj -f net10.0
 `build-release.ps1`（Windows）建立自含執行環境的 Windows x64 發布目錄與 Velopack 安裝包。`build-linux.sh`（Linux）建立 `.deb`、可攜壓縮檔與 Velopack AppImage，需要 `dpkg-deb` 與 `squashfs-tools`。兩者都只打包本專案程式檔案，不打包使用者資料。版本參數決定應用程式與套件版本，產物在 `release/`；發布到 GitHub 後，已安裝的舊版才能取得更新。
 
 ```powershell
-./build-release.ps1 -Version 0.8.0
+./build-release.ps1 -Version 0.8.1
 ```
 
 ```bash
-./build-linux.sh 0.8.0
+./build-linux.sh 0.8.1
 ```
 
 ## 驗證範圍
+
+圖片裁剪的回歸檢查可用 `dotnet run --project tests/ImageCrop.Regression -c Release` 執行；Linux 請在 X11／XWayland 或 `xvfb-run -a` 下執行。測試以離屏物件驗證裁剪像素、DPI、平移、復原／重做、專案相容與旋轉，不操作使用者桌面；結果寫入 `verification/image-crop/`。
 
 建置與預覽版功能的實際驗證結果會記錄在每次 Release 說明。多螢幕混合 DPI、各種網站的長頁拼接與 OCR 語言辨識仍需要依使用情境驗證。
 
