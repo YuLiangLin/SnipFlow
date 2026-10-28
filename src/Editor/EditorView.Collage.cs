@@ -161,9 +161,8 @@ public sealed partial class EditorView
             double x = padding, available = Math.Max(1, PixelHeight - 2 * padding);
             foreach (AnnotationItem item in images)
             {
-                var crop = item.ImageCrop ?? ImageCropGeometry.Full;
-                var sourceWidth = item.Image!.PixelSize.Width * crop.Width;
-                var sourceHeight = item.Image.PixelSize.Height * crop.Height;
+                var sourceWidth = item.Bounds.Width;
+                var sourceHeight = item.Bounds.Height;
                 double scale = Math.Min(1, available / sourceHeight);
                 double width = sourceWidth * scale, height = sourceHeight * scale;
                 placements.Add(new Rect(x, padding, width, height));
@@ -182,9 +181,7 @@ public sealed partial class EditorView
                 for (int column = 0; column < columns && row + column < images.Count; column++)
                 {
                     var item = images[row + column];
-                    Bitmap image = item.Image!;
-                    var crop = item.ImageCrop ?? ImageCropGeometry.Full;
-                    double sourceWidth = image.PixelSize.Width * crop.Width, sourceHeight = image.PixelSize.Height * crop.Height;
+                    double sourceWidth = item.Bounds.Width, sourceHeight = item.Bounds.Height;
                     double scale = Math.Min(1, cell / sourceWidth);
                     double width = sourceWidth * scale, height = sourceHeight * scale;
                     placements.Add(new Rect(padding + column * (cell + gap), y, width, height));

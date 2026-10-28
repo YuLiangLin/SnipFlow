@@ -39,14 +39,15 @@ internal static partial class Program
         });
         Case("editor panning image inside fixed frame changes source offset only",()=> {
             var editor=Editor(source,null);DraftBottomRightQuarter(editor);var frame=Bounds(Draft(editor));Gesture(editor,"Move",new Point(180,140),new Point(220,170));EqualRect(Bounds(Draft(editor)),frame,"Panning moved the crop frame");EqualRect(Crop(Draft(editor)),new Rect(.25,.25,.5,.5),"Panning source mapping");
-            Gesture(editor,"Move",default,new Point(100000,100000));EqualRect(Crop(Draft(editor)),new Rect(0,0,.5,.5),"Pan clamp at upper-left");Gesture(editor,"Move",default,new Point(-100000,-100000));EqualRect(Crop(Draft(editor)),new Rect(.5,.5,.5,.5),"Pan clamp at lower-right");Call(editor,"CommitImageCrop");Check(PixelHash(source)==sourceHash,"Pan modified original bitmap");
+            Gesture(editor,"Move",default,new Point(100000,100000));var upper=Crop(Draft(editor))!.Value;Check(upper.X<0&&upper.Y<0&&upper.Right>0&&upper.Bottom>0,"Pan should expose blank while keeping some source visible at upper-left");
+            Gesture(editor,"Move",default,new Point(-100000,-100000));var lower=Crop(Draft(editor))!.Value;Check(lower.Right>1&&lower.Bottom>1&&lower.X<1&&lower.Y<1,"Pan should expose blank while keeping some source visible at lower-right");EqualRect(Bounds(Draft(editor)),frame,"Extreme pan moved frame");Call(editor,"CommitImageCrop");Check(PixelHash(source)==sourceHash,"Pan modified original bitmap");
         });
         Case("editor cancel discards resize and pan without undo mutation",()=> {
             var editor=Editor(source,null);var before=PixelHash(editor.ExportImage());DraftBottomRightQuarter(editor);Gesture(editor,"Move",default,new Point(20,20));Call(editor,"CancelImageCrop");Check(!Cropping(editor) && !editor.CanUndo && !editor.HasEdits,"Cancel created a mutation");Check(PixelHash(editor.ExportImage())==before,"Cancel changed rendered document");
         });
         Case("editor reset is draft-only cancellable and undoable on commit",()=> {
-            var initialCrop=new Rect(.5,0,.5,.5);var editor=Editor(source,initialCrop);var initial=PixelHash(editor.ExportImage());Begin(editor);Call(editor,"ResetImageCrop");Check(Crop(Draft(editor)) is null,"Reset did not reveal original image");EqualRect(Crop(First(editor)),initialCrop,"Reset mutated committed image before completion");Call(editor,"CancelImageCrop");Check(PixelHash(editor.ExportImage())==initial,"Cancel reset changed original crop");
-            Begin(editor);Call(editor,"ResetImageCrop");var frame=Bounds(Draft(editor));Check(frame.Left>=0 && frame.Top>=0 && frame.Right<=editor.PixelWidth && frame.Bottom<=editor.PixelHeight,"Reset original lies outside collage");Call(editor,"CommitImageCrop");Check(Crop(First(editor)) is null && editor.CanUndo,"Reset commit state");Save("editor-reset-full-source.png",editor.ExportImage());editor.Undo();Check(PixelHash(editor.ExportImage())==initial,"Reset undo lost previous cropped content");
+            var initialCrop=new Rect(.5,0,.5,.5);var editor=Editor(source,initialCrop);var originalFrame=Bounds(First(editor));var initial=PixelHash(editor.ExportImage());Begin(editor);Call(editor,"ResetImageCrop");Check(Crop(Draft(editor)) is null,"Reset did not reveal original image");EqualRect(Crop(First(editor)),initialCrop,"Reset mutated committed image before completion");Call(editor,"CancelImageCrop");Check(PixelHash(editor.ExportImage())==initial,"Cancel reset changed original crop");
+            Begin(editor);Call(editor,"ResetImageCrop");var frame=Bounds(Draft(editor));EqualRect(frame,originalFrame,"Reset changed crop frame");Check(frame.Left>=0 && frame.Top>=0 && frame.Right<=editor.PixelWidth && frame.Bottom<=editor.PixelHeight,"Reset original lies outside collage");Call(editor,"CommitImageCrop");Check(Crop(First(editor)) is null && editor.CanUndo,"Reset commit state");Save("editor-reset-full-source.png",editor.ExportImage());editor.Undo();Check(PixelHash(editor.ExportImage())==initial,"Reset undo lost previous cropped content");
         });
         Case("editor Undo cancels unfinished crop before document history",()=> {
             var editor=Editor(source,null);var original=PixelHash(editor.ExportImage());DraftBottomRightQuarter(editor);editor.Undo();Check(!Cropping(editor) && !editor.CanRedo && !editor.HasEdits,"Undo did not cancel pending crop cleanly");Check(PixelHash(editor.ExportImage())==original,"Undo pending crop changed document");
@@ -68,9 +69,8 @@ internal static partial class Program
             var editor=Editor(source,null);Begin(editor);Gesture(editor,"Left",new Point(80,120),new Point(10000,120));var draft=Draft(editor);Check(Bounds(draft).Width>0 && (bool)Static(CropGeometryType!,"IsValid",Crop(draft))!,"Frame collapsed or left normalized bounds");
             var previous=Crop(draft);Gesture(editor,"Move",default,new Point(double.NaN,0));EqualRect(Crop(Draft(editor)),previous,"Nonfinite pan changed crop");Call(editor,"CancelImageCrop");
         });
-        foreach(var layout in new[]{"Grid","Vertical","Horizontal"})Case("editor "+layout+" arrangement uses visible crop aspect ratio",()=> {
-            var editor=Editor(source,new Rect(.5,0,.5,1));var type=Product.GetType("SnipFlow.Editor.CollageLayout",true)!;Call(editor,"ArrangeImages",Enum.Parse(type,layout));var frame=Bounds(First(editor));Check(Math.Abs(frame.Width/frame.Height-40.0/60)<1e-9,"Arrangement used complete source aspect ratio instead of visible crop");EqualRect(Crop(First(editor)),new Rect(.5,0,.5,1),"Arrangement lost crop");
+        foreach(var layout in new[]{"Grid","Vertical","Horizontal"})Case("editor "+layout+" arrangement preserves current frame aspect ratio",()=> {
+            var editor=Editor(source,new Rect(.5,0,.5,1));var type=Product.GetType("SnipFlow.Editor.CollageLayout",true)!;Call(editor,"ArrangeImages",Enum.Parse(type,layout));var frame=Bounds(First(editor));Check(Math.Abs(frame.Width/frame.Height-160.0/120)<1e-9,"Arrangement changed current frame aspect ratio");EqualRect(Crop(First(editor)),new Rect(.5,0,.5,1),"Arrangement lost crop");
         });
     }
 }
-

@@ -35,18 +35,38 @@ internal static partial class Program
         Case("geometry maps normalized crop to physical source pixels at 192 DPI", () => {
             using var highDpi=new WriteableBitmap(new PixelSize(80,60),new Vector(192,192),PixelFormat.Bgra8888,AlphaFormat.Premul);
             using(var locked=highDpi.Lock()){var input=Pixels(source);for(int y=0;y<60;y++)Marshal.Copy(input.Pixels,y*input.Stride,locked.Address+y*locked.RowBytes,input.Stride);}
-            var crop=new Rect(.5,0,.5,.5);var actual=(Rect)Static(CropGeometryType!,"SourceRect",highDpi,crop)!;
+            var crop=new Rect(.5,0,.5,.5);var draw=(ValueTuple<Rect,Rect>)Static(CropGeometryType!,"GetDrawRects",highDpi,crop,new Rect(0,0,120,90))!;var actual=draw.Item1;
             EqualRect(actual,new Rect(40,0,40,30),"SourceRect did not use physical pixels");
             using var image=RenderItem(ImageItem(highDpi,new Rect(0,0,120,90),crop),120,90);var p=Pixels(image);
-            Save("model-crop-192-dpi.png",image);Check(At(p,10,10)==Colors.Lime && At(p,100,70)==Colors.Lime,"High-DPI crop rendered wrong source; samples="+At(p,10,10)+","+At(p,100,70)+" logical="+highDpi.Size+" pixels="+highDpi.PixelSize);            EqualRect((Rect)Static(CropGeometryType!,"SourceRect",highDpi,null)!,new Rect(0,0,80,60),"High-DPI null crop source rect");
+            Save("model-crop-192-dpi.png",image);Check(At(p,10,10)==Colors.Lime && At(p,100,70)==Colors.Lime,"High-DPI crop rendered wrong source; samples="+At(p,10,10)+","+At(p,100,70)+" logical="+highDpi.Size+" pixels="+highDpi.PixelSize);            var fullDraw=(ValueTuple<Rect,Rect>)Static(CropGeometryType!,"GetDrawRects",highDpi,null,new Rect(0,0,160,120))!;EqualRect(fullDraw.Item1,new Rect(0,0,80,60),"High-DPI null crop source rect");
             using var full=RenderItem(ImageItem(highDpi,new Rect(0,0,160,120),null),160,120);var all=Pixels(full);
             Check(At(all,20,20)==Colors.Red&&At(all,140,20)==Colors.Lime&&At(all,20,100)==Colors.Blue&&At(all,140,100)==Colors.Yellow,"High-DPI full image cropped away source pixels");Save("model-full-192-dpi.png",full);
         });
-        var invalids=new (string,Rect)[]{("negative-x",new Rect(-.01,0,.5,.5)),("negative-y",new Rect(0,-.01,.5,.5)),("zero-width",new Rect(0,0,0,.5)),("zero-height",new Rect(0,0,.5,0)),("right-overflow",new Rect(.8,0,.3,.5)),("bottom-overflow",new Rect(0,.8,.5,.3)),("nan",new Rect(double.NaN,0,.5,.5)),("infinity",new Rect(0,0,double.PositiveInfinity,.5))};
+        var invalids=new (string,Rect)[]{("unsafe-negative-x",new Rect(-1000001,0,.5,.5)),("unsafe-negative-y",new Rect(0,-1000001,.5,.5)),("zero-width",new Rect(0,0,0,.5)),("zero-height",new Rect(0,0,.5,0)),("unsafe-right",new Rect(1000001,0,1,.5)),("unsafe-bottom",new Rect(0,1000001,.5,1)),("nan",new Rect(double.NaN,0,.5,.5)),("infinity",new Rect(0,0,double.PositiveInfinity,.5))};
         foreach(var invalid in invalids) Case("geometry rejects "+invalid.Item1,()=> {
             Check(!(bool)Static(CropGeometryType!,"IsValid",invalid.Item2)!,"Invalid normalized rectangle accepted");
-            Rejected(()=>Static(CropGeometryType!,"SourceRect",source,invalid.Item2));
+            Rejected(()=>Static(CropGeometryType!,"GetDrawRects",source,invalid.Item2,new Rect(0,0,100,100)));
             Rejected(()=>Static(CropGeometryType!,"Transform",invalid.Item2,1));
+        });
+        Case("viewport permits transparent margins while legacy crop remains strict",()=> {
+            var viewport=new Rect(-.5,-.5,2,2);Check((bool)Static(CropGeometryType!,"IsValid",viewport)!,"Blank margins rejected");Check(!(bool)Static(CropGeometryType!,"IsLegacyCrop",viewport)!,"Legacy crop accepted margins");
+            var draw=(ValueTuple<Rect,Rect>)Static(CropGeometryType!,"GetDrawRects",source,viewport,new Rect(0,0,100,100))!;
+            EqualRect(draw.Item1,new Rect(0,0,80,60),"Margin source intersection");EqualRect(draw.Item2,new Rect(25,25,50,50),"Margin destination placement");
+            using var image=RenderItem(ImageItem(source,new Rect(0,0,100,100),viewport),100,100);var pixels=Pixels(image);
+            Check(At(pixels,10,10).A==0&&At(pixels,90,90).A==0,"Margin is stretched or opaque");Check(At(pixels,30,30)==Colors.Red&&At(pixels,70,30)==Colors.Lime&&At(pixels,30,70)==Colors.Blue&&At(pixels,70,70)==Colors.Yellow,"Contained original quadrants changed");Save("model-viewport-transparent-margins.png",image);
+        });
+        Case("partial outside-source viewport clips source instead of stretching it across blank",()=> {
+            var viewport=new Rect(-.5,0,1,1);var draw=(ValueTuple<Rect,Rect>)Static(CropGeometryType!,"GetDrawRects",source,viewport,new Rect(0,0,100,100))!;
+            EqualRect(draw.Item1,new Rect(0,0,40,60),"Partial viewport source intersection");EqualRect(draw.Item2,new Rect(50,0,50,100),"Partial viewport destination intersection");
+            using var image=RenderItem(ImageItem(source,new Rect(0,0,100,100),viewport),100,100);var p=Pixels(image);Check(At(p,20,20).A==0&&At(p,75,20)==Colors.Red&&At(p,75,80)==Colors.Blue,"Partially visible source pixels/blank mapping incorrect");Save("model-partial-viewport-margin.png",image);
+        });
+        Case("fully out-of-source viewport renders transparent without losing source",()=> {
+            var viewport=new Rect(2,2,1,1);Check((bool)Static(CropGeometryType!,"IsValid",viewport)!,"Finite empty viewport rejected");Check(Static(CropGeometryType!,"GetDrawRects",source,viewport,new Rect(0,0,100,100)) is null,"Empty intersection should not draw");
+            var item=ImageItem(source,new Rect(0,0,100,100),viewport);using var image=RenderItem(item,100,100);Check(Pixels(image).Pixels.All(value=>value==0),"Empty viewport produced pixels");Check(ReferenceEquals(Get(item,"Image"),source)&&PixelHash(source)==sourceHash,"Empty viewport lost original source");
+        });
+        Case("out-of-unit viewport transforms retain blank margins for all eight orientations",()=> {
+            var input=new Rect(-.2,.1,1.5,1.2);var expected=new[]{input,new Rect(-.3,-.2,1.2,1.5),new Rect(-.3,-.3,1.5,1.2),new Rect(.1,-.3,1.2,1.5),new Rect(-.3,.1,1.5,1.2),new Rect(-.3,-.3,1.2,1.5),new Rect(-.2,-.3,1.5,1.2),new Rect(.1,-.2,1.2,1.5)};
+            for(int n=0;n<8;n++)EqualRect((Rect?)Static(CropGeometryType!,"Transform",input,n),expected[n],"Blank viewport orientation "+n);
         });
         Case("geometry transforms crop for all eight orthogonal orientations",()=> {
             var input=new Rect(.125,.25,.5,.375);
@@ -91,7 +111,3 @@ internal static partial class Program
         Save((entireCanvas?"canvas-":"selected-")+command+".png",rendered);
     }
 }
-
-
-
-

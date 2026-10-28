@@ -45,20 +45,24 @@ internal static partial class Program
                 Check(CropGeometryType is not null, "ImageCropGeometry is missing.");
                 Check(Application.Current is CropTestApplication && Application.Current.ApplicationLifetime is null, "Unexpected application/lifetime.");
             });
+            Case("SNIPFLOW-IMAGE-CROP-ZOOM-002 zoom contract", () => {
+                Check(typeof(EditorView).GetMethod("SetImageCropZoom", Any, null, new[] { typeof(double) }, null) is not null, "SetImageCropZoom(double) is missing (expected failure on 0.8.1).");
+                Check(typeof(EditorView).GetProperty("ImageCropZoom", Any)?.PropertyType == typeof(double), "ImageCropZoom double getter is missing.");
+            });
             if (failed == 0)
             {
                 ModelCases();
                 ProjectCases();
-                if (!args.Contains("--model-only")) { EditorCases(); SyntheticAndEdgeCases(); }
+                if (!args.Contains("--model-only")) { EditorCases(); SyntheticAndEdgeCases(); ZoomCases(); }
             }
         }
         catch (Exception ex) { failed++; Results.Add(new { name = "harness", status = "FAIL", error = Unwrap(ex).ToString() }); }
         var assemblyHash = Hash(File.ReadAllBytes(Product.Location));
         var report = new {
-            guard = "SNIPFLOW-IMAGE-CROP-001", timestamp = DateTimeOffset.Now, passed, failed,
+            guard = "SNIPFLOW-IMAGE-CROP-ZOOM-002", timestamp = DateTimeOffset.Now, passed, failed,
             productAssembly = Product.Location, productAssemblySha256 = assemblyHash,
             safety = "Empty application; no Avalonia Window, SnipFlow.App/MainWindow, OS input, clipboard, capture, hotkey, installation, or deployment.",
-            method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations and project persistence. No mouse/key events.",
+            method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations and project persistence. No OS or routed input events.",
             limitations = "Does not prove double-click routing, interactive pointer capture, native-window layout, IME, or desktop scaling. Linux execution requires an X11/XWayland display; use a virtual display such as Xvfb.",
             tests = Results
         };
@@ -141,6 +145,3 @@ internal static partial class Program
         if (actual is {} a && expected is {} b) Check(Math.Abs(a.X-b.X)<1e-9 && Math.Abs(a.Y-b.Y)<1e-9 && Math.Abs(a.Width-b.Width)<1e-9 && Math.Abs(a.Height-b.Height)<1e-9,message+$" ({a} != {b})");
     }
 }
-
-
-

@@ -10,7 +10,7 @@ namespace SnipFlow.Services;
 internal static class EditorSessionStore
 {
     private const string SessionKind = "SnipFlow.UpdateSession";
-    private const int SchemaVersion = 4;
+    private const int SchemaVersion = 5;
     private const long MaxManifestBytes = 64 * 1024 * 1024;
     private const long MaxImageBytes = 512 * 1024 * 1024;
     private const long MaxProjectBytes = 1024L * 1024 * 1024;
@@ -288,7 +288,7 @@ internal static class EditorSessionStore
 
     private static void ValidateManifest(SessionManifest manifest)
     {
-        if (manifest.SchemaVersion is not (1 or 2 or 3 or SchemaVersion) || manifest.Kind != SessionKind
+        if (manifest.SchemaVersion is not (1 or 2 or 3 or 4 or SchemaVersion) || manifest.Kind != SessionKind
             || !Guid.TryParseExact(manifest.SessionId, "N", out _) || manifest.Annotations is null
             || manifest.Annotations.Count > MaxAnnotations)
             throw InvalidCheckpoint();
@@ -297,6 +297,9 @@ internal static class EditorSessionStore
         if (manifest.SchemaVersion < 3 && manifest.Annotations.Any(data => data.TextOrientation != 0))
             throw InvalidCheckpoint();
         if (manifest.SchemaVersion < 4 && manifest.Annotations.Any(data => data.ImageCrop is not null))
+            throw InvalidCheckpoint();
+        if (manifest.SchemaVersion == 4 && manifest.Annotations.Any(data => data.ImageCrop is { } crop
+            && !ImageCropGeometry.IsLegacyCrop(new Rect(crop.X, crop.Y, crop.Width, crop.Height))))
             throw InvalidCheckpoint();
         if (manifest.SchemaVersion == 1 && (manifest.IsCollage
             || manifest.Annotations.Any(data => data.Tool == AnnotationTool.Image.ToString() || data.ImageFile is not null)))

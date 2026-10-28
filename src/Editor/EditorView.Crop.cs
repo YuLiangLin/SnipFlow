@@ -5,7 +5,7 @@ namespace SnipFlow.Editor;
 
 public sealed partial class EditorView
 {
-    private const string CropHint = "拖曳黑色邊界裁剪 · 拖曳圖片調整內容 · Enter 完成 · Esc 取消";
+    private const string CropHint = "拖曳黑色邊界裁剪 · 拖曳圖片調整內容 · Ctrl + 滾輪縮放圖片 · Enter 完成 · Esc 取消";
     private AnnotationItem? _cropTarget;
     private AnnotationItem? _cropDraft;
     private AnnotationItem? _cropDragSource;
@@ -15,8 +15,25 @@ public sealed partial class EditorView
     private Border? _cropToolbar;
     private readonly TextBlock _cropSizeLabel = new() { FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
     private readonly List<(Button Button, string Label)> _cropButtons = new();
+    private Slider? _cropScaleSlider;
+    private Button? _cropZoomOut;
+    private Button? _cropZoomIn;
+    private readonly TextBlock _cropZoomLabel = new() { FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _cropZoomPercent = new() { FontSize = 11, Width = 52, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+    private bool _syncCropScale;
+    private double _cropMinimumZoom = 1;
+    private double _cropMaximumZoom = 1600;
 
     public bool IsImageCropping => _cropDraft is not null;
+    internal double ImageCropZoom
+    {
+        get
+        {
+            var viewport = _cropDraft?.ImageCrop ?? ImageCropGeometry.Full;
+            var percentage = 100 / Math.Max(viewport.Width, viewport.Height);
+            return double.IsFinite(percentage) && percentage > 0 ? percentage : 100;
+        }
+    }
     private bool CropHasChanges => _cropDraft is not null && _cropTarget is not null && !_cropDraft.ContentEquals(_cropTarget);
 
     private bool TryBeginImageCropAt(Point point, int clickCount, KeyModifiers modifiers)
@@ -96,18 +113,54 @@ public sealed partial class EditorView
     {
         VerifyAccess();
         if (_cropDraft is not { Image: not null } draft) return;
-        EndImageCropGesture();
-        var full = FullImageBounds(draft);
-        var scale = Math.Min(1, Math.Min(PixelWidth / full.Width, PixelHeight / full.Height));
-        var width = full.Width * scale;
-        var height = full.Height * scale;
-        var left = Math.Clamp(full.X, 0, Math.Max(0, PixelWidth - width));
-        var top = Math.Clamp(full.Y, 0, Math.Max(0, PixelHeight - height));
-        draft.Start = new Point(left, top);
-        draft.End = new Point(left + width, top + height);
-        draft.ImageCrop = null;
+        CompleteGesture();
+        var frame = draft.Bounds;
+        var relativeAspect = (frame.Width / frame.Height) / ((double)draft.Image.PixelSize.Width / draft.Image.PixelSize.Height);
+        var viewport = relativeAspect >= 1
+            ? new Rect((1 - relativeAspect) / 2, 0, relativeAspect, 1)
+            : new Rect(0, (1 - 1 / relativeAspect) / 2, 1, 1 / relativeAspect);
+        if (!ImageCropGeometry.IsValid(viewport)) return;
+        draft.ImageCrop = viewport == ImageCropGeometry.Full ? null : viewport;
         RefreshCropUi();
         RaiseChanged();
+    }
+
+    internal void SetImageCropZoom(double percentage)
+    {
+        VerifyAccess();
+        if (!double.IsFinite(percentage) || percentage <= 0)
+            throw new ArgumentOutOfRangeException(nameof(percentage));
+        if (_cropDraft is not { } draft) return;
+        CompleteGesture();
+        var current = draft.ImageCrop ?? ImageCropGeometry.Full;
+        var range = ImageCropZoomRange();
+        percentage = Math.Clamp(percentage, range.Minimum, range.Maximum);
+        if (Math.Abs(percentage - ImageCropZoom) <= Math.Max(1, ImageCropZoom) * 1e-12)
+        {
+            RefreshCropUi();
+            return;
+        }
+        var fill = Math.Max(current.Width, current.Height);
+        var width = (current.Width / fill) * (100 / percentage);
+        var height = (current.Height / fill) * (100 / percentage);
+        var viewport = new Rect(current.X + (current.Width - width) / 2,
+            current.Y + (current.Height - height) / 2, width, height);
+        viewport = ClampImagePosition(viewport, draft.Bounds);
+        if (!ImageCropGeometry.IsValid(viewport)) return;
+        draft.ImageCrop = viewport == ImageCropGeometry.Full ? null : viewport;
+        RefreshCropUi();
+        RaiseChanged();
+    }
+
+    private (double Minimum, double Maximum) ImageCropZoomRange() => (_cropMinimumZoom, _cropMaximumZoom);
+
+    private static Rect ClampImagePosition(Rect viewport, Rect frame)
+    {
+        // Keep at least one document pixel (or the whole image when smaller) reachable for dragging.
+        var visibleX = Math.Min(1, Math.Min(viewport.Width, viewport.Width / Math.Max(1, frame.Width)));
+        var visibleY = Math.Min(1, Math.Min(viewport.Height, viewport.Height / Math.Max(1, frame.Height)));
+        return new Rect(Math.Clamp(viewport.X, -viewport.Width + visibleX, 1 - visibleX),
+            Math.Clamp(viewport.Y, -viewport.Height + visibleY, 1 - visibleY), viewport.Width, viewport.Height);
     }
 
     private void EndImageCrop()
@@ -116,6 +169,8 @@ public sealed partial class EditorView
         _cropTarget = _cropDraft = null;
         _beforeCrop = null;
         _hoverHandle = SelectionHandle.None;
+        _cropMinimumZoom = 1;
+        _cropMaximumZoom = 1600;
         RefreshCropUi();
     }
 
@@ -124,6 +179,31 @@ public sealed partial class EditorView
         var actions = new WrapPanel { Orientation = Orientation.Horizontal };
         _cropSizeLabel.Margin = new Thickness(8, 0, 12, 0);
         actions.Children.Add(_cropSizeLabel);
+        var zoom = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 8, 0) };
+        zoom.Children.Add(_cropZoomLabel);
+        Button ZoomButton(string content, Action action)
+        {
+            var button = new Button { Content = content, Width = 26, Padding = new Thickness(0), Margin = new Thickness(2), Foreground = ThemeService.Brush("Ink") };
+            button.Click += (_, _) => action();
+            return button;
+        }
+        _cropZoomOut = ZoomButton("−", () => SetImageCropZoom(ImageCropZoom / 1.1));
+        _cropZoomIn = ZoomButton("+", () => SetImageCropZoom(ImageCropZoom * 1.1));
+        _cropScaleSlider = new Slider
+        {
+            Width = 80, Minimum = Math.Log2(0.01), Maximum = 4, SmallChange = 0.1, LargeChange = 0.5,
+            Margin = new Thickness(4, 0), VerticalAlignment = VerticalAlignment.Center
+        };
+        _cropScaleSlider.PropertyChanged += (_, e) =>
+        {
+            if (!_syncCropScale && IsImageCropping && e.Property == Slider.ValueProperty)
+                SetImageCropZoom(100 * Math.Pow(2, _cropScaleSlider.Value));
+        };
+        zoom.Children.Add(_cropZoomOut);
+        zoom.Children.Add(_cropScaleSlider);
+        zoom.Children.Add(_cropZoomIn);
+        zoom.Children.Add(_cropZoomPercent);
+        actions.Children.Add(zoom);
         void Add(string label, Action action, bool primary = false)
         {
             var button = new Button
@@ -151,8 +231,27 @@ public sealed partial class EditorView
 
     private void RefreshCropUi()
     {
+        if (IsImageCropping)
+        {
+            _cropMinimumZoom = Math.Min(_cropMinimumZoom, ImageCropZoom);
+            _cropMaximumZoom = Math.Max(_cropMaximumZoom, ImageCropZoom);
+        }
         if (_cropToolbar is not null) _cropToolbar.IsVisible = IsImageCropping;
         _imageBadge.IsVisible = _zoomBadge.IsVisible = HasImage && !IsImageCropping;
+        if (_cropScaleSlider is not null)
+        {
+            _syncCropScale = true;
+            try
+            {
+                var range = ImageCropZoomRange();
+                _cropScaleSlider.Maximum = Math.Log2(range.Maximum / 100);
+                _cropScaleSlider.Minimum = Math.Log2(range.Minimum / 100);
+                _cropScaleSlider.Value = Math.Log2(ImageCropZoom / 100);
+                _cropZoomOut!.IsEnabled = ImageCropZoom > range.Minimum + 0.000001;
+                _cropZoomIn!.IsEnabled = ImageCropZoom < range.Maximum - 0.000001;
+            }
+            finally { _syncCropScale = false; }
+        }
         RefreshLanguage();
         UpdateCursor();
         InvalidateScene();
@@ -161,6 +260,18 @@ public sealed partial class EditorView
     private void RefreshImageCropLanguage()
     {
         _cropSizeLabel.Foreground = ThemeService.Brush("Muted");
+        _cropZoomLabel.Foreground = _cropZoomPercent.Foreground = ThemeService.Brush("Ink");
+        _cropZoomLabel.Text = I18n.T("圖片縮放");
+        _cropZoomPercent.Text = ImageCropZoom.ToString(ImageCropZoom < 10 ? "0.#'%'" : "0'%'");
+        if (_cropScaleSlider is not null)
+        {
+            AutomationProperties.SetName(_cropScaleSlider, I18n.T("圖片縮放"));
+            AutomationProperties.SetName(_cropZoomOut!, I18n.T("縮小圖片"));
+            AutomationProperties.SetName(_cropZoomIn!, I18n.T("放大圖片"));
+            ToolTip.SetTip(_cropScaleSlider, I18n.T("裁剪框固定，縮小圖片可留白；Ctrl + 滾輪也可縮放"));
+            ToolTip.SetTip(_cropZoomOut!, I18n.T("縮小圖片"));
+            ToolTip.SetTip(_cropZoomIn!, I18n.T("放大圖片"));
+        }
         foreach (var (button, label) in _cropButtons)
         {
             button.Content = I18n.T(label);
@@ -168,10 +279,9 @@ public sealed partial class EditorView
         }
         if (_cropDraft is { Image: not null } draft)
         {
-            var crop = draft.ImageCrop ?? ImageCropGeometry.Full;
-            _cropSizeLabel.Text = I18n.F("可見範圍 {0} × {1} px",
-                Math.Max(1, (int)Math.Round(crop.Width * draft.Image.PixelSize.Width)),
-                Math.Max(1, (int)Math.Round(crop.Height * draft.Image.PixelSize.Height)));
+            _cropSizeLabel.Text = I18n.F("裁剪框 {0} × {1} px",
+                Math.Max(1, (int)Math.Round(draft.Bounds.Width)),
+                Math.Max(1, (int)Math.Round(draft.Bounds.Height)));
         }
     }
 
@@ -186,9 +296,8 @@ public sealed partial class EditorView
 
     private static Rect SourceCropForFrame(Rect frame, Rect full)
     {
-        var x = Math.Clamp((frame.Left - full.X) / full.Width, 0, 1);
-        var y = Math.Clamp((frame.Top - full.Y) / full.Height, 0, 1);
-        return new Rect(x, y, Math.Min(frame.Width / full.Width, 1 - x), Math.Min(frame.Height / full.Height, 1 - y));
+        return new Rect((frame.Left - full.X) / full.Width, (frame.Top - full.Y) / full.Height,
+            frame.Width / full.Width, frame.Height / full.Height);
     }
 
     private static IEnumerable<(SelectionHandle Handle, Point Position)> CropHandles(Rect frame)
@@ -229,14 +338,15 @@ public sealed partial class EditorView
         var frame = source.Bounds;
         if (_cropHandle == SelectionHandle.Move)
         {
-            var left = Math.Clamp(crop.X - delta.X * crop.Width / frame.Width, 0, 1 - crop.Width);
-            var top = Math.Clamp(crop.Y - delta.Y * crop.Height / frame.Height, 0, 1 - crop.Height);
-            _cropDraft.ImageCrop = new Rect(left, top, crop.Width, crop.Height);
+            var viewport = ClampImagePosition(new Rect(crop.X - delta.X * crop.Width / frame.Width,
+                crop.Y - delta.Y * crop.Height / frame.Height, crop.Width, crop.Height), frame);
+            if (!ImageCropGeometry.IsValid(viewport)) return;
+            _cropDraft.ImageCrop = viewport;
         }
         else
         {
             var full = FullImageBounds(source);
-            var limits = full.Intersect(new Rect(0, 0, PixelWidth, PixelHeight));
+            var limits = new Rect(0, 0, PixelWidth, PixelHeight);
             var minimumWidth = Math.Min(frame.Width, Math.Max(2, full.Width / source.Image.PixelSize.Width));
             var minimumHeight = Math.Min(frame.Height, Math.Max(2, full.Height / source.Image.PixelSize.Height));
             var left = frame.Left; var top = frame.Top; var right = frame.Right; var bottom = frame.Bottom;
@@ -249,9 +359,12 @@ public sealed partial class EditorView
                 top = ClampEdge(top + delta.Y, limits.Top, bottom - minimumHeight);
             if (_cropHandle is SelectionHandle.Bottom or SelectionHandle.BottomLeft or SelectionHandle.BottomRight)
                 bottom = ClampEdge(bottom + delta.Y, top + minimumHeight, limits.Bottom);
-            _cropDraft.Start = new Point(left, top);
-            _cropDraft.End = new Point(right, bottom);
-            _cropDraft.ImageCrop = SourceCropForFrame(_cropDraft.Bounds, full);
+            var nextFrame = new Rect(new Point(left, top), new Point(right, bottom));
+            var viewport = SourceCropForFrame(nextFrame, full);
+            if (!ImageCropGeometry.IsValid(viewport)) return;
+            _cropDraft.Start = nextFrame.TopLeft;
+            _cropDraft.End = nextFrame.BottomRight;
+            _cropDraft.ImageCrop = viewport;
         }
         if (_cropDraft.ImageCrop == ImageCropGeometry.Full) _cropDraft.ImageCrop = null;
         RefreshCropUi();
@@ -268,6 +381,9 @@ public sealed partial class EditorView
     internal bool HandleImageCropKey(KeyEventArgs e)
     {
         if (!IsImageCropping) return false;
+        if (_cropScaleSlider is not null && IsWithin(_cropScaleSlider, e.Source)
+            && e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End or Key.PageUp or Key.PageDown)
+            return false;
         if (e.KeyModifiers == KeyModifiers.None && e.Key == Key.Escape) CancelImageCrop();
         else if (e.KeyModifiers == KeyModifiers.None && e.Key == Key.Enter) CommitImageCrop();
         else if ((e.KeyModifiers is KeyModifiers.None or KeyModifiers.Shift) && e.Key is Key.Left or Key.Right or Key.Up or Key.Down)

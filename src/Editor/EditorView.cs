@@ -696,6 +696,12 @@ public sealed partial class EditorView : UserControl
         CompleteGesture();
         // One wheel notch is Delta.Y = 1 (WPF reported 120).
         double factor = Math.Pow(1.12, e.Delta.Y);
+        if (IsImageCropping && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            SetImageCropZoom(ImageCropZoom * factor);
+            e.Handled = true;
+            return;
+        }
         ZoomAt(e.GetPosition(_viewport), _zoom * factor);
         e.Handled = true;
     }

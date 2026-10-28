@@ -44,7 +44,8 @@ internal sealed class AnnotationItem
     internal int TextOrientation { get; set; }
     internal Bitmap? Mosaic { get; set; }
     internal Bitmap? Image { get; set; }
-    // Normalized source coordinates. The complete bitmap is kept so a crop can always be reset.
+    // Normalized source viewport; it can extend beyond the bitmap to leave blank space in the frame.
+    // The complete bitmap is kept so its scale and position can always be reset.
     internal Rect? ImageCrop { get; set; }
 
     // Laying out text is the expensive part of Bounds; the cache is keyed by every input of the layout.
@@ -170,8 +171,9 @@ internal sealed class AnnotationItem
         switch (Tool)
         {
             case AnnotationTool.Image:
-                if (Image is not null)
-                    context.DrawImage(Image, ImageCropGeometry.SourceRect(Image, ImageCrop), Bounds);
+                if (Image is not null && ImageCropGeometry.GetDrawRects(Image, ImageCrop, Bounds) is { } draw)
+                    using (context.PushClip(Bounds))
+                        context.DrawImage(Image, draw.Source, draw.Destination);
                 break;
             case AnnotationTool.Arrow:
                 DrawArrow(context, pen, brush);

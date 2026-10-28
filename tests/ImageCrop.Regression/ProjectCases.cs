@@ -20,11 +20,11 @@ internal static partial class Program
         using var source=Quadrants();
         var checkpointRoot=Path.Combine(SettingsStore.DataRoot,"UpdateSessions");
         var existing=CheckpointInventory(checkpointRoot);
-        Case("schema 4 project roundtrip stores crop and complete original image",()=> {
+        Case("schema 5 project roundtrip stores crop and complete original image",()=> {
             var crop=new Rect(.125,.25,.5,.375);var editor=Editor(source,crop);var before=PixelHash(editor.ExportImage());
             projectSeed=Path.Combine(Output,"crop-roundtrip.snipflow");Static(StoreType,"SaveProject",editor,projectSeed);
             using(var zip=ZipFile.OpenRead(projectSeed)) {
-                var json=ReadManifest(zip);Check((int)json["SchemaVersion"]! ==4,"Crop project did not use schema 4");Check(json["Annotations"]![0]!["ImageCrop"] is not null,"Serialized crop missing");
+                var json=ReadManifest(zip);Check((int)json["SchemaVersion"]! ==5,"Crop project did not use schema 5");Check(json["Annotations"]![0]!["ImageCrop"] is not null,"Serialized crop missing");
                 using var pngStream=zip.GetEntry("image-0000.png")!.Open();using var pngBytes=new MemoryStream();pngStream.CopyTo(pngBytes);using var png=ImageTools.Decode(pngBytes.ToArray());
                 Check(png.PixelSize==source.PixelSize && PixelHash(png)==PixelHash(source),"Project flattened/truncated the source image");
             }
@@ -35,11 +35,20 @@ internal static partial class Program
             RequireSeed();var path=MutateProject(projectSeed!,"legacy-schema3.snipflow",json=>{json["SchemaVersion"]=3;((JsonObject)json["Annotations"]![0]!).Remove("ImageCrop");});
             var editor=new EditorView();Static(StoreType,"RestoreProject",editor,path);Check(Crop(First(editor)) is null,"Legacy project got cropped");using var rendered=editor.ExportImage();var p=Pixels(rendered);Check(At(p,100,80)==Colors.Red && At(p,210,160)==Colors.Yellow,"Legacy image did not remain complete");
         });
+        Case("schema 4 accepts legacy in-unit crop",()=> {
+            RequireSeed();var path=MutateProject(projectSeed!,"legacy-schema4.snipflow",json=>json["SchemaVersion"]=4);var editor=new EditorView();Static(StoreType,"RestoreProject",editor,path);EqualRect(Crop(First(editor)),new Rect(.125,.25,.5,.375),"Schema 4 legacy crop changed");
+        });
+        Case("schema 4 rejects new blank-margin viewport atomically",()=> {
+            RequireSeed();var path=MutateProject(projectSeed!,"invalid-schema4-margins.snipflow",json=>{json["SchemaVersion"]=4;json["Annotations"]![0]!["ImageCrop"]!["X"]=-.5;json["Annotations"]![0]!["ImageCrop"]!["Width"]=2.0;});var editor=Editor(source,null);var before=PixelHash(editor.ExportImage());Rejected(()=>Static(StoreType,"RestoreProject",editor,path));Check(PixelHash(editor.ExportImage())==before,"Invalid old-schema viewport changed document");
+        });
+        Case("schema 5 blank-margin viewport roundtrips with full source payload",()=> {
+            var viewport=new Rect(-.5,-.5,2,2);var editor=Editor(source,viewport);var before=PixelHash(editor.ExportImage());var path=Path.Combine(Output,"viewport-margins.snipflow");Static(StoreType,"SaveProject",editor,path);var restored=new EditorView();Static(StoreType,"RestoreProject",restored,path);EqualRect(Crop(First(restored)),viewport,"Blank-margin project viewport lost");Check(PixelHash(restored.ExportImage())==before&&PixelHash((Bitmap)Get(First(restored),"Image")!)==PixelHash(source),"Blank-margin project lost rendered/source pixels");
+        });
         foreach(int schema in new[]{2,3}) Case("old schema "+schema+" rejects crop instead of silently flattening",()=> {
             RequireSeed();var path=MutateProject(projectSeed!,"invalid-schema"+schema+"-crop.snipflow",json=>json["SchemaVersion"]=schema);
             var editor=Editor(source,null);var hash=PixelHash(editor.ExportImage());Rejected(()=>Static(StoreType,"RestoreProject",editor,path));Check(PixelHash(editor.ExportImage())==hash,"Rejected archive changed existing document");
         });
-        foreach(var invalid in new[]{("negative-x",new Rect(-.1,0,.5,.5)),("zero-width",new Rect(0,0,0,.5)),("overflow",new Rect(.8,0,.3,.5)),("nan",new Rect(double.NaN,0,.5,.5)),("infinity",new Rect(0,0,.5,double.PositiveInfinity))})
+        foreach(var invalid in new[]{("unsafe-negative-x",new Rect(-1000001,0,.5,.5)),("zero-width",new Rect(0,0,0,.5)),("unsafe-overflow",new Rect(1000001,0,1,.5)),("nan",new Rect(double.NaN,0,.5,.5)),("infinity",new Rect(0,0,.5,double.PositiveInfinity))})
         {
             Case("save rejects invalid crop "+invalid.Item1+" before publication",()=> {
                 var editor=Editor(source,invalid.Item2);var path=Path.Combine(Output,"must-not-publish-"+invalid.Item1+".snipflow");Rejected(()=>Static(StoreType,"SaveProject",editor,path));Check(!File.Exists(path),"Invalid project was published");
@@ -49,7 +58,7 @@ internal static partial class Program
             var editor=Editor(source,new Rect(0,0,.5,.5));Set(First(editor),"Tool",AnnotationTool.Rectangle);Set(First(editor),"Image",null);
             var path=Path.Combine(Output,"must-not-publish-non-image.snipflow");Rejected(()=>Static(StoreType,"SaveProject",editor,path));Check(!File.Exists(path),"Non-image crop published");
         });
-        foreach(var invalid in new[]{("negative-x","X",-.1),("empty-width","Width",0.0),("oversized-width","Width",1.1)})
+        foreach(var invalid in new[]{("unsafe-negative-x","X",-1000001.0),("empty-width","Width",0.0),("unsafe-width","Width",2000002.0)})
         {
             Case("restore rejects tampered crop "+invalid.Item1+" atomically",()=> {
                 RequireSeed();var path=MutateProject(projectSeed!,"tampered-"+invalid.Item1+".snipflow",json=>json["Annotations"]![0]!["ImageCrop"]![invalid.Item2]=invalid.Item3);
@@ -78,6 +87,3 @@ internal static partial class Program
         return path;
     }
 }
-
-
-
