@@ -10,7 +10,7 @@ namespace SnipFlow.Services;
 internal static class EditorSessionStore
 {
     private const string SessionKind = "SnipFlow.UpdateSession";
-    private const int SchemaVersion = 7;
+    private const int SchemaVersion = 8;
     private const long MaxManifestBytes = 64 * 1024 * 1024;
     private const long MaxImageBytes = 512 * 1024 * 1024;
     private const long MaxProjectBytes = 1024L * 1024 * 1024;
@@ -231,6 +231,9 @@ internal static class EditorSessionStore
         {
             if (item is null)
                 throw InvalidCheckpoint();
+            if (!TextFonts.TryNormalizeFamily(item.TextFontFamily, out var fontFamily)
+                || (item.Tool != AnnotationTool.Text && fontFamily != TextFonts.DefaultFamily))
+                throw InvalidCheckpoint();
             if (!ImageOrientation.IsValid(item.TextOrientation) || (item.Tool != AnnotationTool.Text && item.TextOrientation != 0))
                 throw InvalidCheckpoint();
             if (!ArrowStyleOptions.IsValid(item.ArrowStyle)
@@ -291,7 +294,7 @@ internal static class EditorSessionStore
 
     private static void ValidateManifest(SessionManifest manifest)
     {
-        if (manifest.SchemaVersion is not (1 or 2 or 3 or 4 or 5 or 6 or SchemaVersion) || manifest.Kind != SessionKind
+        if (manifest.SchemaVersion is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or SchemaVersion) || manifest.Kind != SessionKind
             || !Guid.TryParseExact(manifest.SessionId, "N", out _) || manifest.Annotations is null
             || manifest.Annotations.Count > MaxAnnotations)
             throw InvalidCheckpoint();
@@ -299,10 +302,12 @@ internal static class EditorSessionStore
         ValidateAnnotations(manifest.Annotations);
         if (manifest.SchemaVersion < 7 && manifest.Annotations.Any(data => data.HasArrowStyle))
             throw InvalidCheckpoint();
-        if (manifest.SchemaVersion == 7 && manifest.Annotations.Any(data => data.HasDoubleEndedArrow
+        if (manifest.SchemaVersion >= 7 && manifest.Annotations.Any(data => data.HasDoubleEndedArrow
             || (data.Tool == nameof(AnnotationTool.Arrow) && !data.HasArrowStyle)))
             throw InvalidCheckpoint();
         if (manifest.SchemaVersion < 6 && manifest.Annotations.Any(data => data.DoubleEndedArrow))
+            throw InvalidCheckpoint();
+        if (manifest.SchemaVersion < 8 && manifest.Annotations.Any(data => TextFonts.NormalizeFamily(data.TextFontFamily) != TextFonts.DefaultFamily))
             throw InvalidCheckpoint();
         if (manifest.SchemaVersion < 3 && manifest.Annotations.Any(data => data.TextOrientation != 0))
             throw InvalidCheckpoint();
@@ -449,6 +454,9 @@ internal static class EditorSessionStore
                 throw InvalidCheckpoint();
             ValidatePoint(data.Start);
             ValidatePoint(data.End);
+            if (!TextFonts.TryNormalizeFamily(data.TextFontFamily, out var fontFamily)
+                || (tool != AnnotationTool.Text && fontFamily != TextFonts.DefaultFamily))
+                throw InvalidCheckpoint();
             points += data.Points.Count;
             if (points > MaxPoints) throw InvalidCheckpoint();
             foreach (var point in data.Points) ValidatePoint(point);
@@ -586,6 +594,7 @@ internal static class EditorSessionStore
             Argb = ((uint)item.Color.A << 24) | ((uint)item.Color.R << 16) | ((uint)item.Color.G << 8) | item.Color.B,
             Width = item.Width, Points = item.Points.Select(ToData).ToList(), Text = item.Text,
             FontSize = item.FontSize, TextWidth = item.TextWidth, TextBoxHeight = item.TextBoxHeight, TextOrientation = item.TextOrientation,
+            TextFontFamily = TextFonts.NormalizeFamily(item.TextFontFamily),
             MosaicFile = item.Tool == AnnotationTool.Mosaic ? MosaicFileName(index) : null,
             ImageFile = item.Tool == AnnotationTool.Image ? ImageFileName(index) : null,
             ImageCrop = item.ImageCrop is { } crop ? new ImageCropData { X = crop.X, Y = crop.Y, Width = crop.Width, Height = crop.Height } : null
@@ -606,6 +615,7 @@ internal static class EditorSessionStore
         Color = Color.FromArgb((byte)(data.Argb >> 24), (byte)(data.Argb >> 16), (byte)(data.Argb >> 8), (byte)data.Argb),
         Width = data.Width, Points = data.Points.Select(FromData).ToList(), Text = data.Text,
         FontSize = data.FontSize, TextWidth = data.TextWidth, TextBoxHeight = data.TextBoxHeight, TextOrientation = data.TextOrientation,
+        TextFontFamily = TextFonts.NormalizeFamily(data.TextFontFamily),
         ArrowStyle = data.ArrowStyle is { } style ? ReadArrowStyle(style)
             : ArrowStyleOptions.Default with { StartHead = data.DoubleEndedArrow ? ArrowHeadKind.Arrow : ArrowHeadKind.None },
         ImageCrop = data.ImageCrop is { } crop ? new Rect(crop.X, crop.Y, crop.Width, crop.Height) : null
@@ -646,6 +656,7 @@ internal static class EditorSessionStore
         public required List<PointData> Points { get; init; }
         public required string Text { get; init; }
         public required double FontSize { get; init; }
+        public string TextFontFamily { get; init; } = TextFonts.DefaultFamily;
         public required double TextWidth { get; init; }
         public required double TextBoxHeight { get; init; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]

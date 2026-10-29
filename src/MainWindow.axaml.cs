@@ -65,10 +65,11 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent(); Editor.ArrowStyle = SettingsStore.Current.ArrowStyle;
-        ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
+        ToolClick(new Button { Tag = SettingsStore.Current.LastAnnotationTool.ToString() }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
         foreach (var tool in Enum.GetValues<AnnotationTool>().Where(ToolAppearanceOptions.Supports))
             Editor.RestoreToolAppearance(tool, SettingsStore.Current.GetToolAppearance(tool));
         Editor.RestoreTextSize(SettingsStore.Current.TextSize);
+        Editor.RestoreTextFontFamily(SettingsStore.Current.TextFontFamily);
         RefreshProperties();
         if (!PlatformInfo.IsWindows) RootBorder.CornerRadius = default;
         else RootBorder.CornerRadius = new CornerRadius(10);
@@ -555,6 +556,7 @@ public partial class MainWindow : Window
     void ExpandClick(object? sender, RoutedEventArgs e) => ApplyWindowMode(false);
     void LanguageChanged(object? sender, EventArgs e) => Dispatcher.UIThread.Post(() =>
     {
+        TextFontSelector.RefreshLanguage();
         RefreshDocumentState();
         RefreshHistory();
         RefreshHotkeyHint();
@@ -624,6 +626,7 @@ public partial class MainWindow : Window
             ColorButtons.IsVisible = shownTool is not (AnnotationTool.Image or AnnotationTool.Mosaic);
             WidthSlider.Value = Editor.SelectedStrokeWidth ?? Editor.StrokeWidth;
             if (!TextSizeBox.IsKeyboardFocusWithin) TextSizeBox.Text = (Editor.SelectedTextSize ?? Editor.TextSize).ToString("0.#", CultureInfo.CurrentCulture);
+            TextFontSelector.Value = Editor.SelectedTextFontFamily ?? Editor.TextFontFamily;
             var color = Editor.SelectedColor ?? Editor.DrawingColor;
             foreach (var button in ColorButtons.Children.OfType<Button>())
             {
@@ -718,8 +721,27 @@ public partial class MainWindow : Window
     }
     void ToolClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: string tag } && Enum.TryParse<AnnotationTool>(tag, out var tool))
-        { activeTool = tool; Editor.SetTool(tool); foreach (var candidate in ToolButtons.Children.OfType<Button>().Where(b => b.Tag is string)) { candidate.Background = candidate.Tag?.ToString() == tag ? ThemeService.Brush("Selected") : Brushes.Transparent; candidate.Foreground = ThemeService.Brush("Ink"); } RefreshProperties(); SetStatus(ToolKey(tool)); }
+        if (sender is not Button { Tag: string tag } || !Enum.TryParse<AnnotationTool>(tag, out var tool)
+            || (tool != AnnotationTool.Select && !ToolAppearanceOptions.Supports(tool))) return;
+        activeTool = tool;
+        Editor.SetTool(tool);
+        foreach (var candidate in ToolButtons.Children.OfType<Button>().Where(b => b.Tag is string))
+        {
+            candidate.Background = candidate.Tag?.ToString() == tag ? ThemeService.Brush("Selected") : Brushes.Transparent;
+            candidate.Foreground = ThemeService.Brush("Ink");
+        }
+        RefreshProperties();
+        SetStatus(ToolKey(tool));
+        var previous = SettingsStore.Current.LastAnnotationTool;
+        if (previous == tool) return;
+        SettingsStore.Current.LastAnnotationTool = tool;
+        try { SettingsStore.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            SettingsStore.Current.LastAnnotationTool = previous;
+            SettingsStore.Log(ex);
+            SetStatus("工具已切換，但偏好設定未儲存。");
+        }
     }
     void ColorClick(object? sender, RoutedEventArgs e)
     {
@@ -799,6 +821,23 @@ public partial class MainWindow : Window
     void PropertyDragStarted(object? sender, VectorEventArgs e) => Editor.BeginPropertyEdit();
     void PropertyDragCompleted(object? sender, VectorEventArgs e) => Editor.EndPropertyEdit();
     void TextSizeChanged(object? sender, RoutedEventArgs e) => ApplyTextSize();
+    void TextFontChanged(object? sender, EventArgs e)
+    {
+        if (refreshingProperties || Editor == null || busy || capturePending || Editor.IsImageCropping
+            || Editor.AppearanceTool != AnnotationTool.Text) return;
+        Editor.TextFontFamily = TextFontSelector.Value;
+        var previous = SettingsStore.Current.TextFontFamily;
+        var font = Editor.TextFontFamily;
+        if (previous == font) return;
+        SettingsStore.Current.TextFontFamily = font;
+        try { SettingsStore.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            SettingsStore.Current.TextFontFamily = previous;
+            SettingsStore.Log(ex);
+            SetStatus("文字字型已套用，但偏好設定未儲存。");
+        }
+    }
     void TextSizeKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter) { ApplyTextSize(); Editor.Focus(); e.Handled = true; }
@@ -902,6 +941,7 @@ public partial class MainWindow : Window
         if (busy || capturePending || historyDragInProgress) return;
         var modifiers = e.KeyModifiers;
         if (arrowStyleFlyout?.IsOpen == true) return;
+        if (IsFontPickerInput(TextFontSelector.IsChoosingFont, modifiers)) return;
         if (Editor.IsImageCropping)
         {
             if (modifiers == KeyModifiers.Control && e.Key == Key.S)
@@ -954,6 +994,8 @@ public partial class MainWindow : Window
         if (key != null) { ToolClick(new Button { Tag = key }, new()); e.Handled = true; }
     }
     void MinimizeClick(object? sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    static bool IsFontPickerInput(bool choosingFont, KeyModifiers modifiers) =>
+        choosingFont && (modifiers & (KeyModifiers.Control | KeyModifiers.Meta)) == 0;
     void MaximizeClick(object? sender, RoutedEventArgs e) => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
     void HideClick(object? sender, RoutedEventArgs e) => Hide();
     void ExitClick(object? sender, RoutedEventArgs e) => ((App)Application.Current!).ExitRequested();

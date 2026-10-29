@@ -104,6 +104,9 @@ public sealed partial class EditorView
         ValidateTransformPoint(item.Start);
         ValidateTransformPoint(item.End);
         foreach (var point in item.Points) ValidateTransformPoint(point);
+        if (!TextFonts.TryNormalizeFamily(item.TextFontFamily, out var fontFamily)
+            || (item.Tool != AnnotationTool.Text && fontFamily != TextFonts.DefaultFamily))
+            throw new InvalidOperationException(I18n.T("圖面資料無法旋轉或翻轉。"));
         if (!ImageOrientation.IsValid(item.TextOrientation) || (item.Tool != AnnotationTool.Text && item.TextOrientation != 0)
             || !double.IsFinite(item.Width) || item.Width is < 1 or > 32
             || !double.IsFinite(item.FontSize) || item.FontSize is < 12 or > 240

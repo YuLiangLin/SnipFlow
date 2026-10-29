@@ -5,31 +5,8 @@ namespace SnipFlow.Editor;
 
 internal sealed class AnnotationItem
 {
-    private static Typeface? _textTypeface;
-    // The WPF version used Segoe UI; AppFont keeps it first on Windows and falls back to Noto Sans CJK
-    // (and other system fonts) on Linux, so Chinese and Japanese text renders in both places.
-    internal static Typeface TextTypeface => _textTypeface ??= CreateTextTypeface();
-
-    private static Typeface CreateTextTypeface()
-    {
-        var semiBold = new Typeface(UiThemes.AppFont, FontStyle.Normal, FontWeight.SemiBold, FontStretch.Normal);
-        try
-        {
-            // Families without a SemiBold face (Noto Sans CJK ships Regular and Bold) resolve to the
-            // Bold face and are then emboldened a second time, unevenly. Use the real Bold face instead.
-            if ((semiBold.GlyphTypeface.FontSimulations & FontSimulations.Bold) != 0)
-            {
-                var bold = new Typeface(UiThemes.AppFont, FontStyle.Normal, FontWeight.Bold, FontStretch.Normal);
-                if ((bold.GlyphTypeface.FontSimulations & FontSimulations.Bold) == 0)
-                    return bold;
-            }
-        }
-        catch (InvalidOperationException)
-        {
-            // No font manager (headless); keep the requested weight.
-        }
-        return semiBold;
-    }
+    internal static Typeface TextTypeface => TextFonts.ResolveTypeface(TextFonts.DefaultFamily);
+    internal Typeface EffectiveTextTypeface => TextFonts.ResolveTypeface(TextFontFamily);
 
     internal AnnotationTool Tool { get; init; }
     internal Point Start { get; set; }
@@ -61,6 +38,7 @@ internal sealed class AnnotationItem
     internal List<Point> Points { get; init; } = new();
     internal string Text { get; set; } = string.Empty;
     internal double FontSize { get; set; } = 26;
+    internal string TextFontFamily { get; set; } = TextFonts.DefaultFamily;
     internal double TextWidth { get; set; }
     internal double TextBoxHeight { get; set; }
     internal int TextOrientation { get; set; }
@@ -72,7 +50,7 @@ internal sealed class AnnotationItem
 
     // Laying out text is the expensive part of Bounds; the cache is keyed by every input of the layout.
     private TextLayout? _layout;
-    private (string Text, double FontSize, double TextWidth, Color Color) _layoutKey;
+    private (string Text, string TextFontFamily, double FontSize, double TextWidth, Color Color) _layoutKey;
 
     internal AnnotationItem Clone() => new()
     {
@@ -85,6 +63,7 @@ internal sealed class AnnotationItem
         Points = new List<Point>(Points),
         Text = Text,
         FontSize = FontSize,
+        TextFontFamily = TextFontFamily,
         TextWidth = TextWidth,
         TextBoxHeight = TextBoxHeight,
         TextOrientation = TextOrientation,
@@ -163,6 +142,7 @@ internal sealed class AnnotationItem
         ArrowStyle = source.ArrowStyle;
         Text = source.Text;
         FontSize = source.FontSize;
+        TextFontFamily = source.TextFontFamily;
         TextWidth = source.TextWidth;
         TextBoxHeight = source.TextBoxHeight;
         TextOrientation = source.TextOrientation;
@@ -179,6 +159,7 @@ internal sealed class AnnotationItem
         static bool SamePoint(Point first, Point second) => ((Vector)(first - second)).SquaredLength < 0.0000000001;
         return Tool == other.Tool && SamePoint(Start, other.Start) && SamePoint(End, other.End)
             && Color == other.Color && Near(Width, other.Width) && Near(FontSize, other.FontSize)
+            && TextFontFamily == other.TextFontFamily
             && ArrowStyle == other.ArrowStyle
             && Near(TextWidth, other.TextWidth) && Near(TextBoxHeight, other.TextBoxHeight)
             && TextOrientation == other.TextOrientation
@@ -290,13 +271,13 @@ internal sealed class AnnotationItem
     /// </summary>
     internal TextLayout FormatText()
     {
-        var key = (Text, FontSize, TextWidth, Color);
+        var key = (Text, TextFontFamily, FontSize, TextWidth, Color);
         if (_layout is not null && _layoutKey == key)
             return _layout;
         // Do not set a maximum height: narrowing a box must wrap and grow, never trim text.
         _layout = new TextLayout(
             Text,
-            TextTypeface,
+            EffectiveTextTypeface,
             FontSize,
             new ImmutableSolidColorBrush(Color),
             TextAlignment.Left,

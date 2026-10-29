@@ -168,6 +168,8 @@
                   <Button x:Name="ArrowStyleButton" Content="{ui:Tr '箭頭設定 ▾'}" IsVisible="False" Margin="16,0,0,0" VerticalAlignment="Center"
                           Click="ArrowStyleClick" Theme="{StaticResource QuietButton}" ToolTip.Tip="{ui:Tr '設定兩端樣式、大小與線條格式'}" AutomationProperties.Name="{ui:Tr '箭頭設定'}" />
                   <StackPanel x:Name="TextProperties" Orientation="Horizontal" IsVisible="False">
+                    <TextBlock Text="{ui:Tr '字型'}" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <editor:TextFontPicker x:Name="TextFontSelector" FontChanged="TextFontChanged" Margin="0,0,12,0" />
                     <TextBlock Text="{ui:Tr '字級'}" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0" />
                     <TextBox x:Name="TextSizeBox" Text="26" Width="58" MinHeight="28" Padding="6,3" TextAlignment="Center" VerticalContentAlignment="Center" LostFocus="TextSizeChanged" ToolTip.Tip="{ui:Tr '文字大小（12–240 px）'}" />
                   </StackPanel>

@@ -30,6 +30,8 @@ internal static partial class Program
         Set(settings, "RecentColors", new List<string> { "#123456", "#ABCDEF" });
         PopulateToolPreferences(settings);
         Set(settings, "TextSize", PreferredTextSize);
+        Set(settings, "TextFontFamily", PreferredFontFamily);
+        Set(settings, "LastAnnotationTool", AnnotationTool.Text);
         return settings;
     }
 
@@ -169,6 +171,9 @@ internal static partial class Program
                 }
                 foreach (var stage in new[] { "settingsTextSize", "editorTextSize", "factoryTextSize", "draftTextSize", "textEditorFontSize", "committedTextSize" })
                     Check(report[stage]!.GetValue<double>() == PreferredTextSize, "Restart lost remembered TextSize at " + stage);
+                foreach (var stage in new[] { "settingsTextFontFamily", "editorTextFontFamily", "factoryTextFontFamily", "draftTextFontFamily", "textEditorFontFamily", "committedTextFontFamily" })
+                    Check(report[stage]!.GetValue<string>() == PreferredFontFamily, "Restart lost remembered font at " + stage);
+                Check(report["settingsLastAnnotationTool"]!.GetValue<string>() == "Text" && report["restoredLastAnnotationTool"]!.GetValue<string>() == "Text", "Restart probe lost last-tool preference.");
             }
             Check(Hash(File.ReadAllBytes(roundtrip)) == initialHash, "Restart probes wrote the supplied settings file.");
         });
@@ -231,7 +236,13 @@ internal static partial class Program
             foreach (var sample in ToolSamples)
                 Call(editor, "RestoreToolAppearance", sample.Tool, Call(settings, "GetToolAppearance", sample.Tool));
             var textSize = (double)Get(settings, "TextSize")!; Call(editor, "RestoreTextSize", textSize);
-            var factoryTextSize = (double)Get(Call(editor, "CreateShapeAnnotation", AnnotationTool.Text, new Point(30, 30))!, "FontSize")!;
+            var fontFamily = (string)Get(settings, "TextFontFamily")!; Call(editor, "RestoreTextFontFamily", fontFamily);
+            var lastTool = (AnnotationTool)Get(settings, "LastAnnotationTool")!; editor.SetTool(lastTool);
+            var restoredLastAnnotationTool = editor.AppearanceTool.ToString();
+            var factoryText = Call(editor, "CreateShapeAnnotation", AnnotationTool.Text, new Point(30, 30))!;
+            var factoryTextSize = (double)Get(factoryText, "FontSize")!;
+            var factoryTextFontFamily = (string)Get(factoryText, "TextFontFamily")!;
+            Check(factoryTextFontFamily == fontFamily && (string)Get(editor, "TextFontFamily")! == fontFamily, "Fresh editor or factory lost requested font.");
             Check(editor.TextSize == textSize && factoryTextSize == textSize, "Fresh editor or text factory lost TextSize.");
             var arrow = Call(editor, "CreateShapeAnnotation", AnnotationTool.Arrow, new Point(30, 30))!;
             EqualStyle(Get(editor, "ArrowStyle"), style, "Fresh editor default differs.");
@@ -251,14 +262,20 @@ internal static partial class Program
             }
             editor.LoadImage(ImageTools.Solid(320, 240, Colors.White)); editor.SetTool(AnnotationTool.Rectangle);
             Call(editor, "BeginTextEdit", (object?)null, new Rect(20, 20, 260, 100), (object?)null);
-            var draftTextSize = (double)Get(typeof(EditorView).GetField("_textDraft", Any)!.GetValue(editor)!, "FontSize")!;
+            var draftText = typeof(EditorView).GetField("_textDraft", Any)!.GetValue(editor)!;
+            var draftTextSize = (double)Get(draftText, "FontSize")!;
+            var draftTextFontFamily = (string)Get(draftText, "TextFontFamily")!;
             var textEditor = (TextBox)typeof(EditorView).GetField("_textEditor", Any)!.GetValue(editor)!;
             var textEditorFontSize = textEditor.FontSize;
+            Check(draftTextFontFamily == fontFamily, "Fresh actual text draft lost requested font.");
+            CheckTextBoxTypeface(textEditor, (Typeface)Static(TextFontsType, "ResolveTypeface", fontFamily)!);
             Check(draftTextSize == textSize && textEditorFontSize == textSize, "Fresh actual text draft/editor lost TextSize.");
             Check(TopLevel.GetTopLevel(editor) is null && Application.Current!.ApplicationLifetime is null, "Probe text creation attached a native host.");
             textEditor.Text = "Remembered text size"; editor.CommitTextEdit();
             Check(Items(editor).Count == 1 && (AnnotationTool)Get(First(editor), "Tool")! == AnnotationTool.Text, "Probe did not commit real Text.");
             var committedTextSize = (double)Get(First(editor), "FontSize")!;
+            var committedTextFontFamily = (string)Get(First(editor), "TextFontFamily")!;
+            Check(committedTextFontFamily == fontFamily, "Fresh committed text lost requested font.");
             Check(committedTextSize == textSize, "Fresh committed text lost remembered TextSize.");
             var after = LazyCreated(lazy);
             Check(!before && !after, "Isolated probe initialized global Current.");
@@ -274,6 +291,10 @@ internal static partial class Program
                 factoryAppearance = new { color = ColorHex((Color)Get(arrow, "Color")!), strokeWidth = (double)Get(arrow, "Width")! },
                 toolSettingsAppearance = ToolAppearanceNames(settings), toolEditorAppearance = ToolAppearanceNames(editor), toolFactoryAppearance = toolFactories,
                 settingsTextSize = textSize, editorTextSize = editor.TextSize, factoryTextSize, draftTextSize, textEditorFontSize, committedTextSize,
+                settingsTextFontFamily = fontFamily, editorTextFontFamily = (string)Get(editor, "TextFontFamily")!, factoryTextFontFamily,
+                draftTextFontFamily, textEditorFontFamily = textEditor.FontFamily.FamilyNames.First(), committedTextFontFamily,
+                textEditorEffectiveFamily = textEditor.FontFamily.Name,
+                settingsLastAnnotationTool = lastTool.ToString(), restoredLastAnnotationTool,
                 safety = "Fresh console process; supplied settings path only. No Current, registry, Window, MainWindow, OS input, or live settings write."
             };
         }

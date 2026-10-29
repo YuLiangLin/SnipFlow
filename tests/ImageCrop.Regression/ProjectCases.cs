@@ -20,11 +20,11 @@ internal static partial class Program
         using var source=Quadrants();
         var checkpointRoot=Path.Combine(SettingsStore.DataRoot,"UpdateSessions");
         var existing=CheckpointInventory(checkpointRoot);
-        Case("schema 7 project roundtrip stores crop and complete original image",()=> {
+        Case("schema 8 project roundtrip stores crop and complete original image",()=> {
             var crop=new Rect(.125,.25,.5,.375);var editor=Editor(source,crop);var before=PixelHash(editor.ExportImage());
             projectSeed=Path.Combine(Output,"crop-roundtrip.snipflow");Static(StoreType,"SaveProject",editor,projectSeed);
             using(var zip=ZipFile.OpenRead(projectSeed)) {
-                var json=ReadManifest(zip);Check((int)json["SchemaVersion"]! ==7,"Crop project did not use schema 7");Check(json["Annotations"]![0]!["ImageCrop"] is not null,"Serialized crop missing");
+                var json=ReadManifest(zip);Check((int)json["SchemaVersion"]! ==8,"Crop project did not use schema 8");Check(json["Annotations"]![0]!["ImageCrop"] is not null,"Serialized crop missing");
                 using var pngStream=zip.GetEntry("image-0000.png")!.Open();using var pngBytes=new MemoryStream();pngStream.CopyTo(pngBytes);using var png=ImageTools.Decode(pngBytes.ToArray());
                 Check(png.PixelSize==source.PixelSize && PixelHash(png)==PixelHash(source),"Project flattened/truncated the source image");
             }

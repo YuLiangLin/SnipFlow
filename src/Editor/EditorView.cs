@@ -61,6 +61,7 @@ public sealed partial class EditorView : UserControl
     private readonly Dictionary<AnnotationTool, (Color Color, double Width)> _toolAppearances = new();
     private ArrowStyleOptions _arrowStyle = ArrowStyleOptions.Default;
     private double _textSize = 26;
+    private string _textFontFamily = TextFonts.DefaultFamily;
     private double _zoom = 1;
     private double _panX;
     private double _panY;
@@ -92,6 +93,7 @@ public sealed partial class EditorView : UserControl
     public bool? SelectedDoubleEndedArrow => SelectedItem?.Tool == AnnotationTool.Arrow ? SelectedItem.DoubleEndedArrow : null;
     public ArrowStyleOptions? SelectedArrowStyle => SelectedItem?.Tool == AnnotationTool.Arrow ? SelectedItem.ArrowStyle : null;
     public double? SelectedTextSize => SelectedItem?.Tool == AnnotationTool.Text ? SelectedItem.FontSize : null;
+    public string? SelectedTextFontFamily => SelectedItem?.Tool == AnnotationTool.Text ? SelectedItem.TextFontFamily : null;
     public Color ArrowColor => AppearanceFor(AnnotationTool.Arrow).Color;
     public double ArrowStrokeWidth => AppearanceFor(AnnotationTool.Arrow).Width;
     public AnnotationTool AppearanceTool => SelectedItem?.Tool ?? _tool;
@@ -229,6 +231,27 @@ public sealed partial class EditorView : UserControl
             {
                 if (item.Tool == AnnotationTool.Text)
                     item.FontSize = _textSize;
+            });
+        }
+    }
+
+    public void RestoreTextFontFamily(string family)
+    {
+        VerifyAccess();
+        _textFontFamily = TextFonts.NormalizeFamily(family);
+    }
+
+    public string TextFontFamily
+    {
+        get => _textFontFamily;
+        set
+        {
+            VerifyAccess();
+            var family = TextFonts.NormalizeFamily(value);
+            _textFontFamily = family;
+            ChangeSelectedStyle(item =>
+            {
+                if (item.Tool == AnnotationTool.Text) item.TextFontFamily = family;
             });
         }
     }
@@ -731,7 +754,11 @@ public sealed partial class EditorView : UserControl
             Tool = tool, Color = appearance.Color, Width = appearance.Width, Start = point, End = point,
             ArrowStyle = tool == AnnotationTool.Arrow ? _arrowStyle : ArrowStyleOptions.Default
         };
-        if (tool == AnnotationTool.Text) item.FontSize = _textSize;
+        if (tool == AnnotationTool.Text)
+        {
+            item.FontSize = _textSize;
+            item.TextFontFamily = _textFontFamily;
+        }
         return item;
     }
 
@@ -939,6 +966,7 @@ public sealed partial class EditorView : UserControl
                 Color = AppearanceFor(AnnotationTool.Text).Color,
                 Width = AppearanceFor(AnnotationTool.Text).Width,
                 FontSize = _textSize,
+                TextFontFamily = _textFontFamily,
                 TextWidth = Math.Min(placement?.Width > 1 ? placement.Value.Width : 360, availableWidth),
                 TextBoxHeight = placement?.Height ?? 0
             };
@@ -1054,6 +1082,11 @@ public sealed partial class EditorView : UserControl
         double border = 1 / _zoom;
         _textEditBorder.BorderThickness = new Thickness(border);
         _textEditor.FontSize = _textDraft.FontSize;
+        var typeface = _textDraft.EffectiveTextTypeface;
+        _textEditor.FontFamily = typeface.FontFamily;
+        _textEditor.FontWeight = typeface.Weight;
+        _textEditor.FontStyle = typeface.Style;
+        _textEditor.FontStretch = typeface.Stretch;
         if ((_textEditor.Foreground as ISolidColorBrush)?.Color != _textDraft.Color)
         {
             var foreground = new SolidColorBrush(_textDraft.Color);

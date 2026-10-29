@@ -43,6 +43,7 @@ internal static partial class Program
         {
             AppBuilder.Configure<CropTestApplication>().UsePlatformDetect().SetupWithoutStarting();
             if (args.Contains("--legacy-arrow-fixtures")) return WriteLegacyArrowFixtures();
+            if (args.Contains("--font-picker-visual")) return WriteFontPickerVisuals(args);
             var preferenceProbe = Array.IndexOf(args, "--arrow-preference-probe");
             if (preferenceProbe >= 0)
             {
@@ -97,12 +98,24 @@ internal static partial class Program
                 Check(SettingsType.GetProperty("TextSize", Any)?.PropertyType == typeof(double), "UserSettings.TextSize is missing (expected failure on 0.8.7).");
                 Check(typeof(EditorView).GetMethod("RestoreTextSize", Any, null, new[] { typeof(double) }, null) is not null, "EditorView.RestoreTextSize(double) is missing.");
             });
+            Case("SNIPFLOW-TEXT-FONT-009 contract", () => {
+                Check(SettingsType.GetProperty("TextFontFamily", Any)?.PropertyType == typeof(string), "UserSettings.TextFontFamily is missing (expected failure on 0.8.8).");
+                Check(Product.GetType("SnipFlow.Editor.TextFonts") is not null, "TextFonts is missing.");
+                Check(ItemType.GetProperty("TextFontFamily", Any)?.PropertyType == typeof(string), "AnnotationItem.TextFontFamily is missing.");
+                Check(typeof(EditorView).GetProperty("TextFontFamily", Any)?.PropertyType == typeof(string), "EditorView.TextFontFamily is missing.");
+                Check(typeof(EditorView).GetProperty("SelectedTextFontFamily", Any)?.PropertyType == typeof(string), "SelectedTextFontFamily is missing.");
+                Check(typeof(EditorView).GetMethod("RestoreTextFontFamily", Any, null, new[] { typeof(string) }, null) is not null, "RestoreTextFontFamily(string) is missing.");
+                Check(SettingsType.GetProperty("LastAnnotationTool", Any)?.PropertyType == typeof(AnnotationTool), "LastAnnotationTool is missing.");
+                Check(Product.GetType("SnipFlow.Editor.TextFontPicker") is not null, "TextFontPicker is missing.");
+            });
             if (failed == 0)
             {
                 ArrowPreferenceCases();
                 ArrowAppearanceCases();
                 ToolAppearanceCases();
                 TextSizeCases();
+                TextFontCases();
+                LastToolCases();
                 ModelCases();
                 ProjectCases();
                 ArrowCases();
@@ -113,10 +126,10 @@ internal static partial class Program
         catch (Exception ex) { failed++; Results.Add(new { name = "harness", status = "FAIL", error = Unwrap(ex).ToString() }); }
         var assemblyHash = Hash(File.ReadAllBytes(Product.Location));
         var report = new {
-            guard = "SNIPFLOW-TEXT-SIZE-008", timestamp = DateTimeOffset.Now, passed, failed,
+            guard = "SNIPFLOW-TEXT-FONT-009", timestamp = DateTimeOffset.Now, passed, failed,
             productAssembly = Product.Location, productAssemblySha256 = assemblyHash,
             safety = "Empty application; no Avalonia Window, SnipFlow.App/MainWindow, OS input, clipboard, capture, hotkey, installation, or deployment.",
-            method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations, project persistence, and isolated settings-file IO. Two fresh console processes load only the supplied test settings path and apply all seven tools' color/width plus five arrow options and TextSize to a new offscreen EditorView and the real drawing factory. Both probes also invoke the actual BeginTextEdit and CommitTextEdit creation path and inspect draft, TextBox, and committed font size without a Window. Separate cases check existing text, preference restore, selection edits and document undo independently. A minimal QuietButton theme placeholder supports panel state/intent tests only; it does not validate the panel's visual theme. No OS or routed input events.",
+            method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations, project persistence, and isolated settings-file IO. Two fresh console processes load only the supplied test settings path and apply all seven tools' color/width plus five arrow options, TextSize, requested TextFontFamily and LastAnnotationTool to a new offscreen EditorView and the real drawing factory. Both probes invoke BeginTextEdit and CommitTextEdit and inspect draft, TextBox and committed size/family without a Window. Separate cases compare real installed fonts' metrics and pixels, missing-font fallback, per-item clone/cache/project persistence, preferences and document undo. A minimal QuietButton theme placeholder supports arrow panel state tests only; actual font-picker visual checks run in the separate --font-picker-visual mode with real Fluent/palette/source styles. No OS or routed input events.",
             limitations = "Does not instantiate MainWindow or prove its startup/save wiring, double-click routing, interactive pointer capture, native-window layout, IME, or desktop scaling. Linux execution requires an X11/XWayland display; use a virtual display such as Xvfb.",
             tests = Results
         };
