@@ -66,6 +66,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent(); Editor.ArrowStyle = SettingsStore.Current.ArrowStyle;
         ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
+        Editor.RestoreArrowAppearance(Color.Parse(SettingsStore.Current.ArrowColor), SettingsStore.Current.ArrowStrokeWidth);
         if (!PlatformInfo.IsWindows) RootBorder.CornerRadius = default;
         else RootBorder.CornerRadius = new CornerRadius(10);
         if (Application.Current?.TryGetResource("SnipFlowIcon", null, out var icon) == true && icon is WindowIcon windowIcon) Icon = windowIcon;
@@ -614,13 +615,13 @@ public partial class MainWindow : Window
             if (arrowStylePanel is not null)
             {
                 arrowStylePanel.Value = Editor.SelectedArrowStyle ?? Editor.ArrowStyle;
-                arrowStylePanel.PreviewColor = Editor.SelectedColor ?? activeColor;
+                arrowStylePanel.PreviewColor = Editor.SelectedColor ?? Editor.DrawingColor;
                 arrowStylePanel.PreviewWidth = Editor.SelectedStrokeWidth ?? Editor.StrokeWidth;
             }
             ColorButtons.IsVisible = shownTool is not (AnnotationTool.Image or AnnotationTool.Mosaic);
             WidthSlider.Value = Editor.SelectedStrokeWidth ?? Editor.StrokeWidth;
             if (!TextSizeBox.IsKeyboardFocusWithin) TextSizeBox.Text = (Editor.SelectedTextSize ?? Editor.TextSize).ToString("0.#", CultureInfo.CurrentCulture);
-            var color = Editor.SelectedColor ?? activeColor;
+            var color = Editor.SelectedColor ?? Editor.DrawingColor;
             foreach (var button in ColorButtons.Children.OfType<Button>())
             {
                 if (button.Tag is not string hex) continue;
@@ -721,7 +722,33 @@ public partial class MainWindow : Window
     {
         if (sender is Button { Tag: string value }) ApplyAnnotationColor(Color.Parse(value));
     }
-    void StrokeChanged(object? sender, RangeBaseValueChangedEventArgs e) { if (Editor != null && !refreshingProperties) Editor.StrokeWidth = e.NewValue; }
+    void StrokeChanged(object? sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (Editor == null || refreshingProperties || busy || capturePending || Editor.IsImageCropping) return;
+        var arrowContext = (Editor.SelectedTool ?? activeTool) == AnnotationTool.Arrow;
+        Editor.StrokeWidth = e.NewValue;
+        if (arrowContext) SaveArrowAppearancePreferences();
+    }
+
+    void SaveArrowAppearancePreferences(List<string>? previousRecentColors = null)
+    {
+        var previousColor = SettingsStore.Current.ArrowColor;
+        var previousWidth = SettingsStore.Current.ArrowStrokeWidth;
+        var color = ColorPaletteView.ToHex(Editor.ArrowColor);
+        var width = Editor.ArrowStrokeWidth;
+        if (previousRecentColors is null && string.Equals(previousColor, color, StringComparison.OrdinalIgnoreCase) && previousWidth == width) return;
+        SettingsStore.Current.ArrowColor = color;
+        SettingsStore.Current.ArrowStrokeWidth = width;
+        try { SettingsStore.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            SettingsStore.Current.ArrowColor = previousColor;
+            SettingsStore.Current.ArrowStrokeWidth = previousWidth;
+            if (previousRecentColors is not null) SettingsStore.Current.RecentColors = previousRecentColors;
+            SettingsStore.Log(ex);
+            SetStatus("箭頭顏色與粗細已套用，但偏好設定未儲存。");
+        }
+    }
     void ArrowStyleClick(object? sender, RoutedEventArgs e)
     {
         if (Editor == null || refreshingProperties || busy || capturePending || Editor.IsImageCropping) return;

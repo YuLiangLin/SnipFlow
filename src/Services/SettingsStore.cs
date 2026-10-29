@@ -20,6 +20,8 @@ public sealed class UserSettings
     public int HistoryLimit { get; set; } = 80;
     public List<string> RecentColors { get; set; } = new();
     public ArrowStyleOptions ArrowStyle { get; set; } = ArrowStyleOptions.Default;
+    public string ArrowColor { get; set; } = "#63D5C5";
+    public double ArrowStrokeWidth { get; set; } = 4;
 }
 
 public static class SettingsStore
@@ -67,7 +69,7 @@ public static class SettingsStore
         using var document = JsonDocument.Parse(File.ReadAllText(path));
         if (document.RootElement.ValueKind != JsonValueKind.Object)
             throw new JsonException("Settings must be an object.");
-        JsonElement arrow = default;
+        JsonElement arrow = default, arrowColor = default, arrowStrokeWidth = default;
         using var otherSettings = new MemoryStream();
         using (var writer = new Utf8JsonWriter(otherSettings))
         {
@@ -75,6 +77,8 @@ public static class SettingsStore
             foreach (var property in document.RootElement.EnumerateObject())
             {
                 if (property.NameEquals(nameof(UserSettings.ArrowStyle))) arrow = property.Value;
+                else if (property.NameEquals(nameof(UserSettings.ArrowColor))) arrowColor = property.Value;
+                else if (property.NameEquals(nameof(UserSettings.ArrowStrokeWidth))) arrowStrokeWidth = property.Value;
                 else property.WriteTo(writer);
             }
             writer.WriteEndObject();
@@ -88,6 +92,11 @@ public static class SettingsStore
             settings.ArrowStyle = ArrowStyleOptions.IsValid(style) ? style! : ArrowStyleOptions.Default;
         }
         catch (JsonException) { settings.ArrowStyle = ArrowStyleOptions.Default; }
+        if (arrowColor.ValueKind == JsonValueKind.String && TryNormalizeArrowColor(arrowColor.GetString(), out var color))
+            settings.ArrowColor = color;
+        if (arrowStrokeWidth.ValueKind == JsonValueKind.Number && arrowStrokeWidth.TryGetDouble(out var width)
+            && IsValidArrowStrokeWidth(width))
+            settings.ArrowStrokeWidth = width;
         settings.Theme = ThemeService.NormalizeMode(settings.Theme);
         settings.RecentColors = (settings.RecentColors ?? new()).Where(value =>
             value is { Length: 7 } && value[0] == '#' && value.Skip(1).All(Uri.IsHexDigit))
@@ -101,14 +110,30 @@ public static class SettingsStore
     internal static void WriteSettingsFile(string path, UserSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        // Reject invalid caller data before serializing or creating a temporary file. In particular,
+        // NaN/Infinity must not fail halfway through a settings publication.
+        if (!TryNormalizeArrowColor(settings.ArrowColor, out var color))
+            throw new ArgumentException("Arrow color must be an opaque #RRGGBB value.", nameof(settings));
+        if (!IsValidArrowStrokeWidth(settings.ArrowStrokeWidth))
+            throw new ArgumentOutOfRangeException(nameof(settings), "Arrow stroke width must be finite and between 1 and 32.");
         path = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var json = JsonSerializer.SerializeToNode(settings, JsonOptions)!.AsObject();
         var style = ArrowStyleOptions.IsValid(settings.ArrowStyle) ? settings.ArrowStyle : ArrowStyleOptions.Default;
         json[nameof(UserSettings.ArrowStyle)] = JsonSerializer.SerializeToNode(style, ArrowJsonOptions);
+        json[nameof(UserSettings.ArrowColor)] = color;
+        json[nameof(UserSettings.ArrowStrokeWidth)] = settings.ArrowStrokeWidth;
         File.WriteAllText(path + ".tmp", json.ToJsonString(JsonOptions));
         File.Move(path + ".tmp", path, true);
     }
+    static bool TryNormalizeArrowColor(string? value, out string color)
+    {
+        color = "#63D5C5";
+        if (value is not { Length: 7 } || value[0] != '#' || !value.Skip(1).All(Uri.IsHexDigit)) return false;
+        color = value.ToUpperInvariant();
+        return true;
+    }
+    static bool IsValidArrowStrokeWidth(double width) => double.IsFinite(width) && width is >= 1 and <= 32;
     static void RefreshStartupPreference(UserSettings settings)
     {
         try { settings.StartWithWindows = StartupService.ReadRegistration().IsEnabled; }

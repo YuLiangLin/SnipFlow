@@ -58,6 +58,8 @@ public sealed partial class EditorView : UserControl
     private AnnotationTool _tool = AnnotationTool.Arrow;
     private Color _color = Color.FromRgb(99, 213, 197);
     private double _strokeWidth = 4;
+    private Color _arrowColor = Color.FromRgb(99, 213, 197);
+    private double _arrowStrokeWidth = 4;
     private ArrowStyleOptions _arrowStyle = ArrowStyleOptions.Default;
     private double _textSize = 26;
     private double _zoom = 1;
@@ -91,8 +93,13 @@ public sealed partial class EditorView : UserControl
     public bool? SelectedDoubleEndedArrow => SelectedItem?.Tool == AnnotationTool.Arrow ? SelectedItem.DoubleEndedArrow : null;
     public ArrowStyleOptions? SelectedArrowStyle => SelectedItem?.Tool == AnnotationTool.Arrow ? SelectedItem.ArrowStyle : null;
     public double? SelectedTextSize => SelectedItem?.Tool == AnnotationTool.Text ? SelectedItem.FontSize : null;
+    public Color ArrowColor => _arrowColor;
+    public double ArrowStrokeWidth => _arrowStrokeWidth;
+    public Color DrawingColor => IsArrowAppearanceContext ? _arrowColor : _color;
 
     private AnnotationItem? SelectedItem => _textDraft ?? _selected;
+    private bool IsArrowAppearanceContext => SelectedItem?.Tool == AnnotationTool.Arrow
+        || (SelectedItem is null && _tool == AnnotationTool.Arrow);
     private bool TextHasChanges => _textDraft is not null && (_textTarget is null ? !string.IsNullOrWhiteSpace(_textDraft.Text) : !_textDraft.ContentEquals(_textTarget));
     private bool TransformHasChanges => _transformSources.Any(pair => !pair.Key.ContentEquals(pair.Value));
     private bool PropertyHasChanges => _propertySources.Any(pair => !pair.Key.ContentEquals(pair.Value));
@@ -148,19 +155,31 @@ public sealed partial class EditorView : UserControl
         });
     }
 
+    // Restoring preferences changes only future arrows, including when a document is selected.
+    public void RestoreArrowAppearance(Color color, double width)
+    {
+        VerifyAccess();
+        if (!double.IsFinite(width) || width is < 1 or > 32)
+            throw new ArgumentOutOfRangeException(nameof(width));
+        _arrowColor = Color.FromRgb(color.R, color.G, color.B);
+        _arrowStrokeWidth = width;
+    }
+
     public double StrokeWidth
     {
-        get => _strokeWidth;
+        get => IsArrowAppearanceContext ? _arrowStrokeWidth : _strokeWidth;
         set
         {
             VerifyAccess();
             if (!double.IsFinite(value))
                 throw new ArgumentOutOfRangeException(nameof(value));
-            _strokeWidth = Math.Clamp(value, 1, 32);
+            var width = Math.Clamp(value, 1, 32);
+            if (IsArrowAppearanceContext) _arrowStrokeWidth = width;
+            else _strokeWidth = width;
             ChangeSelectedStyle(item =>
             {
                 if (item.Tool is not (AnnotationTool.Text or AnnotationTool.Image))
-                    item.Width = _strokeWidth;
+                    item.Width = width;
             });
         }
     }
@@ -491,7 +510,8 @@ public sealed partial class EditorView : UserControl
     public void SetColor(Color color)
     {
         VerifyAccess();
-        _color = color;
+        if (IsArrowAppearanceContext) _arrowColor = color;
+        else _color = color;
         ChangeSelectedStyle(item =>
         {
             if (item.Tool is not (AnnotationTool.Mosaic or AnnotationTool.Image))
@@ -672,7 +692,8 @@ public sealed partial class EditorView : UserControl
 
     private AnnotationItem CreateShapeAnnotation(AnnotationTool tool, Point point) => new()
     {
-        Tool = tool, Color = _color, Width = _strokeWidth, Start = point, End = point,
+        Tool = tool, Color = tool == AnnotationTool.Arrow ? _arrowColor : _color,
+        Width = tool == AnnotationTool.Arrow ? _arrowStrokeWidth : _strokeWidth, Start = point, End = point,
         ArrowStyle = tool == AnnotationTool.Arrow ? _arrowStyle : ArrowStyleOptions.Default
     };
 

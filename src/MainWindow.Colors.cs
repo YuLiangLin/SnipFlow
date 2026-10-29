@@ -13,7 +13,7 @@ public partial class MainWindow
         if (busy || capturePending) return;
         if (colorPalette?.IsOpen == true) { CloseColorPalette(); return; }
         Editor.CommitTextEdit();
-        var view = new ColorPaletteView(Editor.SelectedColor ?? activeColor, SettingsStore.Current.RecentColors);
+        var view = new ColorPaletteView(Editor.SelectedColor ?? Editor.DrawingColor, SettingsStore.Current.RecentColors);
         view.MaxHeight = Math.Max(200, WindowBoundsService.GetWorkArea(this).Height - 32);
         var popup = new Popup
         {
@@ -42,14 +42,22 @@ public partial class MainWindow
 
     void ApplyAnnotationColor(Color color)
     {
+        if (busy || capturePending || Editor.IsImageCropping) return;
+        var arrowContext = (Editor.SelectedTool ?? activeTool) == AnnotationTool.Arrow;
         activeColor = Color.FromRgb(color.R, color.G, color.B);
         Editor.SetColor(activeColor);
         RefreshProperties();
         var hex = ColorPaletteView.ToHex(activeColor);
         var previous = SettingsStore.Current.RecentColors;
         var recent = new[] { hex }.Concat(previous).Distinct(StringComparer.Ordinal).Take(8).ToList();
-        if (previous.SequenceEqual(recent)) return;
-        SettingsStore.Current.RecentColors = recent;
+        var recentChanged = !previous.SequenceEqual(recent);
+        if (recentChanged) SettingsStore.Current.RecentColors = recent;
+        if (arrowContext)
+        {
+            SaveArrowAppearancePreferences(recentChanged ? previous : null);
+            return;
+        }
+        if (!recentChanged) return;
         try { SettingsStore.Save(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {

@@ -18,6 +18,8 @@ internal static partial class Program
     {
         var settings = Activator.CreateInstance(SettingsType)!;
         Set(settings, "ArrowStyle", style);
+        Set(settings, "ArrowColor", "#a1b2c3");
+        Set(settings, "ArrowStrokeWidth", 7.25);
         Set(settings, "Language", "en-US");
         Set(settings, "Theme", "light");
         Set(settings, "HistoryLimit", 137);
@@ -152,6 +154,10 @@ internal static partial class Program
                     foreach (var stage in new[] { "settingsStyle", "editorStyle", "factoryStyle" })
                         Check(report[stage]![field]!.GetValue<string>() == expected, "Restart lost " + field + " at " + stage);
                 }
+                foreach (var stage in new[] { "settingsAppearance", "editorAppearance", "factoryAppearance" }) {
+                    Check(report[stage]!["color"]!.GetValue<string>() == "#A1B2C3", "Restart lost arrow color at " + stage);
+                    Check(report[stage]!["strokeWidth"]!.GetValue<double>() == 7.25, "Restart lost arrow width at " + stage);
+                }
             }
             Check(Hash(File.ReadAllBytes(roundtrip)) == initialHash, "Restart probes wrote the supplied settings file.");
         });
@@ -209,10 +215,13 @@ internal static partial class Program
             var lazy = SettingsLazy(); var before = LazyCreated(lazy);
             var fileHash = Hash(File.ReadAllBytes(settingsPath));
             var settings = ReadPreferences(settingsPath); var style = Get(settings, "ArrowStyle")!;
-            var editor = new EditorView(); Set(editor, "ArrowStyle", style);
+            var color = Color.Parse((string)Get(settings, "ArrowColor")!); var width = (double)Get(settings, "ArrowStrokeWidth")!;
+            var editor = new EditorView(); Set(editor, "ArrowStyle", style); Call(editor, "RestoreArrowAppearance", color, width);
             var arrow = Call(editor, "CreateShapeAnnotation", AnnotationTool.Arrow, new Point(30, 30))!;
             EqualStyle(Get(editor, "ArrowStyle"), style, "Fresh editor default differs.");
             EqualStyle(Get(arrow, "ArrowStyle"), style, "Fresh drawing factory differs.");
+            CheckArrowAppearance(editor, color, width);
+            CheckItemAppearance(arrow, color, width);
             var after = LazyCreated(lazy);
             Check(!before && !after, "Isolated probe initialized global Current.");
             Check(Hash(File.ReadAllBytes(settingsPath)) == fileHash, "Probe modified the supplied settings file.");
@@ -222,6 +231,9 @@ internal static partial class Program
                 productAssembly = Product.Location, productAssemblySha256 = Hash(File.ReadAllBytes(Product.Location)),
                 settingsPath, settingsSha256 = fileHash, lazyCurrentBefore = before, lazyCurrentAfter = after,
                 settingsStyle = StyleNames(style), editorStyle = StyleNames(Get(editor, "ArrowStyle")!), factoryStyle = StyleNames(Get(arrow, "ArrowStyle")!),
+                settingsAppearance = new { color = ColorHex(color), strokeWidth = width },
+                editorAppearance = new { color = ColorHex((Color)Get(editor, "ArrowColor")!), strokeWidth = (double)Get(editor, "ArrowStrokeWidth")! },
+                factoryAppearance = new { color = ColorHex((Color)Get(arrow, "Color")!), strokeWidth = (double)Get(arrow, "Width")! },
                 safety = "Fresh console process; supplied settings path only. No Current, registry, Window, MainWindow, OS input, or live settings write."
             };
         }
