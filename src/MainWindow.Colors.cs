@@ -43,7 +43,7 @@ public partial class MainWindow
     void ApplyAnnotationColor(Color color)
     {
         if (busy || capturePending || Editor.IsImageCropping) return;
-        var arrowContext = (Editor.SelectedTool ?? activeTool) == AnnotationTool.Arrow;
+        var appearanceTool = Editor.AppearanceTool;
         activeColor = Color.FromRgb(color.R, color.G, color.B);
         Editor.SetColor(activeColor);
         RefreshProperties();
@@ -52,9 +52,9 @@ public partial class MainWindow
         var recent = new[] { hex }.Concat(previous).Distinct(StringComparer.Ordinal).Take(8).ToList();
         var recentChanged = !previous.SequenceEqual(recent);
         if (recentChanged) SettingsStore.Current.RecentColors = recent;
-        if (arrowContext)
+        if (ToolAppearanceOptions.Supports(appearanceTool))
         {
-            SaveArrowAppearancePreferences(recentChanged ? previous : null);
+            SaveToolAppearancePreferences(appearanceTool, recentChanged ? previous : null);
             return;
         }
         if (!recentChanged) return;

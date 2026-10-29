@@ -2,6 +2,8 @@
 
 這是無測試框架依賴的 console regression harness。以 `ProjectReference` 呼叫產品本身的模型、渲染、合圖操作與 `.snipflow` 專案保存，不複製裁剪實作。
 
+目前 0.8.7 的完整執行預期包含 183 項（原 171 項，加上 `SNIPFLOW-TOOL-APPEARANCE-007` contract 與 11 項工具偏好案例）。這是測試組成說明，實際通過／失敗數、產品 DLL hash 與平台證據以各次輸出的 `results.json` 為準；`--model-only`、probe 與 fixture-only 模式不代表完整 183 項回歸。
+
 在 repository 根目錄執行：
 
 ```powershell
@@ -29,6 +31,8 @@ dotnet run --project tests/ImageCrop.Regression -c Release -- --model-only
 - ArrowStyle 五欄位的各端點種類／大小與線型代表矩陣、虛線／點線與實線端點、樣式 Clone／Undo／保存／schema 6 映射、非法 enum/null/衝突 truth 原子拒絕、多選只改差異欄位及同值 preset intent。
 - 箭頭五個偏好的真實設定 JSON roundtrip、既有數字 enum 轉存名稱、舊檔缺欄預設、損壞樣式僅回復箭頭預設並保留其他偏好；隔離路徑 I/O 不初始化 lazy Current、不發全域 Changed、不留下暫存檔；兩次全新 console 子行程讀取同檔後套用至離屏 Editor 與真實畫圖 factory。另驗證 selection／restore／undo 與 panel 同步不發出使用者樣式編輯事件。
 - 箭頭顏色／粗細分別保存為 opaque `#RRGGBB`（大寫）與 1–32 的有限數字（保留小數），兩欄獨立處理 legacy／null／非法型別／越界與 duplicate last-wins；非法寫入在建立目錄或暫存檔前拒絕，不覆蓋原檔。RestoreArrowAppearance 只改 default，不改選取文件／history；Arrow 與 Pen／Rectangle／Text 的色寬隔離、primary Arrow 編輯會更新 default、Undo／Redo／載入其他文件／新合圖不覆寫已保存偏好。
+- Arrow／Rectangle／Ellipse／Pen／Highlight／Text／Mosaic 各有獨立色寬預設；六個非 Arrow entry 使用固定英文工具名存入 `ToolAppearances`，Arrow 沿用既有 `ArrowColor`／`ArrowStrokeWidth` 作唯一來源。各工具逐欄非法型別／顏色／非有限及越界粗細只回復該欄預設，其他六工具、箭頭五個樣式與無關設定保留；工具 block／entry／field 的 duplicate 均驗證 last-wins。忽略 Arrow shadow entry、Select／Image／未知或非固定名稱 key；支持工具的非法寫入在任何 I/O 前拒絕、保留原檔且不讀 Current。
+- 工具切換與明確傳入不同 tool 的 factory 不串用外觀；多選時 primary 決定要更新哪一個未來預設，已選文件維持原本批次套色／線寬的規則（Mosaic 不改色、Text 不改文件線寬）。Restore defaults 不改選取像素／revision／undo，Undo／Redo／RestoreSession／LoadImage／NewCollage 保留七工具預設。文字測試實際呼叫 `BeginTextEdit(null, placement, null)`，檢查 draft 與 TextBox foreground，輸入內容後 `CommitTextEdit()`，再檢查已建立 Text 的色寬、內容與單步 Undo／Redo；不是只驗證通用 factory。Text 線寬與 Mosaic 顏色雖測 API／保存，產品 UI 仍分別顯示文字顏色與 Mosaic 粗細。
 - 單向／雙向箭頭兩端渲染與 hit-test、方向／粗細／極短線安全、預設套用至真實畫圖 factory、Clone／CopyFrom／ContentEquals、多選樣式與單步 Undo／Redo／no-op、複製／session／旋轉、schema 7 寫入完整樣式、舊 schema 1–5 預設單向與 schema 6 boolean 映射、非 Arrow 與 malformed flag 拒絕。
 - 全部八個 D4 orientation、選取圖片與整張合圖的旋轉／翻轉、Undo／Redo、四次旋轉回原。
 - schema 7 保存／重開保留完整內嵌 PNG 與 viewport；schema 3 不帶 crop、schema 4 嚴格 0..1 crop 與 schema 5 留白 viewport 的相容性；舊 schema 帶新留白 viewport、不安全座標、非圖片帶 crop 與篡改檔拒絕，失敗保留開啟文件。
@@ -42,7 +46,7 @@ harness 建立空 Avalonia Application 並使用 `SetupWithoutStarting`，不建
 
 `SaveProject`／`RestoreProject` 使用產品原本的 checkpoint 機制：在 `SettingsStore.DataRoot/UpdateSessions` 短暫建立本次專用的 GUID 資料夾，完成後產品會清除；測試檢查既有 checkpoint 目錄清單保持不變。不修改使用者設定或既有專案。
 
-設定偏好測試只呼叫 `ReadSettingsFile(path)`／`WriteSettingsFile(path, settings)`，檔案位於本次輸出的 `arrow-preferences/`；以 reflection 檢查 `Lazy<UserSettings>.IsValueCreated`，不讀取 `SettingsStore.Current`、不呼叫 `Save()`、不寫入 live settings 或 registry。MainWindow 的啟動套用與使用者事件保存分流不在本 harness 建構範圍，須另做原始碼檢查或經授權的互動驗證。
+設定偏好測試只呼叫 `ReadSettingsFile(path)`／`WriteSettingsFile(path, settings)`，檔案位於本次輸出的 `arrow-preferences/`、`arrow-appearance/` 與 `tool-appearance/`；以 reflection 檢查 `Lazy<UserSettings>.IsValueCreated`，不讀取 `SettingsStore.Current`、不呼叫 `Save()`、不寫入 live settings 或 registry。MainWindow 的啟動套用與使用者事件保存分流不在本 harness 建構範圍，須另做原始碼檢查或經授權的互動驗證。
 
 可單獨執行重新啟動探針（提供測試 JSON，不能用 live settings 路徑）：
 
@@ -50,13 +54,25 @@ harness 建立空 Avalonia Application 並使用 `SetupWithoutStarting`，不建
 dotnet tests/ImageCrop.Regression/bin/Release/net10.0-windows10.0.19041.0/ImageCrop.Regression.dll --arrow-preference-probe verification/arrow-preferences/test-settings.json --output verification/arrow-preferences/probe
 ```
 
-探針輸出 `arrow-preference-probe.json`，包含新 process ID、產品 DLL hash、輸入設定 hash、lazy Current 前後狀態與 settings／Editor／factory 三階段的五個樣式欄位及顏色／粗細，共七個偏好。此模式標記 `fullRegressionRun=false`；它只證明指定檔案的重新讀取與新 Editor 預設，不是完整回歸，也不啟動 SnipFlow。正常測試以相同 host 自動跑兩次探針並保存各自的 log／exit code：父行程若由 global `dotnet` 啟動就沿用該 host，self-contained Linux 則沿用 harness apphost，繼承 `DISPLAY`／`LD_LIBRARY_PATH`。
+探針輸出 `arrow-preference-probe.json`，包含新 process ID、產品 DLL hash、輸入設定 hash、lazy Current 前後狀態與 settings／Editor／factory 三階段的箭頭五個樣式欄位及顏色／粗細，共七個既有偏好；另有 `toolSettingsAppearance`／`toolEditorAppearance`／`toolFactoryAppearance`，分別由真實設定 getter、Editor getter 與 factory 建立物件讀出七工具色寬。父行程直接對照下表的獨立預定值，不只檢查 probe 自報 `success` 或三階段彼此相等；每個 probe 也刻意切到另一 active tool 再建立各工具標註。
+
+| 工具 | 預定顏色 | 預定粗細 |
+| --- | --- | --- |
+| Arrow | `#A1B2C3` | 7.25 |
+| Rectangle | `#D05060` | 2.5 |
+| Ellipse | `#22AA44` | 3.75 |
+| Pen | `#4433CC` | 5.5 |
+| Highlight | `#EEDD11` | 9.125 |
+| Text | `#09AABB` | 6.25 |
+| Mosaic | `#997766` | 13.5 |
+
+此模式標記 `fullRegressionRun=false`；它只證明指定檔案的重新讀取與新 Editor 預設，不是完整回歸，也不啟動 SnipFlow。正常測試以相同 host 自動跑兩次探針，要求兩個 PID 彼此不同且不同於父行程、產品 hash 相同、lazy Current 前後皆為 false、輸入設定 hash 不變，並保存各自 log／exit code：父行程若由 global `dotnet` 啟動就沿用該 host，self-contained Linux 則沿用 harness apphost，繼承 `DISPLAY`／`LD_LIBRARY_PATH`。
 
 ## 舊版失敗證據
 
-保留 `SNIPFLOW-IMAGE-CROP-001`、`SNIPFLOW-IMAGE-CROP-ZOOM-002`、`SNIPFLOW-DOUBLE-ARROW-003`、`SNIPFLOW-ARROW-STYLES-004`、`SNIPFLOW-ARROW-PREFERENCE-005`，新增 `SNIPFLOW-ARROW-APPEARANCE-006`。所有新增 API 都透過 reflection 取得；0.8.5 應通過前五個 contract，並因缺少 `UserSettings.ArrowColor` 而在外觀偏好 contract 明確失敗、產生結果並回傳 1。0.8.4 仍會在五欄位偏好 contract 因缺少 `UserSettings.ArrowStyle` 失敗。不得把 binder 載入失敗當成有效的舊紅新綠證據。
+保留 `SNIPFLOW-IMAGE-CROP-001`、`SNIPFLOW-IMAGE-CROP-ZOOM-002`、`SNIPFLOW-DOUBLE-ARROW-003`、`SNIPFLOW-ARROW-STYLES-004`、`SNIPFLOW-ARROW-PREFERENCE-005`、`SNIPFLOW-ARROW-APPEARANCE-006`，新增 `SNIPFLOW-TOOL-APPEARANCE-007`。所有新增 API 都透過 reflection 取得；真實 0.8.6 應通過前六個 contract，並因缺少 `ToolAppearanceOptions` 在第七個 contract 明確失敗、產生結果並回傳 1，之後不執行測試案例或讀取 lazy Current。0.8.5 仍因缺少 `UserSettings.ArrowColor` 而在外觀偏好 contract 失敗，0.8.4 仍因缺少 `UserSettings.ArrowStyle` 在五欄位偏好 contract 失敗。不得把 binder 載入失敗當成有效的舊紅新綠證據。
 
-先正常建置 harness，將其完整 output 複製到新的 ignored 驗證子目錄，再只把該副本的 `SnipFlow.dll` 換成已驗證的 0.8.5（保存五個樣式偏好、尚未保存箭頭顏色／粗細）assembly。若舊版版本號低於 harness 編譯時的 assembly identity，應在隔離的舊 source 目錄以 `-p:Version=<目前版本>` 統一 metadata；記錄這個唯一 override，保留舊 product logic。不要把 binder 的 FileNotFoundException 當成裁剪回歸的有效紅測。執行副本及正常新版各一次、使用不同 `--output` 目錄，保留 exit code 與 `productAssemblySha256`。不要覆寫產品建置目錄、不要修改 repository 工作檔，也不要在其他工作正在 build 時重建共同輸出。
+先正常建置 harness，將其完整 output 複製到新的 ignored 驗證子目錄，再只把該副本的 `SnipFlow.dll` 換成已驗證的 0.8.6（保存箭頭七個偏好、尚無各工具獨立色寬）assembly。若舊版版本號低於 harness 編譯時的 assembly identity，應在隔離的舊 source 目錄以 `-p:Version=0.8.7` 統一 metadata；記錄這個唯一 override，保留舊 product logic。不要把 binder 的 FileNotFoundException 當成有效紅測。執行副本及正常新版各一次、使用不同 `--output` 目錄，保留 exit code 與 `productAssemblySha256`。不要覆寫產品建置目錄、不要修改 repository 工作檔，也不要在其他工作正在 build 時重建共同輸出。
 
 ## 舊版預設箭頭像素對照
 

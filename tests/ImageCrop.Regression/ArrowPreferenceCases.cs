@@ -27,6 +27,7 @@ internal static partial class Program
         Set(settings, "StartWithWindows", true);
         Set(settings, "CaptureSaveDirectory", Path.Combine(Output, "preference-captures"));
         Set(settings, "RecentColors", new List<string> { "#123456", "#ABCDEF" });
+        PopulateToolPreferences(settings);
         return settings;
     }
 
@@ -139,14 +140,16 @@ internal static partial class Program
             finally { changed.RemoveEventHandler(null, observer); }
         });
 
-        Case("fresh processes reload saved arrow options into the real drawing factory", () => {
+        Case("fresh processes reload saved arrow options and all tool appearances into the real drawing factory", () => {
             var initialHash = Hash(File.ReadAllBytes(roundtrip));
+            var processIds = new HashSet<int>();
             for (var n = 1; n <= 2; n++) {
                 var output = Path.Combine(root, "fresh-process-" + n);
                 var report = RunArrowPreferenceProbe(roundtrip, output);
                 Check(report["mode"]!.GetValue<string>() == "arrow-preference-probe" && !report["fullRegressionRun"]!.GetValue<bool>(), "Probe was misreported as a complete regression run.");
                 Check(report["success"]!.GetValue<bool>(), "Fresh process failed: " + report["error"]);
                 Check(report["processId"]!.GetValue<int>() != Environment.ProcessId, "Restart probe did not run in a new process.");
+                Check(processIds.Add(report["processId"]!.GetValue<int>()), "Restart probes reused the same process.");
                 Check(!report["lazyCurrentBefore"]!.GetValue<bool>() && !report["lazyCurrentAfter"]!.GetValue<bool>(), "Fresh process read live Current.");
                 Check(report["productAssemblySha256"]!.GetValue<string>() == Hash(File.ReadAllBytes(Product.Location)), "Probe loaded a different product assembly.");
                 foreach (var field in StyleFields) {
@@ -157,6 +160,10 @@ internal static partial class Program
                 foreach (var stage in new[] { "settingsAppearance", "editorAppearance", "factoryAppearance" }) {
                     Check(report[stage]!["color"]!.GetValue<string>() == "#A1B2C3", "Restart lost arrow color at " + stage);
                     Check(report[stage]!["strokeWidth"]!.GetValue<double>() == 7.25, "Restart lost arrow width at " + stage);
+                }
+                foreach (var sample in ToolSamples) foreach (var stage in new[] { "toolSettingsAppearance", "toolEditorAppearance", "toolFactoryAppearance" }) {
+                    Check(report[stage]![sample.Tool.ToString()]!["color"]!.GetValue<string>() == sample.Color, "Restart lost " + sample.Tool + " color at " + stage);
+                    Check(report[stage]![sample.Tool.ToString()]!["strokeWidth"]!.GetValue<double>() == sample.Width, "Restart lost " + sample.Tool + " width at " + stage);
                 }
             }
             Check(Hash(File.ReadAllBytes(roundtrip)) == initialHash, "Restart probes wrote the supplied settings file.");
@@ -217,11 +224,24 @@ internal static partial class Program
             var settings = ReadPreferences(settingsPath); var style = Get(settings, "ArrowStyle")!;
             var color = Color.Parse((string)Get(settings, "ArrowColor")!); var width = (double)Get(settings, "ArrowStrokeWidth")!;
             var editor = new EditorView(); Set(editor, "ArrowStyle", style); Call(editor, "RestoreArrowAppearance", color, width);
+            foreach (var sample in ToolSamples)
+                Call(editor, "RestoreToolAppearance", sample.Tool, Call(settings, "GetToolAppearance", sample.Tool));
             var arrow = Call(editor, "CreateShapeAnnotation", AnnotationTool.Arrow, new Point(30, 30))!;
             EqualStyle(Get(editor, "ArrowStyle"), style, "Fresh editor default differs.");
             EqualStyle(Get(arrow, "ArrowStyle"), style, "Fresh drawing factory differs.");
             CheckArrowAppearance(editor, color, width);
             CheckItemAppearance(arrow, color, width);
+            var toolFactories = new Dictionary<string, Dictionary<string, object>>();
+            foreach (var sample in ToolSamples) {
+                var appearance = Call(settings, "GetToolAppearance", sample.Tool)!;
+                var toolColor = (string)Get(appearance, "Color")!; var toolWidth = (double)Get(appearance, "StrokeWidth")!;
+                CheckToolAppearance(editor, sample.Tool, toolColor, toolWidth);
+                // Deliberately choose another active tool: the actual factory must use its explicit tool argument.
+                editor.SetTool(sample.Tool == AnnotationTool.Arrow ? AnnotationTool.Rectangle : AnnotationTool.Arrow);
+                var item = Call(editor, "CreateShapeAnnotation", sample.Tool, new Point(30, 30))!;
+                CheckItemAppearance(item, Color.Parse(toolColor), toolWidth);
+                toolFactories[sample.Tool.ToString()] = new() { ["color"] = ColorHex((Color)Get(item, "Color")!), ["strokeWidth"] = (double)Get(item, "Width")! };
+            }
             var after = LazyCreated(lazy);
             Check(!before && !after, "Isolated probe initialized global Current.");
             Check(Hash(File.ReadAllBytes(settingsPath)) == fileHash, "Probe modified the supplied settings file.");
@@ -234,6 +254,7 @@ internal static partial class Program
                 settingsAppearance = new { color = ColorHex(color), strokeWidth = width },
                 editorAppearance = new { color = ColorHex((Color)Get(editor, "ArrowColor")!), strokeWidth = (double)Get(editor, "ArrowStrokeWidth")! },
                 factoryAppearance = new { color = ColorHex((Color)Get(arrow, "Color")!), strokeWidth = (double)Get(arrow, "Width")! },
+                toolSettingsAppearance = ToolAppearanceNames(settings), toolEditorAppearance = ToolAppearanceNames(editor), toolFactoryAppearance = toolFactories,
                 safety = "Fresh console process; supplied settings path only. No Current, registry, Window, MainWindow, OS input, or live settings write."
             };
         }

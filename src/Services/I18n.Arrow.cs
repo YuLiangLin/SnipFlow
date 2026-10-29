@@ -10,6 +10,7 @@ public static partial class I18n
         ["箭頭設定"] = ("Arrow settings", "箭头设置"),
         ["箭頭樣式已套用，但偏好設定未儲存。"] = ("The arrow style was applied, but the preference could not be saved.", "箭头样式已应用，但偏好设置未保存。"),
         ["箭頭顏色與粗細已套用，但偏好設定未儲存。"] = ("The arrow color and width were applied, but the preferences could not be saved.", "箭头颜色与粗细已应用，但偏好设置未保存。"),
+        ["工具顏色與粗細已套用，但偏好設定未儲存。"] = ("The tool color and width were applied, but the preferences could not be saved.", "工具颜色与粗细已应用，但偏好设置未保存。"),
         ["箭頭設定 ▾"] = ("Arrow settings ▾", "箭头设置 ▾"),
         ["設定兩端樣式、大小與線條格式"] = ("Set the style and size of both ends and the line pattern", "设置两端样式、大小与线条格式"),
         ["單向箭頭"] = ("Single-headed arrow", "单向箭头"),

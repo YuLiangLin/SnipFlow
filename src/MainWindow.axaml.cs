@@ -66,7 +66,9 @@ public partial class MainWindow : Window
     {
         InitializeComponent(); Editor.ArrowStyle = SettingsStore.Current.ArrowStyle;
         ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
-        Editor.RestoreArrowAppearance(Color.Parse(SettingsStore.Current.ArrowColor), SettingsStore.Current.ArrowStrokeWidth);
+        foreach (var tool in Enum.GetValues<AnnotationTool>().Where(ToolAppearanceOptions.Supports))
+            Editor.RestoreToolAppearance(tool, SettingsStore.Current.GetToolAppearance(tool));
+        RefreshProperties();
         if (!PlatformInfo.IsWindows) RootBorder.CornerRadius = default;
         else RootBorder.CornerRadius = new CornerRadius(10);
         if (Application.Current?.TryGetResource("SnipFlowIcon", null, out var icon) == true && icon is WindowIcon windowIcon) Icon = windowIcon;
@@ -725,28 +727,24 @@ public partial class MainWindow : Window
     void StrokeChanged(object? sender, RangeBaseValueChangedEventArgs e)
     {
         if (Editor == null || refreshingProperties || busy || capturePending || Editor.IsImageCropping) return;
-        var arrowContext = (Editor.SelectedTool ?? activeTool) == AnnotationTool.Arrow;
+        var appearanceTool = Editor.AppearanceTool;
         Editor.StrokeWidth = e.NewValue;
-        if (arrowContext) SaveArrowAppearancePreferences();
+        if (ToolAppearanceOptions.Supports(appearanceTool)) SaveToolAppearancePreferences(appearanceTool);
     }
 
-    void SaveArrowAppearancePreferences(List<string>? previousRecentColors = null)
+    void SaveToolAppearancePreferences(AnnotationTool tool, List<string>? previousRecentColors = null)
     {
-        var previousColor = SettingsStore.Current.ArrowColor;
-        var previousWidth = SettingsStore.Current.ArrowStrokeWidth;
-        var color = ColorPaletteView.ToHex(Editor.ArrowColor);
-        var width = Editor.ArrowStrokeWidth;
-        if (previousRecentColors is null && string.Equals(previousColor, color, StringComparison.OrdinalIgnoreCase) && previousWidth == width) return;
-        SettingsStore.Current.ArrowColor = color;
-        SettingsStore.Current.ArrowStrokeWidth = width;
+        var previous = SettingsStore.Current.GetToolAppearance(tool);
+        var appearance = Editor.GetToolAppearance(tool);
+        if (previousRecentColors is null && previous == appearance) return;
+        SettingsStore.Current.SetToolAppearance(tool, appearance);
         try { SettingsStore.Save(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
-            SettingsStore.Current.ArrowColor = previousColor;
-            SettingsStore.Current.ArrowStrokeWidth = previousWidth;
+            SettingsStore.Current.SetToolAppearance(tool, previous);
             if (previousRecentColors is not null) SettingsStore.Current.RecentColors = previousRecentColors;
             SettingsStore.Log(ex);
-            SetStatus("箭頭顏色與粗細已套用，但偏好設定未儲存。");
+            SetStatus("工具顏色與粗細已套用，但偏好設定未儲存。");
         }
     }
     void ArrowStyleClick(object? sender, RoutedEventArgs e)

@@ -128,7 +128,9 @@ internal static partial class Program
             editor.SetTool(AnnotationTool.Rectangle); editor.SetColor(Colors.Blue); editor.StrokeWidth = 2.5;
             foreach (var tool in new[] { AnnotationTool.Pen, AnnotationTool.Rectangle, AnnotationTool.Text }) {
                 editor.SetTool(tool);
-                Check((Color)Get(editor, "DrawingColor")! == Colors.Blue && editor.StrokeWidth == 2.5, "Non-arrow shared defaults changed while switching tools.");
+                var expectedColor = tool == AnnotationTool.Rectangle ? Colors.Blue : Color.Parse("#63D5C5");
+                var expectedWidth = tool == AnnotationTool.Rectangle ? 2.5 : 4;
+                Check((Color)Get(editor, "DrawingColor")! == expectedColor && editor.StrokeWidth == expectedWidth, "Independent non-arrow defaults changed while switching tools.");
                 CheckArrowAppearance(editor, preferred, preferredWidth);
             }
             editor.SetTool(AnnotationTool.Arrow);

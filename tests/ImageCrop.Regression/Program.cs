@@ -83,10 +83,21 @@ internal static partial class Program
                 Check(typeof(EditorView).GetProperty("DrawingColor", Any)?.PropertyType == typeof(Color), "EditorView.DrawingColor is missing.");
                 Check(typeof(EditorView).GetMethod("RestoreArrowAppearance", Any, null, new[] { typeof(Color), typeof(double) }, null) is not null, "RestoreArrowAppearance(Color,double) is missing.");
             });
+            Case("SNIPFLOW-TOOL-APPEARANCE-007 contract", () => {
+                var appearance = Product.GetType("SnipFlow.Editor.ToolAppearanceOptions");
+                Check(appearance is not null, "ToolAppearanceOptions is missing (expected failure on 0.8.6).");
+                Check(SettingsType.GetProperty("ToolAppearances", Any)?.PropertyType == typeof(Dictionary<,>).MakeGenericType(typeof(AnnotationTool), appearance!), "UserSettings.ToolAppearances dictionary is missing.");
+                Check(typeof(EditorView).GetProperty("AppearanceTool", Any)?.PropertyType == typeof(AnnotationTool), "EditorView.AppearanceTool is missing.");
+                foreach (var owner in new[] { SettingsType, typeof(EditorView) })
+                    Check(owner.GetMethod("GetToolAppearance", Any, null, new[] { typeof(AnnotationTool) }, null)?.ReturnType == appearance, owner.Name + ".GetToolAppearance is missing.");
+                Check(SettingsType.GetMethod("SetToolAppearance", Any, null, new[] { typeof(AnnotationTool), appearance! }, null) is not null, "UserSettings.SetToolAppearance is missing.");
+                Check(typeof(EditorView).GetMethod("RestoreToolAppearance", Any, null, new[] { typeof(AnnotationTool), appearance! }, null) is not null, "EditorView.RestoreToolAppearance is missing.");
+            });
             if (failed == 0)
             {
                 ArrowPreferenceCases();
                 ArrowAppearanceCases();
+                ToolAppearanceCases();
                 ModelCases();
                 ProjectCases();
                 ArrowCases();
@@ -97,10 +108,10 @@ internal static partial class Program
         catch (Exception ex) { failed++; Results.Add(new { name = "harness", status = "FAIL", error = Unwrap(ex).ToString() }); }
         var assemblyHash = Hash(File.ReadAllBytes(Product.Location));
         var report = new {
-            guard = "SNIPFLOW-ARROW-APPEARANCE-006", timestamp = DateTimeOffset.Now, passed, failed,
+            guard = "SNIPFLOW-TOOL-APPEARANCE-007", timestamp = DateTimeOffset.Now, passed, failed,
             productAssembly = Product.Location, productAssemblySha256 = assemblyHash,
             safety = "Empty application; no Avalonia Window, SnipFlow.App/MainWindow, OS input, clipboard, capture, hotkey, installation, or deployment.",
-            method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations, project persistence, and isolated settings-file IO. Two fresh console processes load only the supplied test settings path and apply its arrow preference to a new offscreen EditorView and the real drawing factory. A minimal QuietButton theme placeholder supports panel state/intent tests only; it does not validate the panel's visual theme. No OS or routed input events.",
+            method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations, project persistence, and isolated settings-file IO. Two fresh console processes load only the supplied test settings path and apply all seven tools' color/width plus five arrow options to a new offscreen EditorView and the real drawing factory. A separate case invokes the actual BeginTextEdit and CommitTextEdit creation path without a Window. A minimal QuietButton theme placeholder supports panel state/intent tests only; it does not validate the panel's visual theme. No OS or routed input events.",
             limitations = "Does not instantiate MainWindow or prove its startup/save wiring, double-click routing, interactive pointer capture, native-window layout, IME, or desktop scaling. Linux execution requires an X11/XWayland display; use a virtual display such as Xvfb.",
             tests = Results
         };

@@ -22,6 +22,36 @@ public sealed class UserSettings
     public ArrowStyleOptions ArrowStyle { get; set; } = ArrowStyleOptions.Default;
     public string ArrowColor { get; set; } = "#63D5C5";
     public double ArrowStrokeWidth { get; set; } = 4;
+    // The settings-file codec reads entries individually so one malformed tool cannot discard
+    // other preferences. It also excludes Arrow, whose original fields remain authoritative.
+    [JsonIgnore]
+    public Dictionary<AnnotationTool, ToolAppearanceOptions> ToolAppearances { get; set; } = new();
+
+    public ToolAppearanceOptions GetToolAppearance(AnnotationTool tool)
+    {
+        if (!ToolAppearanceOptions.Supports(tool)) throw new ArgumentOutOfRangeException(nameof(tool));
+        var appearance = tool == AnnotationTool.Arrow
+            ? new ToolAppearanceOptions { Color = ArrowColor, StrokeWidth = ArrowStrokeWidth }
+            : ToolAppearances?.GetValueOrDefault(tool);
+        var color = ToolAppearanceOptions.TryNormalizeColor(appearance?.Color, out var normalized)
+            ? normalized : ToolAppearanceOptions.Default.Color;
+        var width = appearance is not null && double.IsFinite(appearance.StrokeWidth) && appearance.StrokeWidth is >= 1 and <= 32
+            ? appearance.StrokeWidth : ToolAppearanceOptions.Default.StrokeWidth;
+        return new ToolAppearanceOptions { Color = color, StrokeWidth = width };
+    }
+
+    public void SetToolAppearance(AnnotationTool tool, ToolAppearanceOptions appearance)
+    {
+        if (!ToolAppearanceOptions.Supports(tool)) throw new ArgumentOutOfRangeException(nameof(tool));
+        if (!ToolAppearanceOptions.IsValid(appearance)) throw new ArgumentException("Tool appearance must contain an opaque #RRGGBB color and a finite stroke width between 1 and 32.", nameof(appearance));
+        ToolAppearanceOptions.TryNormalizeColor(appearance.Color, out var color);
+        if (tool == AnnotationTool.Arrow)
+        {
+            ArrowColor = color;
+            ArrowStrokeWidth = appearance.StrokeWidth;
+        }
+        else (ToolAppearances ??= new())[tool] = appearance with { Color = color };
+    }
 }
 
 public static class SettingsStore
@@ -69,7 +99,7 @@ public static class SettingsStore
         using var document = JsonDocument.Parse(File.ReadAllText(path));
         if (document.RootElement.ValueKind != JsonValueKind.Object)
             throw new JsonException("Settings must be an object.");
-        JsonElement arrow = default, arrowColor = default, arrowStrokeWidth = default;
+        JsonElement arrow = default, arrowColor = default, arrowStrokeWidth = default, toolAppearances = default;
         using var otherSettings = new MemoryStream();
         using (var writer = new Utf8JsonWriter(otherSettings))
         {
@@ -79,6 +109,7 @@ public static class SettingsStore
                 if (property.NameEquals(nameof(UserSettings.ArrowStyle))) arrow = property.Value;
                 else if (property.NameEquals(nameof(UserSettings.ArrowColor))) arrowColor = property.Value;
                 else if (property.NameEquals(nameof(UserSettings.ArrowStrokeWidth))) arrowStrokeWidth = property.Value;
+                else if (property.NameEquals(nameof(UserSettings.ToolAppearances))) toolAppearances = property.Value;
                 else property.WriteTo(writer);
             }
             writer.WriteEndObject();
@@ -97,6 +128,7 @@ public static class SettingsStore
         if (arrowStrokeWidth.ValueKind == JsonValueKind.Number && arrowStrokeWidth.TryGetDouble(out var width)
             && IsValidArrowStrokeWidth(width))
             settings.ArrowStrokeWidth = width;
+        settings.ToolAppearances = ReadToolAppearances(toolAppearances);
         settings.Theme = ThemeService.NormalizeMode(settings.Theme);
         settings.RecentColors = (settings.RecentColors ?? new()).Where(value =>
             value is { Length: 7 } && value[0] == '#' && value.Skip(1).All(Uri.IsHexDigit))
@@ -116,6 +148,18 @@ public static class SettingsStore
             throw new ArgumentException("Arrow color must be an opaque #RRGGBB value.", nameof(settings));
         if (!IsValidArrowStrokeWidth(settings.ArrowStrokeWidth))
             throw new ArgumentOutOfRangeException(nameof(settings), "Arrow stroke width must be finite and between 1 and 32.");
+        var tools = new JsonObject();
+        if (settings.ToolAppearances is { } appearances)
+            foreach (var (tool, appearance) in appearances.OrderBy(pair => pair.Key))
+            {
+                // Match the reader: Arrow cannot shadow its original fields, and unsupported
+                // entries never become preferences for tools without drawing appearance.
+                if (tool == AnnotationTool.Arrow || !ToolAppearanceOptions.Supports(tool)) continue;
+                if (!ToolAppearanceOptions.IsValid(appearance))
+                    throw new ArgumentException("Tool appearance must contain an opaque #RRGGBB color and a finite stroke width between 1 and 32.", nameof(settings));
+                ToolAppearanceOptions.TryNormalizeColor(appearance.Color, out var toolColor);
+                tools[tool.ToString()] = new JsonObject { [nameof(ToolAppearanceOptions.Color)] = toolColor, [nameof(ToolAppearanceOptions.StrokeWidth)] = appearance.StrokeWidth };
+            }
         path = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var json = JsonSerializer.SerializeToNode(settings, JsonOptions)!.AsObject();
@@ -123,17 +167,36 @@ public static class SettingsStore
         json[nameof(UserSettings.ArrowStyle)] = JsonSerializer.SerializeToNode(style, ArrowJsonOptions);
         json[nameof(UserSettings.ArrowColor)] = color;
         json[nameof(UserSettings.ArrowStrokeWidth)] = settings.ArrowStrokeWidth;
+        json[nameof(UserSettings.ToolAppearances)] = tools;
         File.WriteAllText(path + ".tmp", json.ToJsonString(JsonOptions));
         File.Move(path + ".tmp", path, true);
     }
-    static bool TryNormalizeArrowColor(string? value, out string color)
-    {
-        color = "#63D5C5";
-        if (value is not { Length: 7 } || value[0] != '#' || !value.Skip(1).All(Uri.IsHexDigit)) return false;
-        color = value.ToUpperInvariant();
-        return true;
-    }
+    static bool TryNormalizeArrowColor(string? value, out string color) => ToolAppearanceOptions.TryNormalizeColor(value, out color);
     static bool IsValidArrowStrokeWidth(double width) => double.IsFinite(width) && width is >= 1 and <= 32;
+    static Dictionary<AnnotationTool, ToolAppearanceOptions> ReadToolAppearances(JsonElement element)
+    {
+        var result = new Dictionary<AnnotationTool, ToolAppearanceOptions>();
+        if (element.ValueKind != JsonValueKind.Object) return result;
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!Enum.TryParse<AnnotationTool>(property.Name, out var tool) || tool.ToString() != property.Name
+                || tool == AnnotationTool.Arrow || !ToolAppearanceOptions.Supports(tool)) continue;
+            JsonElement color = default, width = default;
+            if (property.Value.ValueKind == JsonValueKind.Object)
+                foreach (var field in property.Value.EnumerateObject())
+                {
+                    if (field.NameEquals(nameof(ToolAppearanceOptions.Color))) color = field.Value;
+                    else if (field.NameEquals(nameof(ToolAppearanceOptions.StrokeWidth))) width = field.Value;
+                }
+            var appearance = ToolAppearanceOptions.Default;
+            if (color.ValueKind == JsonValueKind.String && ToolAppearanceOptions.TryNormalizeColor(color.GetString(), out var normalized))
+                appearance = appearance with { Color = normalized };
+            if (width.ValueKind == JsonValueKind.Number && width.TryGetDouble(out var strokeWidth) && IsValidArrowStrokeWidth(strokeWidth))
+                appearance = appearance with { StrokeWidth = strokeWidth };
+            result[tool] = appearance;
+        }
+        return result;
+    }
     static void RefreshStartupPreference(UserSettings settings)
     {
         try { settings.StartWithWindows = StartupService.ReadRegistration().IsEnabled; }
