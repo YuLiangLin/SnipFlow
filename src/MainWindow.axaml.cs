@@ -68,6 +68,7 @@ public partial class MainWindow : Window
         ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
         foreach (var tool in Enum.GetValues<AnnotationTool>().Where(ToolAppearanceOptions.Supports))
             Editor.RestoreToolAppearance(tool, SettingsStore.Current.GetToolAppearance(tool));
+        Editor.RestoreTextSize(SettingsStore.Current.TextSize);
         RefreshProperties();
         if (!PlatformInfo.IsWindows) RootBorder.CornerRadius = default;
         else RootBorder.CornerRadius = new CornerRadius(10);
@@ -805,9 +806,39 @@ public partial class MainWindow : Window
     }
     void ApplyTextSize()
     {
-        if (refreshingProperties || Editor == null) return;
-        if (double.TryParse(TextSizeBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var size) && double.IsFinite(size)) Editor.TextSize = Math.Clamp(size, 12, 240);
+        if (refreshingProperties || Editor == null || busy || capturePending || Editor.IsImageCropping) return;
+        var current = Editor.SelectedTextSize ?? Editor.TextSize;
+        if (TryGetTextSizeChange(TextSizeBox.Text, current, CultureInfo.CurrentCulture, out var size))
+        {
+            Editor.TextSize = size;
+            SaveTextSizePreference();
+        }
         TextSizeBox.Text = (Editor.SelectedTextSize ?? Editor.TextSize).ToString("0.#", CultureInfo.CurrentCulture);
+    }
+    static bool TryGetTextSizeChange(string? input, double current, CultureInfo culture, out double normalized)
+    {
+        normalized = current;
+        // The field displays one decimal place. An untouched value must not round an existing
+        // object's font size or turn its size into the default merely because focus moved away.
+        if (string.Equals(input, current.ToString("0.#", culture), StringComparison.Ordinal)
+            || !double.TryParse(input, NumberStyles.Float, culture, out var size) || !double.IsFinite(size)) return false;
+        size = Math.Clamp(size, 12, 240);
+        if (size == current) return false;
+        normalized = size;
+        return true;
+    }
+    void SaveTextSizePreference()
+    {
+        var previous = SettingsStore.Current.TextSize;
+        if (previous == Editor.TextSize) return;
+        SettingsStore.Current.TextSize = Editor.TextSize;
+        try { SettingsStore.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            SettingsStore.Current.TextSize = previous;
+            SettingsStore.Log(ex);
+            SetStatus("文字字級已套用，但偏好設定未儲存。");
+        }
     }
     void UndoClick(object? sender, RoutedEventArgs e) { if (!busy && !capturePending) Editor.Undo(); }
     void RedoClick(object? sender, RoutedEventArgs e) { if (!busy && !capturePending) Editor.Redo(); }

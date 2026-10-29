@@ -22,6 +22,7 @@ public sealed class UserSettings
     public ArrowStyleOptions ArrowStyle { get; set; } = ArrowStyleOptions.Default;
     public string ArrowColor { get; set; } = "#63D5C5";
     public double ArrowStrokeWidth { get; set; } = 4;
+    public double TextSize { get; set; } = 26;
     // The settings-file codec reads entries individually so one malformed tool cannot discard
     // other preferences. It also excludes Arrow, whose original fields remain authoritative.
     [JsonIgnore]
@@ -99,7 +100,7 @@ public static class SettingsStore
         using var document = JsonDocument.Parse(File.ReadAllText(path));
         if (document.RootElement.ValueKind != JsonValueKind.Object)
             throw new JsonException("Settings must be an object.");
-        JsonElement arrow = default, arrowColor = default, arrowStrokeWidth = default, toolAppearances = default;
+        JsonElement arrow = default, arrowColor = default, arrowStrokeWidth = default, toolAppearances = default, textSize = default;
         using var otherSettings = new MemoryStream();
         using (var writer = new Utf8JsonWriter(otherSettings))
         {
@@ -110,6 +111,7 @@ public static class SettingsStore
                 else if (property.NameEquals(nameof(UserSettings.ArrowColor))) arrowColor = property.Value;
                 else if (property.NameEquals(nameof(UserSettings.ArrowStrokeWidth))) arrowStrokeWidth = property.Value;
                 else if (property.NameEquals(nameof(UserSettings.ToolAppearances))) toolAppearances = property.Value;
+                else if (property.NameEquals(nameof(UserSettings.TextSize))) textSize = property.Value;
                 else property.WriteTo(writer);
             }
             writer.WriteEndObject();
@@ -129,6 +131,8 @@ public static class SettingsStore
             && IsValidArrowStrokeWidth(width))
             settings.ArrowStrokeWidth = width;
         settings.ToolAppearances = ReadToolAppearances(toolAppearances);
+        if (textSize.ValueKind == JsonValueKind.Number && textSize.TryGetDouble(out var size) && IsValidTextSize(size))
+            settings.TextSize = size;
         settings.Theme = ThemeService.NormalizeMode(settings.Theme);
         settings.RecentColors = (settings.RecentColors ?? new()).Where(value =>
             value is { Length: 7 } && value[0] == '#' && value.Skip(1).All(Uri.IsHexDigit))
@@ -144,6 +148,8 @@ public static class SettingsStore
         ArgumentNullException.ThrowIfNull(settings);
         // Reject invalid caller data before serializing or creating a temporary file. In particular,
         // NaN/Infinity must not fail halfway through a settings publication.
+        if (!IsValidTextSize(settings.TextSize))
+            throw new ArgumentOutOfRangeException(nameof(settings), "Text size must be finite and between 12 and 240.");
         if (!TryNormalizeArrowColor(settings.ArrowColor, out var color))
             throw new ArgumentException("Arrow color must be an opaque #RRGGBB value.", nameof(settings));
         if (!IsValidArrowStrokeWidth(settings.ArrowStrokeWidth))
@@ -173,6 +179,7 @@ public static class SettingsStore
     }
     static bool TryNormalizeArrowColor(string? value, out string color) => ToolAppearanceOptions.TryNormalizeColor(value, out color);
     static bool IsValidArrowStrokeWidth(double width) => double.IsFinite(width) && width is >= 1 and <= 32;
+    static bool IsValidTextSize(double size) => double.IsFinite(size) && size is >= 12 and <= 240;
     static Dictionary<AnnotationTool, ToolAppearanceOptions> ReadToolAppearances(JsonElement element)
     {
         var result = new Dictionary<AnnotationTool, ToolAppearanceOptions>();

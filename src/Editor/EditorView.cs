@@ -207,6 +207,15 @@ public sealed partial class EditorView : UserControl
         }
     }
 
+    // Loading a preference changes future text only, even if existing text is selected.
+    public void RestoreTextSize(double size)
+    {
+        VerifyAccess();
+        if (!double.IsFinite(size) || size is < 12 or > 240)
+            throw new ArgumentOutOfRangeException(nameof(size));
+        _textSize = size;
+    }
+
     public double TextSize
     {
         get => _textSize;

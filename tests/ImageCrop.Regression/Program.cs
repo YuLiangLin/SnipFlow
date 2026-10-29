@@ -93,11 +93,16 @@ internal static partial class Program
                 Check(SettingsType.GetMethod("SetToolAppearance", Any, null, new[] { typeof(AnnotationTool), appearance! }, null) is not null, "UserSettings.SetToolAppearance is missing.");
                 Check(typeof(EditorView).GetMethod("RestoreToolAppearance", Any, null, new[] { typeof(AnnotationTool), appearance! }, null) is not null, "EditorView.RestoreToolAppearance is missing.");
             });
+            Case("SNIPFLOW-TEXT-SIZE-008 contract", () => {
+                Check(SettingsType.GetProperty("TextSize", Any)?.PropertyType == typeof(double), "UserSettings.TextSize is missing (expected failure on 0.8.7).");
+                Check(typeof(EditorView).GetMethod("RestoreTextSize", Any, null, new[] { typeof(double) }, null) is not null, "EditorView.RestoreTextSize(double) is missing.");
+            });
             if (failed == 0)
             {
                 ArrowPreferenceCases();
                 ArrowAppearanceCases();
                 ToolAppearanceCases();
+                TextSizeCases();
                 ModelCases();
                 ProjectCases();
                 ArrowCases();
@@ -108,10 +113,10 @@ internal static partial class Program
         catch (Exception ex) { failed++; Results.Add(new { name = "harness", status = "FAIL", error = Unwrap(ex).ToString() }); }
         var assemblyHash = Hash(File.ReadAllBytes(Product.Location));
         var report = new {
-            guard = "SNIPFLOW-TOOL-APPEARANCE-007", timestamp = DateTimeOffset.Now, passed, failed,
+            guard = "SNIPFLOW-TEXT-SIZE-008", timestamp = DateTimeOffset.Now, passed, failed,
             productAssembly = Product.Location, productAssemblySha256 = assemblyHash,
             safety = "Empty application; no Avalonia Window, SnipFlow.App/MainWindow, OS input, clipboard, capture, hotkey, installation, or deployment.",
-            method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations, project persistence, and isolated settings-file IO. Two fresh console processes load only the supplied test settings path and apply all seven tools' color/width plus five arrow options to a new offscreen EditorView and the real drawing factory. A separate case invokes the actual BeginTextEdit and CommitTextEdit creation path without a Window. A minimal QuietButton theme placeholder supports panel state/intent tests only; it does not validate the panel's visual theme. No OS or routed input events.",
+            method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations, project persistence, and isolated settings-file IO. Two fresh console processes load only the supplied test settings path and apply all seven tools' color/width plus five arrow options and TextSize to a new offscreen EditorView and the real drawing factory. Both probes also invoke the actual BeginTextEdit and CommitTextEdit creation path and inspect draft, TextBox, and committed font size without a Window. Separate cases check existing text, preference restore, selection edits and document undo independently. A minimal QuietButton theme placeholder supports panel state/intent tests only; it does not validate the panel's visual theme. No OS or routed input events.",
             limitations = "Does not instantiate MainWindow or prove its startup/save wiring, double-click routing, interactive pointer capture, native-window layout, IME, or desktop scaling. Linux execution requires an X11/XWayland display; use a virtual display such as Xvfb.",
             tests = Results
         };

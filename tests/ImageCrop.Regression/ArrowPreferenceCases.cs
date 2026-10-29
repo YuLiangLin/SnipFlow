@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Media;
 using SnipFlow.Editor;
 using SnipFlow.Imaging;
@@ -28,6 +29,7 @@ internal static partial class Program
         Set(settings, "CaptureSaveDirectory", Path.Combine(Output, "preference-captures"));
         Set(settings, "RecentColors", new List<string> { "#123456", "#ABCDEF" });
         PopulateToolPreferences(settings);
+        Set(settings, "TextSize", PreferredTextSize);
         return settings;
     }
 
@@ -165,6 +167,8 @@ internal static partial class Program
                     Check(report[stage]![sample.Tool.ToString()]!["color"]!.GetValue<string>() == sample.Color, "Restart lost " + sample.Tool + " color at " + stage);
                     Check(report[stage]![sample.Tool.ToString()]!["strokeWidth"]!.GetValue<double>() == sample.Width, "Restart lost " + sample.Tool + " width at " + stage);
                 }
+                foreach (var stage in new[] { "settingsTextSize", "editorTextSize", "factoryTextSize", "draftTextSize", "textEditorFontSize", "committedTextSize" })
+                    Check(report[stage]!.GetValue<double>() == PreferredTextSize, "Restart lost remembered TextSize at " + stage);
             }
             Check(Hash(File.ReadAllBytes(roundtrip)) == initialHash, "Restart probes wrote the supplied settings file.");
         });
@@ -226,6 +230,9 @@ internal static partial class Program
             var editor = new EditorView(); Set(editor, "ArrowStyle", style); Call(editor, "RestoreArrowAppearance", color, width);
             foreach (var sample in ToolSamples)
                 Call(editor, "RestoreToolAppearance", sample.Tool, Call(settings, "GetToolAppearance", sample.Tool));
+            var textSize = (double)Get(settings, "TextSize")!; Call(editor, "RestoreTextSize", textSize);
+            var factoryTextSize = (double)Get(Call(editor, "CreateShapeAnnotation", AnnotationTool.Text, new Point(30, 30))!, "FontSize")!;
+            Check(editor.TextSize == textSize && factoryTextSize == textSize, "Fresh editor or text factory lost TextSize.");
             var arrow = Call(editor, "CreateShapeAnnotation", AnnotationTool.Arrow, new Point(30, 30))!;
             EqualStyle(Get(editor, "ArrowStyle"), style, "Fresh editor default differs.");
             EqualStyle(Get(arrow, "ArrowStyle"), style, "Fresh drawing factory differs.");
@@ -242,6 +249,17 @@ internal static partial class Program
                 CheckItemAppearance(item, Color.Parse(toolColor), toolWidth);
                 toolFactories[sample.Tool.ToString()] = new() { ["color"] = ColorHex((Color)Get(item, "Color")!), ["strokeWidth"] = (double)Get(item, "Width")! };
             }
+            editor.LoadImage(ImageTools.Solid(320, 240, Colors.White)); editor.SetTool(AnnotationTool.Rectangle);
+            Call(editor, "BeginTextEdit", (object?)null, new Rect(20, 20, 260, 100), (object?)null);
+            var draftTextSize = (double)Get(typeof(EditorView).GetField("_textDraft", Any)!.GetValue(editor)!, "FontSize")!;
+            var textEditor = (TextBox)typeof(EditorView).GetField("_textEditor", Any)!.GetValue(editor)!;
+            var textEditorFontSize = textEditor.FontSize;
+            Check(draftTextSize == textSize && textEditorFontSize == textSize, "Fresh actual text draft/editor lost TextSize.");
+            Check(TopLevel.GetTopLevel(editor) is null && Application.Current!.ApplicationLifetime is null, "Probe text creation attached a native host.");
+            textEditor.Text = "Remembered text size"; editor.CommitTextEdit();
+            Check(Items(editor).Count == 1 && (AnnotationTool)Get(First(editor), "Tool")! == AnnotationTool.Text, "Probe did not commit real Text.");
+            var committedTextSize = (double)Get(First(editor), "FontSize")!;
+            Check(committedTextSize == textSize, "Fresh committed text lost remembered TextSize.");
             var after = LazyCreated(lazy);
             Check(!before && !after, "Isolated probe initialized global Current.");
             Check(Hash(File.ReadAllBytes(settingsPath)) == fileHash, "Probe modified the supplied settings file.");
@@ -255,6 +273,7 @@ internal static partial class Program
                 editorAppearance = new { color = ColorHex((Color)Get(editor, "ArrowColor")!), strokeWidth = (double)Get(editor, "ArrowStrokeWidth")! },
                 factoryAppearance = new { color = ColorHex((Color)Get(arrow, "Color")!), strokeWidth = (double)Get(arrow, "Width")! },
                 toolSettingsAppearance = ToolAppearanceNames(settings), toolEditorAppearance = ToolAppearanceNames(editor), toolFactoryAppearance = toolFactories,
+                settingsTextSize = textSize, editorTextSize = editor.TextSize, factoryTextSize, draftTextSize, textEditorFontSize, committedTextSize,
                 safety = "Fresh console process; supplied settings path only. No Current, registry, Window, MainWindow, OS input, or live settings write."
             };
         }
