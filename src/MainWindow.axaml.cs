@@ -64,7 +64,8 @@ public partial class MainWindow : Window
     bool CanStartCapture => !historyDragInProgress && IsEnabled && IsNativeWindowEnabled && !OwnedWindows.Any(window => window.IsDialog && window.IsVisible);
     public MainWindow()
     {
-        InitializeComponent(); ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
+        InitializeComponent(); Editor.ArrowStyle = SettingsStore.Current.ArrowStyle;
+        ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
         if (!PlatformInfo.IsWindows) RootBorder.CornerRadius = default;
         else RootBorder.CornerRadius = new CornerRadius(10);
         if (Application.Current?.TryGetResource("SnipFlowIcon", null, out var icon) == true && icon is WindowIcon windowIcon) Icon = windowIcon;
@@ -758,6 +759,16 @@ public partial class MainWindow : Window
         if ((Editor.SelectedTool ?? activeTool) != AnnotationTool.Arrow) return;
         if (e.DirectionPreset is { } doubleEnded) Editor.DoubleEndedArrow = doubleEnded;
         else Editor.UpdateArrowStyle(e.Previous, e.Value);
+        var previous = SettingsStore.Current.ArrowStyle;
+        if (previous == Editor.ArrowStyle) return;
+        SettingsStore.Current.ArrowStyle = Editor.ArrowStyle;
+        try { SettingsStore.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            SettingsStore.Current.ArrowStyle = previous;
+            SettingsStore.Log(ex);
+            SetStatus("箭頭樣式已套用，但偏好設定未儲存。");
+        }
     }
     void PropertyDragStarted(object? sender, VectorEventArgs e) => Editor.BeginPropertyEdit();
     void PropertyDragCompleted(object? sender, VectorEventArgs e) => Editor.EndPropertyEdit();

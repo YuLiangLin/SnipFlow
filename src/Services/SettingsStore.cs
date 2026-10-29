@@ -1,4 +1,7 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using SnipFlow.Editor;
 namespace SnipFlow.Services;
 
 public sealed class UserSettings
@@ -16,6 +19,7 @@ public sealed class UserSettings
     public string Hotkey { get; set; } = HotkeyGesture.DefaultShortcut;
     public int HistoryLimit { get; set; } = 80;
     public List<string> RecentColors { get; set; } = new();
+    public ArrowStyleOptions ArrowStyle { get; set; } = ArrowStyleOptions.Default;
 }
 
 public static class SettingsStore
@@ -35,21 +39,19 @@ public static class SettingsStore
             return Path.Combine(pictures, "SnipFlow");
         }
     }
-    public static UserSettings Current { get; private set; } = Load();
+    private static readonly Lazy<UserSettings> LoadedSettings = new(Load);
+    public static UserSettings Current => LoadedSettings.Value;
     public static event EventHandler? Changed;
     static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    static readonly JsonSerializerOptions ArrowJsonOptions = new()
+    {
+        Converters = { new JsonStringEnumConverter() }
+    };
     static UserSettings Load()
     {
         try
         {
-            var settings = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(Path.Combine(DataRoot, "settings.json"))) ?? new();
-            settings.Theme = ThemeService.NormalizeMode(settings.Theme);
-            settings.RecentColors = (settings.RecentColors ?? new()).Where(value =>
-                value is { Length: 7 } && value[0] == '#' && value.Skip(1).All(Uri.IsHexDigit))
-                .Select(value => value.ToUpperInvariant()).Distinct(StringComparer.Ordinal).Take(8).ToList();
-            try { settings.CaptureSaveDirectory = NormalizeCaptureSaveDirectory(settings.CaptureSaveDirectory); }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
-            { settings.CaptureSaveDirectory = DefaultCaptureSaveDirectory; }
+            var settings = ReadSettingsFile(Path.Combine(DataRoot, "settings.json"));
             RefreshStartupPreference(settings);
             return settings;
         }
@@ -57,6 +59,55 @@ public static class SettingsStore
         {
             var settings = new UserSettings(); RefreshStartupPreference(settings); return settings;
         }
+    }
+    // These file operations do not load Current or inspect startup registration. They also let
+    // isolated regression processes exercise the actual settings format without touching user data.
+    internal static UserSettings ReadSettingsFile(string path)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            throw new JsonException("Settings must be an object.");
+        JsonElement arrow = default;
+        using var otherSettings = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(otherSettings))
+        {
+            writer.WriteStartObject();
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (property.NameEquals(nameof(UserSettings.ArrowStyle))) arrow = property.Value;
+                else property.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+        // Keep the previous serializer's last-value-wins behavior for repeated settings keys.
+        var settings = JsonSerializer.Deserialize<UserSettings>(otherSettings.ToArray(), JsonOptions) ?? new();
+        // A malformed arrow preference must not discard unrelated user preferences.
+        try
+        {
+            var style = arrow.ValueKind == JsonValueKind.Undefined ? null : arrow.Deserialize<ArrowStyleOptions>(ArrowJsonOptions);
+            settings.ArrowStyle = ArrowStyleOptions.IsValid(style) ? style! : ArrowStyleOptions.Default;
+        }
+        catch (JsonException) { settings.ArrowStyle = ArrowStyleOptions.Default; }
+        settings.Theme = ThemeService.NormalizeMode(settings.Theme);
+        settings.RecentColors = (settings.RecentColors ?? new()).Where(value =>
+            value is { Length: 7 } && value[0] == '#' && value.Skip(1).All(Uri.IsHexDigit))
+            .Select(value => value.ToUpperInvariant()).Distinct(StringComparer.Ordinal).Take(8).ToList();
+        try { settings.CaptureSaveDirectory = NormalizeCaptureSaveDirectory(settings.CaptureSaveDirectory); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
+        { settings.CaptureSaveDirectory = DefaultCaptureSaveDirectory; }
+        return settings;
+    }
+
+    internal static void WriteSettingsFile(string path, UserSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        path = Path.GetFullPath(path);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var json = JsonSerializer.SerializeToNode(settings, JsonOptions)!.AsObject();
+        var style = ArrowStyleOptions.IsValid(settings.ArrowStyle) ? settings.ArrowStyle : ArrowStyleOptions.Default;
+        json[nameof(UserSettings.ArrowStyle)] = JsonSerializer.SerializeToNode(style, ArrowJsonOptions);
+        File.WriteAllText(path + ".tmp", json.ToJsonString(JsonOptions));
+        File.Move(path + ".tmp", path, true);
     }
     static void RefreshStartupPreference(UserSettings settings)
     {
@@ -76,10 +127,7 @@ public static class SettingsStore
     public static void Save()
     {
         RefreshStartupPreference(Current);
-        Directory.CreateDirectory(DataRoot);
-        var path = Path.Combine(DataRoot, "settings.json");
-        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(Current, JsonOptions));
-        File.Move(path + ".tmp", path, true);
+        WriteSettingsFile(Path.Combine(DataRoot, "settings.json"), Current);
         // A listener failure must not turn a completed disk write into a failed save.
         if (Changed is { } listeners)
             foreach (EventHandler listener in listeners.GetInvocationList())

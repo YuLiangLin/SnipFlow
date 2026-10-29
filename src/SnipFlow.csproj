@@ -15,7 +15,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <StartupObject>SnipFlow.App</StartupObject>
     <ApplicationIcon>Assets/SnipFlow-v3.ico</ApplicationIcon>
-    <Version>0.8.4</Version>
+    <Version>0.8.5</Version>
     <AssemblyName>SnipFlow</AssemblyName>
     <RootNamespace>SnipFlow</RootNamespace>
     <Product>SnipFlow</Product>
