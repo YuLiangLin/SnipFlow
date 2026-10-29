@@ -58,7 +58,7 @@ public sealed partial class EditorView : UserControl
     private AnnotationTool _tool = AnnotationTool.Arrow;
     private Color _color = Color.FromRgb(99, 213, 197);
     private double _strokeWidth = 4;
-    private bool _doubleEndedArrow;
+    private ArrowStyleOptions _arrowStyle = ArrowStyleOptions.Default;
     private double _textSize = 26;
     private double _zoom = 1;
     private double _panX;
@@ -89,6 +89,7 @@ public sealed partial class EditorView : UserControl
     public Color? SelectedColor => SelectedItem?.Color;
     public double? SelectedStrokeWidth => SelectedItem?.Width;
     public bool? SelectedDoubleEndedArrow => SelectedItem?.Tool == AnnotationTool.Arrow ? SelectedItem.DoubleEndedArrow : null;
+    public ArrowStyleOptions? SelectedArrowStyle => SelectedItem?.Tool == AnnotationTool.Arrow ? SelectedItem.ArrowStyle : null;
     public double? SelectedTextSize => SelectedItem?.Tool == AnnotationTool.Text ? SelectedItem.FontSize : null;
 
     private AnnotationItem? SelectedItem => _textDraft ?? _selected;
@@ -98,17 +99,53 @@ public sealed partial class EditorView : UserControl
 
     public bool DoubleEndedArrow
     {
-        get => _doubleEndedArrow;
+        get => _arrowStyle.StartHead != ArrowHeadKind.None && _arrowStyle.EndHead != ArrowHeadKind.None;
         set
         {
             VerifyAccess();
-            _doubleEndedArrow = value;
+            _arrowStyle = _arrowStyle with { StartHead = value ? ArrowHeadKind.Arrow : ArrowHeadKind.None, EndHead = ArrowHeadKind.Arrow };
             ChangeSelectedStyle(item =>
             {
                 if (item.Tool == AnnotationTool.Arrow)
                     item.DoubleEndedArrow = value;
             });
         }
+    }
+
+    public ArrowStyleOptions ArrowStyle
+    {
+        get => _arrowStyle;
+        set
+        {
+            VerifyAccess();
+            if (!ArrowStyleOptions.IsValid(value)) throw new ArgumentOutOfRangeException(nameof(value));
+            _arrowStyle = value;
+            ChangeSelectedStyle(item =>
+            {
+                if (item.Tool == AnnotationTool.Arrow) item.ArrowStyle = value;
+            });
+        }
+    }
+
+    public void UpdateArrowStyle(ArrowStyleOptions previous, ArrowStyleOptions next)
+    {
+        VerifyAccess();
+        if (!ArrowStyleOptions.IsValid(previous)) throw new ArgumentOutOfRangeException(nameof(previous));
+        if (!ArrowStyleOptions.IsValid(next)) throw new ArgumentOutOfRangeException(nameof(next));
+        if (previous == next) return;
+        ArrowStyleOptions Apply(ArrowStyleOptions current) => current with
+        {
+            StartHead = previous.StartHead != next.StartHead ? next.StartHead : current.StartHead,
+            EndHead = previous.EndHead != next.EndHead ? next.EndHead : current.EndHead,
+            StartSize = previous.StartSize != next.StartSize ? next.StartSize : current.StartSize,
+            EndSize = previous.EndSize != next.EndSize ? next.EndSize : current.EndSize,
+            LineStyle = previous.LineStyle != next.LineStyle ? next.LineStyle : current.LineStyle
+        };
+        _arrowStyle = Apply(_arrowStyle);
+        ChangeSelectedStyle(item =>
+        {
+            if (item.Tool == AnnotationTool.Arrow) item.ArrowStyle = Apply(item.ArrowStyle);
+        });
     }
 
     public double StrokeWidth
@@ -636,7 +673,7 @@ public sealed partial class EditorView : UserControl
     private AnnotationItem CreateShapeAnnotation(AnnotationTool tool, Point point) => new()
     {
         Tool = tool, Color = _color, Width = _strokeWidth, Start = point, End = point,
-        DoubleEndedArrow = tool == AnnotationTool.Arrow && _doubleEndedArrow
+        ArrowStyle = tool == AnnotationTool.Arrow ? _arrowStyle : ArrowStyleOptions.Default
     };
 
     private void OnMouseMove(object? sender, PointerEventArgs e)

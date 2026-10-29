@@ -10,7 +10,7 @@ namespace SnipFlow.Services;
 internal static class EditorSessionStore
 {
     private const string SessionKind = "SnipFlow.UpdateSession";
-    private const int SchemaVersion = 6;
+    private const int SchemaVersion = 7;
     private const long MaxManifestBytes = 64 * 1024 * 1024;
     private const long MaxImageBytes = 512 * 1024 * 1024;
     private const long MaxProjectBytes = 1024L * 1024 * 1024;
@@ -233,7 +233,8 @@ internal static class EditorSessionStore
                 throw InvalidCheckpoint();
             if (!ImageOrientation.IsValid(item.TextOrientation) || (item.Tool != AnnotationTool.Text && item.TextOrientation != 0))
                 throw InvalidCheckpoint();
-            if (item.DoubleEndedArrow && item.Tool != AnnotationTool.Arrow)
+            if (!ArrowStyleOptions.IsValid(item.ArrowStyle)
+                || (item.Tool != AnnotationTool.Arrow && item.ArrowStyle != ArrowStyleOptions.Default))
                 throw InvalidCheckpoint();
             if (item.ImageCrop is { } crop && (item.Tool != AnnotationTool.Image || !ImageCropGeometry.IsValid(crop)))
                 throw InvalidCheckpoint();
@@ -290,12 +291,17 @@ internal static class EditorSessionStore
 
     private static void ValidateManifest(SessionManifest manifest)
     {
-        if (manifest.SchemaVersion is not (1 or 2 or 3 or 4 or 5 or SchemaVersion) || manifest.Kind != SessionKind
+        if (manifest.SchemaVersion is not (1 or 2 or 3 or 4 or 5 or 6 or SchemaVersion) || manifest.Kind != SessionKind
             || !Guid.TryParseExact(manifest.SessionId, "N", out _) || manifest.Annotations is null
             || manifest.Annotations.Count > MaxAnnotations)
             throw InvalidCheckpoint();
         ValidateImageSize(manifest.PixelWidth, manifest.PixelHeight);
         ValidateAnnotations(manifest.Annotations);
+        if (manifest.SchemaVersion < 7 && manifest.Annotations.Any(data => data.HasArrowStyle))
+            throw InvalidCheckpoint();
+        if (manifest.SchemaVersion == 7 && manifest.Annotations.Any(data => data.HasDoubleEndedArrow
+            || (data.Tool == nameof(AnnotationTool.Arrow) && !data.HasArrowStyle)))
+            throw InvalidCheckpoint();
         if (manifest.SchemaVersion < 6 && manifest.Annotations.Any(data => data.DoubleEndedArrow))
             throw InvalidCheckpoint();
         if (manifest.SchemaVersion < 3 && manifest.Annotations.Any(data => data.TextOrientation != 0))
@@ -460,6 +466,12 @@ internal static class EditorSessionStore
                 throw InvalidCheckpoint();
             if (data.DoubleEndedArrow && tool != AnnotationTool.Arrow)
                 throw InvalidCheckpoint();
+            if (data.HasArrowStyle)
+            {
+                if (tool != AnnotationTool.Arrow || data.ArrowStyle is null)
+                    throw InvalidCheckpoint();
+                _ = ReadArrowStyle(data.ArrowStyle);
+            }
         }
     }
 
@@ -566,17 +578,27 @@ internal static class EditorSessionStore
             throw InvalidCheckpoint();
     }
 
-    private static AnnotationData ToData(AnnotationItem item, int index) => new()
+    private static AnnotationData ToData(AnnotationItem item, int index)
     {
-        Tool = item.Tool.ToString(), Start = ToData(item.Start), End = ToData(item.End),
-        Argb = ((uint)item.Color.A << 24) | ((uint)item.Color.R << 16) | ((uint)item.Color.G << 8) | item.Color.B,
-        Width = item.Width, Points = item.Points.Select(ToData).ToList(), Text = item.Text,
-        FontSize = item.FontSize, TextWidth = item.TextWidth, TextBoxHeight = item.TextBoxHeight, TextOrientation = item.TextOrientation,
-        DoubleEndedArrow = item.DoubleEndedArrow,
-        MosaicFile = item.Tool == AnnotationTool.Mosaic ? MosaicFileName(index) : null,
-        ImageFile = item.Tool == AnnotationTool.Image ? ImageFileName(index) : null,
-        ImageCrop = item.ImageCrop is { } crop ? new ImageCropData { X = crop.X, Y = crop.Y, Width = crop.Width, Height = crop.Height } : null
-    };
+        var data = new AnnotationData
+        {
+            Tool = item.Tool.ToString(), Start = ToData(item.Start), End = ToData(item.End),
+            Argb = ((uint)item.Color.A << 24) | ((uint)item.Color.R << 16) | ((uint)item.Color.G << 8) | item.Color.B,
+            Width = item.Width, Points = item.Points.Select(ToData).ToList(), Text = item.Text,
+            FontSize = item.FontSize, TextWidth = item.TextWidth, TextBoxHeight = item.TextBoxHeight, TextOrientation = item.TextOrientation,
+            MosaicFile = item.Tool == AnnotationTool.Mosaic ? MosaicFileName(index) : null,
+            ImageFile = item.Tool == AnnotationTool.Image ? ImageFileName(index) : null,
+            ImageCrop = item.ImageCrop is { } crop ? new ImageCropData { X = crop.X, Y = crop.Y, Width = crop.Width, Height = crop.Height } : null
+        };
+        if (item.Tool == AnnotationTool.Arrow)
+            data.ArrowStyle = new ArrowStyleData
+            {
+                StartHead = item.ArrowStyle.StartHead.ToString(), EndHead = item.ArrowStyle.EndHead.ToString(),
+                StartSize = item.ArrowStyle.StartSize.ToString(), EndSize = item.ArrowStyle.EndSize.ToString(),
+                LineStyle = item.ArrowStyle.LineStyle.ToString()
+            };
+        return data;
+    }
     private static PointData ToData(Point point) => new() { X = point.X, Y = point.Y };
     private static AnnotationItem FromData(AnnotationData data) => new()
     {
@@ -584,10 +606,20 @@ internal static class EditorSessionStore
         Color = Color.FromArgb((byte)(data.Argb >> 24), (byte)(data.Argb >> 16), (byte)(data.Argb >> 8), (byte)data.Argb),
         Width = data.Width, Points = data.Points.Select(FromData).ToList(), Text = data.Text,
         FontSize = data.FontSize, TextWidth = data.TextWidth, TextBoxHeight = data.TextBoxHeight, TextOrientation = data.TextOrientation,
-        DoubleEndedArrow = data.DoubleEndedArrow,
+        ArrowStyle = data.ArrowStyle is { } style ? ReadArrowStyle(style)
+            : ArrowStyleOptions.Default with { StartHead = data.DoubleEndedArrow ? ArrowHeadKind.Arrow : ArrowHeadKind.None },
         ImageCrop = data.ImageCrop is { } crop ? new Rect(crop.X, crop.Y, crop.Width, crop.Height) : null
     };
     private static Point FromData(PointData point) => new(point.X, point.Y);
+    private static ArrowStyleOptions ReadArrowStyle(ArrowStyleData data) => new()
+    {
+        StartHead = ReadArrowEnum<ArrowHeadKind>(data.StartHead), EndHead = ReadArrowEnum<ArrowHeadKind>(data.EndHead),
+        StartSize = ReadArrowEnum<ArrowHeadSize>(data.StartSize), EndSize = ReadArrowEnum<ArrowHeadSize>(data.EndSize),
+        LineStyle = ReadArrowEnum<ArrowLineStyle>(data.LineStyle)
+    };
+    private static T ReadArrowEnum<T>(string? value) where T : struct, Enum =>
+        Enum.TryParse<T>(value, out var result) && Enum.IsDefined(result) && value == result.ToString()
+            ? result : throw InvalidCheckpoint();
     private static string MosaicFileName(int index) => $"mosaic-{index:D4}.png";
     private static string ImageFileName(int index) => $"image-{index:D4}.png";
     private static InvalidDataException InvalidCheckpoint() => new("The SnipFlow project or update checkpoint is invalid or unsupported.");
@@ -618,8 +650,22 @@ internal static class EditorSessionStore
         public required double TextBoxHeight { get; init; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public int TextOrientation { get; init; }
+        private bool _doubleEndedArrow;
+        internal bool HasDoubleEndedArrow { get; private set; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-        public bool DoubleEndedArrow { get; init; }
+        public bool DoubleEndedArrow
+        {
+            get => _doubleEndedArrow;
+            set { _doubleEndedArrow = value; HasDoubleEndedArrow = true; }
+        }
+        private ArrowStyleData? _arrowStyle;
+        internal bool HasArrowStyle { get; private set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public ArrowStyleData? ArrowStyle
+        {
+            get => _arrowStyle;
+            set { _arrowStyle = value; HasArrowStyle = true; }
+        }
         public required string? MosaicFile { get; set; }
         public string? ImageFile { get; set; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -632,6 +678,15 @@ internal static class EditorSessionStore
         public required double Y { get; init; }
         public required double Width { get; init; }
         public required double Height { get; init; }
+    }
+
+    private sealed class ArrowStyleData
+    {
+        public required string StartHead { get; init; }
+        public required string EndHead { get; init; }
+        public required string StartSize { get; init; }
+        public required string EndSize { get; init; }
+        public required string LineStyle { get; init; }
     }
 
     private sealed class PointData

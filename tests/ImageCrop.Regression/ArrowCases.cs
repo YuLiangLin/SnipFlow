@@ -98,27 +98,27 @@ internal static partial class Program
             var editor=ArrowEditor(Arrow(start,end,4,true));var before=PixelHash(editor.ExportImage());var command=Enum.Parse(Product.GetType("SnipFlow.Editor.ImageTransformCommand",true)!,"RotateRight");Call(editor,"ApplyImageTransform",command,true);Check(DoubleArrow(First(editor)),"Rotated arrow lost style");var after=PixelHash(editor.ExportImage());editor.Undo();Check(DoubleArrow(First(editor))&&PixelHash(editor.ExportImage())==before,"Rotated arrow undo failed");editor.Redo();Check(DoubleArrow(First(editor))&&PixelHash(editor.ExportImage())==after,"Rotated arrow redo failed");
         });
         var doubleProject=Path.Combine(Output,"double-arrow.snipflow");var singleProject=Path.Combine(Output,"single-arrow.snipflow");
-        Case("schema 6 double arrow save and reopen preserve style and exact pixels",()=> {
-            var editor=ArrowEditor(Arrow(start,end,4,true));var expected=PixelHash(editor.ExportImage());Static(StoreType,"SaveProject",editor,doubleProject);using(var archive=ZipFile.OpenRead(doubleProject)){var json=ReadManifest(archive);Check((int)json["SchemaVersion"]! ==6&&(bool)json["Annotations"]![0]!["DoubleEndedArrow"]!,"Double-arrow manifest lost schema/style");}
+        Case("schema 7 double arrow save and reopen preserve style and exact pixels",()=> {
+            var editor=ArrowEditor(Arrow(start,end,4,true));var expected=PixelHash(editor.ExportImage());Static(StoreType,"SaveProject",editor,doubleProject);using(var archive=ZipFile.OpenRead(doubleProject)){var json=ReadManifest(archive);Check((int)json["SchemaVersion"]! ==7&&(string?)json["Annotations"]![0]!["ArrowStyle"]!["StartHead"]=="Arrow"&&(string?)json["Annotations"]![0]!["ArrowStyle"]!["EndHead"]=="Arrow"&&!json["Annotations"]![0]!.AsObject().ContainsKey("DoubleEndedArrow"),"Double-arrow manifest lost schema/style or wrote legacy truth");}
             var reopened=new EditorView();Static(StoreType,"RestoreProject",reopened,doubleProject);Check(DoubleArrow(First(reopened))&&!reopened.HasEdits&&PixelHash(reopened.ExportImage())==expected,"Reopened double arrow lost style/output");
         });
-        Case("single arrow false field is omitted from schema 6 manifest",()=> {
-            var editor=ArrowEditor(Arrow(start,end));Static(StoreType,"SaveProject",editor,singleProject);using var archive=ZipFile.OpenRead(singleProject);var json=ReadManifest(archive);Check((int)json["SchemaVersion"]! ==6&&!json["Annotations"]![0]!.AsObject().ContainsKey("DoubleEndedArrow"),"Default false arrow field should be omitted");
+        Case("single arrow legacy field is omitted from schema 7 manifest",()=> {
+            var editor=ArrowEditor(Arrow(start,end));Static(StoreType,"SaveProject",editor,singleProject);using var archive=ZipFile.OpenRead(singleProject);var json=ReadManifest(archive);Check((int)json["SchemaVersion"]! ==7&&!json["Annotations"]![0]!.AsObject().ContainsKey("DoubleEndedArrow")&&(string?)json["Annotations"]![0]!["ArrowStyle"]!["StartHead"]=="None","Single-arrow style or omitted legacy field incorrect");
         });
         Case("schemas 1 through 5 reopen legacy arrows as single-ended",()=> {
             Check(File.Exists(singleProject),"Single-arrow fixture missing");var expected=PixelHash(ArrowEditor(Arrow(start,end)).ExportImage());foreach(var schema in new[]{1,2,3,4,5}) {
-                var path=MutateProject(singleProject,"legacy-single-arrow-"+schema+".snipflow",json=>json["SchemaVersion"]=schema);var editor=new EditorView();Static(StoreType,"RestoreProject",editor,path);Check(!DoubleArrow(First(editor))&&PixelHash(editor.ExportImage())==expected,"Legacy schema "+schema+" changed single-arrow rendering");
+                var path=MutateProject(singleProject,"legacy-single-arrow-"+schema+".snipflow",json=>{json["SchemaVersion"]=schema;json["Annotations"]![0]!.AsObject().Remove("ArrowStyle");});var editor=new EditorView();Static(StoreType,"RestoreProject",editor,path);Check(!DoubleArrow(First(editor))&&PixelHash(editor.ExportImage())==expected,"Legacy schema "+schema+" changed single-arrow rendering");
             }
         });
         Case("schemas 1 through 5 reject double-arrow true without replacing open document",()=> {
             Check(File.Exists(doubleProject),"Double-arrow fixture missing");foreach(var schema in new[]{1,2,3,4,5}) {
-                var path=MutateProject(doubleProject,"invalid-legacy-double-arrow-"+schema+".snipflow",json=>json["SchemaVersion"]=schema);var editor=ArrowEditor(Arrow(start,end));var before=PixelHash(editor.ExportImage());Rejected(()=>Static(StoreType,"RestoreProject",editor,path));Check(!DoubleArrow(First(editor))&&PixelHash(editor.ExportImage())==before,"Rejected schema "+schema+" replaced document");
+                var path=MutateProject(doubleProject,"invalid-legacy-double-arrow-"+schema+".snipflow",json=>{json["SchemaVersion"]=schema;json["Annotations"]![0]!.AsObject().Remove("ArrowStyle");json["Annotations"]![0]!["DoubleEndedArrow"]=true;});var editor=ArrowEditor(Arrow(start,end));var before=PixelHash(editor.ExportImage());Rejected(()=>Static(StoreType,"RestoreProject",editor,path));Check(!DoubleArrow(First(editor))&&PixelHash(editor.ExportImage())==before,"Rejected schema "+schema+" replaced document");
             }
         });
         Case("save rejects double-ended flag on non-arrow annotation before publication",()=> {
             var item=Arrow(new Point(40,40),new Point(160,160),4,true);Set(item,"Tool",AnnotationTool.Rectangle);var editor=ArrowEditor(item);var path=Path.Combine(Output,"must-not-publish-double-rectangle.snipflow");Rejected(()=>Static(StoreType,"SaveProject",editor,path));Check(!File.Exists(path),"Non-arrow style was published");
         });
-        Case("schema 6 rejects double-ended flag on non-arrow data atomically",()=> {
+        Case("schema 7 rejects arrow style on non-arrow data atomically",()=> {
             Check(File.Exists(doubleProject),"Double-arrow fixture missing");var path=MutateProject(doubleProject,"invalid-double-rectangle.snipflow",json=>json["Annotations"]![0]!["Tool"]="Rectangle");var editor=ArrowEditor(Arrow(start,end));var before=PixelHash(editor.ExportImage());Rejected(()=>Static(StoreType,"RestoreProject",editor,path));Check(PixelHash(editor.ExportImage())==before,"Invalid arrow style changed document");
         });
         Case("malformed double-arrow JSON flag values are rejected atomically",()=> {

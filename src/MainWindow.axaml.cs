@@ -50,6 +50,8 @@ public partial class MainWindow : Window
     bool showingUpdateStatus;
     AnnotationTool activeTool = AnnotationTool.Pen;
     Color activeColor = Color.FromRgb(99, 213, 197);
+    ArrowStylePanel? arrowStylePanel;
+    Flyout? arrowStyleFlyout;
 #if WINDOWS
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -79,12 +81,12 @@ public partial class MainWindow : Window
         SettingsStore.Changed += SettingsChanged;
         autoSaveTimer.Tick += AutoSaveTick;
         Closing += WindowClosing;
-        Closed += (_, _) => { isClosed = true; CloseColorPalette(); autoSaveTimer.Stop(); Updates.Changed -= UpdateChanged; SettingsStore.Changed -= SettingsChanged; I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
+        Closed += (_, _) => { isClosed = true; CloseColorPalette(); arrowStyleFlyout?.Hide(); autoSaveTimer.Stop(); Updates.Changed -= UpdateChanged; SettingsStore.Changed -= SettingsChanged; I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
         ApplyWindowMode(true);
         // The native window exists from construction (WPF: SourceInitialized), even when SnipFlow starts in the tray.
         WindowAppearance.Apply(this); WindowBoundsService.Attach(this); UpdateMinimumWindowSize(); SetHotkey(SettingsStore.Current.Hotkey);
         RefreshDesktopShortcut();
-        SizeChanged += (_, _) => { UpdateMinimumWindowSize(); RememberNormalBounds(); };
+        SizeChanged += (_, _) => { UpdateMinimumWindowSize(); RememberNormalBounds(); FitArrowStylePanel(); };
         PositionChanged += (_, _) => { UpdateMinimumWindowSize(); RememberNormalBounds(); };
         // The first Show centers the panel; later shows keep the position set by the user or the editor layout.
         Opened += (_, _) => WindowStartupLocation = WindowStartupLocation.Manual;
@@ -605,9 +607,15 @@ public partial class MainWindow : Window
             ToolLabel.Text = ToolName(shownTool);
             TextProperties.IsVisible = shownTool == AnnotationTool.Text;
             WidthProperties.IsVisible = shownTool is not (AnnotationTool.Text or AnnotationTool.Image);
-            DoubleEndedArrowCheckBox.IsVisible = shownTool == AnnotationTool.Arrow && !Editor.IsImageCropping;
-            DoubleEndedArrowCheckBox.IsEnabled = !busy && !capturePending && !Editor.IsImageCropping;
-            DoubleEndedArrowCheckBox.IsChecked = Editor.SelectedDoubleEndedArrow ?? Editor.DoubleEndedArrow;
+            ArrowStyleButton.IsVisible = shownTool == AnnotationTool.Arrow && !Editor.IsImageCropping;
+            ArrowStyleButton.IsEnabled = !busy && !capturePending && !Editor.IsImageCropping;
+            if (!ArrowStyleButton.IsVisible || !ArrowStyleButton.IsEnabled) arrowStyleFlyout?.Hide();
+            if (arrowStylePanel is not null)
+            {
+                arrowStylePanel.Value = Editor.SelectedArrowStyle ?? Editor.ArrowStyle;
+                arrowStylePanel.PreviewColor = Editor.SelectedColor ?? activeColor;
+                arrowStylePanel.PreviewWidth = Editor.SelectedStrokeWidth ?? Editor.StrokeWidth;
+            }
             ColorButtons.IsVisible = shownTool is not (AnnotationTool.Image or AnnotationTool.Mosaic);
             WidthSlider.Value = Editor.SelectedStrokeWidth ?? Editor.StrokeWidth;
             if (!TextSizeBox.IsKeyboardFocusWithin) TextSizeBox.Text = (Editor.SelectedTextSize ?? Editor.TextSize).ToString("0.#", CultureInfo.CurrentCulture);
@@ -713,11 +721,43 @@ public partial class MainWindow : Window
         if (sender is Button { Tag: string value }) ApplyAnnotationColor(Color.Parse(value));
     }
     void StrokeChanged(object? sender, RangeBaseValueChangedEventArgs e) { if (Editor != null && !refreshingProperties) Editor.StrokeWidth = e.NewValue; }
-    void DoubleEndedArrowChanged(object? sender, RoutedEventArgs e)
+    void ArrowStyleClick(object? sender, RoutedEventArgs e)
     {
         if (Editor == null || refreshingProperties || busy || capturePending || Editor.IsImageCropping) return;
         if ((Editor.SelectedTool ?? activeTool) != AnnotationTool.Arrow) return;
-        Editor.DoubleEndedArrow = DoubleEndedArrowCheckBox.IsChecked == true;
+        if (arrowStyleFlyout?.IsOpen == true) { arrowStyleFlyout.Hide(); return; }
+        CloseColorPalette();
+        Editor.EndPropertyEdit();
+        if (arrowStylePanel is null)
+        {
+            arrowStylePanel = new ArrowStylePanel();
+            arrowStylePanel.ValueChanged += ArrowStyleChanged;
+            arrowStyleFlyout = new Flyout { Content = arrowStylePanel, Placement = PlacementMode.Bottom, VerticalOffset = 6 };
+            if (Application.Current is { } app && app.TryGetResource(typeof(FlyoutPresenter), app.ActualThemeVariant, out var resource)
+                && resource is Avalonia.Styling.ControlTheme theme)
+            {
+                var presenterTheme = new Avalonia.Styling.ControlTheme { TargetType = typeof(FlyoutPresenter), BasedOn = theme };
+                presenterTheme.Setters.Add(new Avalonia.Styling.Setter(PaddingProperty, new Thickness(12)));
+                presenterTheme.Setters.Add(new Avalonia.Styling.Setter(MaxWidthProperty, 380d));
+                arrowStyleFlyout.FlyoutPresenterTheme = presenterTheme;
+            }
+        }
+        FitArrowStylePanel();
+        RefreshProperties();
+        arrowStyleFlyout!.ShowAt(ArrowStyleButton);
+    }
+    void FitArrowStylePanel()
+    {
+        if (arrowStylePanel is null) return;
+        arrowStylePanel.Width = Math.Min(340, Math.Max(1, Bounds.Width - 64));
+        arrowStylePanel.MaxHeight = Math.Min(500, Math.Max(1, Bounds.Height - 64));
+    }
+    void ArrowStyleChanged(object? sender, ArrowStyleChangedEventArgs e)
+    {
+        if (Editor == null || refreshingProperties || busy || capturePending || Editor.IsImageCropping) return;
+        if ((Editor.SelectedTool ?? activeTool) != AnnotationTool.Arrow) return;
+        if (e.DirectionPreset is { } doubleEnded) Editor.DoubleEndedArrow = doubleEnded;
+        else Editor.UpdateArrowStyle(e.Previous, e.Value);
     }
     void PropertyDragStarted(object? sender, VectorEventArgs e) => Editor.BeginPropertyEdit();
     void PropertyDragCompleted(object? sender, VectorEventArgs e) => Editor.EndPropertyEdit();
@@ -794,6 +834,7 @@ public partial class MainWindow : Window
     {
         if (busy || capturePending || historyDragInProgress) return;
         var modifiers = e.KeyModifiers;
+        if (arrowStyleFlyout?.IsOpen == true) return;
         if (Editor.IsImageCropping)
         {
             if (modifiers == KeyModifiers.Control && e.Key == Key.S)

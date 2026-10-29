@@ -17,6 +17,8 @@ public sealed class CropTestApplication : Application
     {
         Resources["AppFont"] = new FontFamily("Segoe UI, Microsoft JhengHei UI, Noto Sans CJK TC, sans-serif");
         Resources["MonoFont"] = new FontFamily("Consolas, DejaVu Sans Mono, monospace");
+        // Panel state tests need the named theme key, but do not render or validate its template.
+        Resources["QuietButton"] = new Avalonia.Styling.ControlTheme { TargetType = typeof(Avalonia.Controls.Button) };
     }
 }
 
@@ -40,6 +42,7 @@ internal static partial class Program
         try
         {
             AppBuilder.Configure<CropTestApplication>().UsePlatformDetect().SetupWithoutStarting();
+            if (args.Contains("--legacy-arrow-fixtures")) return WriteLegacyArrowFixtures();
             Case("SNIPFLOW-IMAGE-CROP-001 contract", () => {
                 Check(ItemType.GetProperty("ImageCrop", Any)?.PropertyType == typeof(Rect?), "ImageCrop Rect? contract is missing (expected failure on pre-crop assembly).");
                 Check(CropGeometryType is not null, "ImageCropGeometry is missing.");
@@ -54,21 +57,29 @@ internal static partial class Program
                 Check(typeof(EditorView).GetProperty("DoubleEndedArrow", Any)?.PropertyType == typeof(bool), "EditorView.DoubleEndedArrow is missing.");
                 Check(typeof(EditorView).GetProperty("SelectedDoubleEndedArrow", Any)?.PropertyType == typeof(bool?), "SelectedDoubleEndedArrow bool? is missing.");
             });
+            Case("SNIPFLOW-ARROW-STYLES-004 contract", () => {
+                var style = Product.GetType("SnipFlow.Editor.ArrowStyleOptions");
+                Check(style is not null && ItemType.GetProperty("ArrowStyle", Any)?.PropertyType == style, "AnnotationItem.ArrowStyle is missing (expected failure on 0.8.3).");
+                Check(typeof(EditorView).GetProperty("ArrowStyle", Any)?.PropertyType == style, "EditorView.ArrowStyle is missing.");
+                Check(typeof(EditorView).GetProperty("SelectedArrowStyle", Any)?.PropertyType == style, "SelectedArrowStyle is missing.");
+                Check(typeof(EditorView).GetMethods(Any).Any(method => method.Name == "UpdateArrowStyle" && method.GetParameters().Length == 2), "UpdateArrowStyle is missing.");
+            });
             if (failed == 0)
             {
                 ModelCases();
                 ProjectCases();
                 ArrowCases();
+                ArrowStyleCases();
                 if (!args.Contains("--model-only")) { EditorCases(); SyntheticAndEdgeCases(); ZoomCases(); }
             }
         }
         catch (Exception ex) { failed++; Results.Add(new { name = "harness", status = "FAIL", error = Unwrap(ex).ToString() }); }
         var assemblyHash = Hash(File.ReadAllBytes(Product.Location));
         var report = new {
-            guard = "SNIPFLOW-DOUBLE-ARROW-003", timestamp = DateTimeOffset.Now, passed, failed,
+            guard = "SNIPFLOW-ARROW-STYLES-004", timestamp = DateTimeOffset.Now, passed, failed,
             productAssembly = Product.Location, productAssemblySha256 = assemblyHash,
             safety = "Empty application; no Avalonia Window, SnipFlow.App/MainWindow, OS input, clipboard, capture, hotkey, installation, or deployment.",
-            method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations and project persistence. No OS or routed input events.",
+            method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations and project persistence. A minimal QuietButton theme placeholder supports panel state/intent tests only; it does not validate the panel's visual theme. No OS or routed input events.",
             limitations = "Does not prove double-click routing, interactive pointer capture, native-window layout, IME, or desktop scaling. Linux execution requires an X11/XWayland display; use a virtual display such as Xvfb.",
             tests = Results
         };

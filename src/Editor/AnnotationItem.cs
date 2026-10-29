@@ -36,7 +36,28 @@ internal sealed class AnnotationItem
     internal Point End { get; set; }
     internal Color Color { get; set; }
     internal double Width { get; set; }
-    internal bool DoubleEndedArrow { get; set; }
+    private ArrowStyleOptions _arrowStyle = ArrowStyleOptions.Default;
+    internal ArrowStyleOptions ArrowStyle
+    {
+        get => _arrowStyle;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (!ArrowStyleOptions.IsValid(value))
+                throw new ArgumentException("Arrow style contains unsupported values.", nameof(value));
+            _arrowStyle = value;
+        }
+    }
+    // Compatibility with the original two-way toggle; sizes and shaft style remain independent.
+    internal bool DoubleEndedArrow
+    {
+        get => ArrowStyle.StartHead != ArrowHeadKind.None && ArrowStyle.EndHead != ArrowHeadKind.None;
+        set => ArrowStyle = ArrowStyle with
+        {
+            StartHead = value ? ArrowHeadKind.Arrow : ArrowHeadKind.None,
+            EndHead = ArrowHeadKind.Arrow
+        };
+    }
     internal List<Point> Points { get; init; } = new();
     internal string Text { get; set; } = string.Empty;
     internal double FontSize { get; set; } = 26;
@@ -60,7 +81,7 @@ internal sealed class AnnotationItem
         End = End,
         Color = Color,
         Width = Width,
-        DoubleEndedArrow = DoubleEndedArrow,
+        ArrowStyle = ArrowStyle,
         Points = new List<Point>(Points),
         Text = Text,
         FontSize = FontSize,
@@ -139,7 +160,7 @@ internal sealed class AnnotationItem
         End = source.End;
         Color = source.Color;
         Width = source.Width;
-        DoubleEndedArrow = source.DoubleEndedArrow;
+        ArrowStyle = source.ArrowStyle;
         Text = source.Text;
         FontSize = source.FontSize;
         TextWidth = source.TextWidth;
@@ -158,7 +179,7 @@ internal sealed class AnnotationItem
         static bool SamePoint(Point first, Point second) => ((Vector)(first - second)).SquaredLength < 0.0000000001;
         return Tool == other.Tool && SamePoint(Start, other.Start) && SamePoint(End, other.End)
             && Color == other.Color && Near(Width, other.Width) && Near(FontSize, other.FontSize)
-            && DoubleEndedArrow == other.DoubleEndedArrow
+            && ArrowStyle == other.ArrowStyle
             && Near(TextWidth, other.TextWidth) && Near(TextBoxHeight, other.TextBoxHeight)
             && TextOrientation == other.TextOrientation
             && ReferenceEquals(Image, other.Image)
@@ -242,22 +263,15 @@ internal sealed class AnnotationItem
 
         if (Tool == AnnotationTool.Arrow)
         {
-            if (DistanceToSegment(point, Start, End) <= tolerance + Width / 2)
-                return true;
-            Vector direction = End - Start;
-            if (direction.Length < 0.5)
-                return false;
-            double head = ArrowHeadLength(direction.Length);
-            direction = direction.Normalize();
-            bool HitsHead(Point tip, Vector forward)
-            {
-                Vector perpendicular = new(-forward.Y, forward.X);
-                Point first = tip - forward * head + perpendicular * head * 0.48;
-                Point second = tip - forward * head - perpendicular * head * 0.48;
-                return DistanceToSegment(point, tip, first) <= tolerance + Width
-                    || DistanceToSegment(point, tip, second) <= tolerance + Width;
-            }
-            return HitsHead(End, direction) || (DoubleEndedArrow && HitsHead(Start, -direction));
+            if (!double.IsFinite(tolerance) || tolerance < 0 || !TryArrowDirection(out var direction, out var length)) return false;
+            var startHead = ArrowHeadLength(length, ArrowStyle.StartHead, ArrowStyle.StartSize);
+            var endHead = ArrowHeadLength(length, ArrowStyle.EndHead, ArrowStyle.EndSize);
+            var shaftStart = Start + ArrowShaftOffset(direction, ArrowStyle.StartHead, startHead);
+            var shaftEnd = End - ArrowShaftOffset(direction, ArrowStyle.EndHead, endHead);
+            // The whole shaft remains easy to select, including the gaps in dashed/dotted lines.
+            return DistanceToSegment(point, shaftStart, shaftEnd) <= tolerance + Width / 2
+                || HitArrowHead(point, tolerance, Start, -direction, ArrowStyle.StartHead, startHead)
+                || HitArrowHead(point, tolerance, End, direction, ArrowStyle.EndHead, endHead);
         }
 
         double radius = tolerance + (Tool == AnnotationTool.Highlight ? Width * 3 : Width / 2);
@@ -306,36 +320,108 @@ internal sealed class AnnotationItem
         new Point(Math.Min(first.X, second.X), Math.Min(first.Y, second.Y)),
         new Point(Math.Max(first.X, second.X), Math.Max(first.Y, second.Y)));
 
-    private void DrawArrow(DrawingContext context, IPen pen, IBrush brush)
+    private static readonly ImmutableDashStyle DashedArrowShaft = new([4d, 3d], 0);
+    private static readonly ImmutableDashStyle DottedArrowShaft = new([0d, 2d], 0);
+
+    private void DrawArrow(DrawingContext context, IPen pen, IImmutableBrush brush)
     {
-        Vector direction = End - Start;
-        if (direction.Length < 0.5)
-            return;
-        double length = direction.Length;
-        direction = direction.Normalize();
-        double head = ArrowHeadLength(length);
-        context.DrawLine(pen, DoubleEndedArrow ? Start + direction * head * 0.55 : Start,
-            End - direction * head * 0.55);
-        void DrawHead(Point tip, Vector forward)
+        if (!TryArrowDirection(out var direction, out var length)) return;
+        var startHead = ArrowHeadLength(length, ArrowStyle.StartHead, ArrowStyle.StartSize);
+        var endHead = ArrowHeadLength(length, ArrowStyle.EndHead, ArrowStyle.EndSize);
+        IPen shaftPen = ArrowStyle.LineStyle switch
         {
-            Vector perpendicular = new(-forward.Y, forward.X);
-            var geometry = new StreamGeometry();
-            using (StreamGeometryContext path = geometry.Open())
-            {
-                path.BeginFigure(tip, true);
-                path.LineTo(tip - forward * head + perpendicular * head * 0.48);
-                path.LineTo(tip - forward * head * 0.7);
-                path.LineTo(tip - forward * head - perpendicular * head * 0.48);
-                path.EndFigure(true);
-            }
-            context.DrawGeometry(brush, null, geometry);
-        }
-        DrawHead(End, direction);
-        if (DoubleEndedArrow) DrawHead(Start, -direction);
+            ArrowLineStyle.Dash => new ImmutablePen(brush, Width, DashedArrowShaft, PenLineCap.Round, PenLineJoin.Round),
+            ArrowLineStyle.Dot => new ImmutablePen(brush, Width, DottedArrowShaft, PenLineCap.Round, PenLineJoin.Round),
+            _ => pen
+        };
+        context.DrawLine(shaftPen, Start + ArrowShaftOffset(direction, ArrowStyle.StartHead, startHead),
+            End - ArrowShaftOffset(direction, ArrowStyle.EndHead, endHead));
+        DrawArrowHead(context, brush, pen, End, direction, ArrowStyle.EndHead, endHead);
+        DrawArrowHead(context, brush, pen, Start, -direction, ArrowStyle.StartHead, startHead);
     }
 
-    private double ArrowHeadLength(double length) =>
-        Math.Min(length * (DoubleEndedArrow ? 0.4 : 0.8), Math.Max(12, Width * 4));
+    private bool TryArrowDirection(out Vector direction, out double length)
+    {
+        direction = End - Start;
+        length = direction.Length;
+        if (!double.IsFinite(Start.X) || !double.IsFinite(Start.Y) || !double.IsFinite(End.X) || !double.IsFinite(End.Y)
+            || !double.IsFinite(length) || length < 0.5 || !double.IsFinite(Width) || Width <= 0)
+            return false;
+        direction = direction.Normalize();
+        return true;
+    }
+
+    private double ArrowHeadLength(double length, ArrowHeadKind kind, ArrowHeadSize size)
+    {
+        if (kind == ArrowHeadKind.None) return 0;
+        var factor = size switch { ArrowHeadSize.Small => 0.75, ArrowHeadSize.Large => 1.5, _ => 1 };
+        var twoHeads = ArrowStyle.StartHead != ArrowHeadKind.None && ArrowStyle.EndHead != ArrowHeadKind.None;
+        return Math.Min(length * (twoHeads ? 0.4 : 0.8), Math.Max(12, Width * 4) * factor);
+    }
+
+    private static Vector ArrowShaftOffset(Vector direction, ArrowHeadKind kind, double head) =>
+        kind is ArrowHeadKind.None or ArrowHeadKind.Open ? default : direction * head * 0.55;
+
+    private static Point[] ArrowHeadPoints(Point tip, Vector forward, ArrowHeadKind kind, double head)
+    {
+        Vector perpendicular = new(-forward.Y, forward.X);
+        return kind switch
+        {
+            ArrowHeadKind.Arrow => [tip, tip - forward * head + perpendicular * head * 0.48,
+                tip - forward * head * 0.7, tip - forward * head - perpendicular * head * 0.48],
+            ArrowHeadKind.Triangle => [tip, tip - forward * head + perpendicular * head * 0.48,
+                tip - forward * head - perpendicular * head * 0.48],
+            ArrowHeadKind.Open => [tip - forward * head + perpendicular * head * 0.48, tip,
+                tip - forward * head - perpendicular * head * 0.48],
+            ArrowHeadKind.Diamond => [tip, tip - forward * head * 0.5 + perpendicular * head * 0.42,
+                tip - forward * head, tip - forward * head * 0.5 - perpendicular * head * 0.42],
+            _ => []
+        };
+    }
+
+    private static void DrawArrowHead(DrawingContext context, IBrush brush, IPen solidPen,
+        Point tip, Vector forward, ArrowHeadKind kind, double head)
+    {
+        if (kind == ArrowHeadKind.None) return;
+        if (kind == ArrowHeadKind.Circle)
+        {
+            context.DrawEllipse(brush, null, tip - forward * head * 0.5, head * 0.5, head * 0.5);
+            return;
+        }
+        var points = ArrowHeadPoints(tip, forward, kind, head);
+        var filled = kind != ArrowHeadKind.Open;
+        var geometry = new StreamGeometry();
+        using (var path = geometry.Open())
+        {
+            path.BeginFigure(points[0], filled);
+            for (var index = 1; index < points.Length; index++) path.LineTo(points[index]);
+            path.EndFigure(filled);
+        }
+        context.DrawGeometry(filled ? brush : null, filled ? null : solidPen, geometry);
+    }
+
+    private bool HitArrowHead(Point point, double tolerance, Point tip, Vector forward, ArrowHeadKind kind, double head)
+    {
+        if (kind == ArrowHeadKind.None) return false;
+        if (kind == ArrowHeadKind.Circle)
+            return Point.Distance(point, tip - forward * head * 0.5) <= head * 0.5 + tolerance;
+        var points = ArrowHeadPoints(tip, forward, kind, head);
+        if (kind == ArrowHeadKind.Open)
+            return DistanceToSegment(point, points[0], points[1]) <= tolerance + Width / 2
+                || DistanceToSegment(point, points[1], points[2]) <= tolerance + Width / 2;
+        // Filled heads include their interior. Use the same vertices as drawing, including the
+        // legacy Arrow's concave notch, instead of approximating new shapes with a large triangle.
+        var inside = false;
+        for (int index = 0, previous = points.Length - 1; index < points.Length; previous = index++)
+        {
+            var first = points[previous]; var second = points[index];
+            if (DistanceToSegment(point, first, second) <= tolerance) return true;
+            if ((first.Y > point.Y) != (second.Y > point.Y)
+                && point.X < (second.X - first.X) * (point.Y - first.Y) / (second.Y - first.Y) + first.X)
+                inside = !inside;
+        }
+        return inside;
+    }
 
     private void DrawStroke(DrawingContext context)
     {
