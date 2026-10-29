@@ -605,6 +605,9 @@ public partial class MainWindow : Window
             ToolLabel.Text = ToolName(shownTool);
             TextProperties.IsVisible = shownTool == AnnotationTool.Text;
             WidthProperties.IsVisible = shownTool is not (AnnotationTool.Text or AnnotationTool.Image);
+            DoubleEndedArrowCheckBox.IsVisible = shownTool == AnnotationTool.Arrow && !Editor.IsImageCropping;
+            DoubleEndedArrowCheckBox.IsEnabled = !busy && !capturePending && !Editor.IsImageCropping;
+            DoubleEndedArrowCheckBox.IsChecked = Editor.SelectedDoubleEndedArrow ?? Editor.DoubleEndedArrow;
             ColorButtons.IsVisible = shownTool is not (AnnotationTool.Image or AnnotationTool.Mosaic);
             WidthSlider.Value = Editor.SelectedStrokeWidth ?? Editor.StrokeWidth;
             if (!TextSizeBox.IsKeyboardFocusWithin) TextSizeBox.Text = (Editor.SelectedTextSize ?? Editor.TextSize).ToString("0.#", CultureInfo.CurrentCulture);
@@ -710,6 +713,12 @@ public partial class MainWindow : Window
         if (sender is Button { Tag: string value }) ApplyAnnotationColor(Color.Parse(value));
     }
     void StrokeChanged(object? sender, RangeBaseValueChangedEventArgs e) { if (Editor != null && !refreshingProperties) Editor.StrokeWidth = e.NewValue; }
+    void DoubleEndedArrowChanged(object? sender, RoutedEventArgs e)
+    {
+        if (Editor == null || refreshingProperties || busy || capturePending || Editor.IsImageCropping) return;
+        if ((Editor.SelectedTool ?? activeTool) != AnnotationTool.Arrow) return;
+        Editor.DoubleEndedArrow = DoubleEndedArrowCheckBox.IsChecked == true;
+    }
     void PropertyDragStarted(object? sender, VectorEventArgs e) => Editor.BeginPropertyEdit();
     void PropertyDragCompleted(object? sender, VectorEventArgs e) => Editor.EndPropertyEdit();
     void TextSizeChanged(object? sender, RoutedEventArgs e) => ApplyTextSize();

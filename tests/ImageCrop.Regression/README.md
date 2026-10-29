@@ -1,4 +1,4 @@
-# 合圖圖片裁剪與縮放回歸測試
+# 圖片編輯器回歸測試
 
 這是無測試框架依賴的 console regression harness。以 `ProjectReference` 呼叫產品本身的模型、渲染、合圖操作與 `.snipflow` 專案保存，不複製裁剪實作。
 
@@ -14,7 +14,7 @@ Windows 自動選擇 Windows TFM；Linux 選擇 `net10.0`。Linux 的 Avalonia p
 xvfb-run -a dotnet run --project tests/ImageCrop.Regression -c Release
 ```
 
-可以指定輸出目錄，或只測模型／保存：
+可以指定輸出目錄，或略過圖片裁剪操作測試（仍執行模型、保存及箭頭回歸）：
 
 ```powershell
 dotnet run --project tests/ImageCrop.Regression -c Release -- --output verification/image-crop/local-run
@@ -26,8 +26,9 @@ dotnet run --project tests/ImageCrop.Regression -c Release -- --model-only
 驗證範圍包括：
 
 - normalized source viewport（允許超出原圖以留白）、192 DPI physical source rectangle、四象限來源的像素、Clone／CopyFrom／ContentEquals、完整來源不被破壞。
+- 單向／雙向箭頭兩端渲染與 hit-test、方向／粗細／極短線安全、預設套用至真實畫圖 factory、Clone／CopyFrom／ContentEquals、多選樣式與單步 Undo／Redo／no-op、複製／session／旋轉、schema 6 保存與舊 schema 1–5 預設單向、非 Arrow 與 malformed flag 拒絕。
 - 全部八個 D4 orientation、選取圖片與整張合圖的旋轉／翻轉、Undo／Redo、四次旋轉回原。
-- schema 5 保存／重開保留完整內嵌 PNG 與 viewport；schema 3 不帶 crop、schema 4 嚴格 0..1 crop 的相容性；舊 schema 帶新留白 viewport、不安全座標、非圖片帶 crop 與篡改檔拒絕，失敗保留開啟文件。
+- schema 6 保存／重開保留完整內嵌 PNG 與 viewport；schema 3 不帶 crop、schema 4 嚴格 0..1 crop 與 schema 5 留白 viewport 的相容性；舊 schema 帶新留白 viewport、不安全座標、非圖片帶 crop 與篡改檔拒絕，失敗保留開啟文件。
 - 裁剪草稿與正式文件隔離、改 frame、frame 內平移、完成／取消／重設、單一步 Undo／Redo、匯出／session snapshot 提交、載圖取消、Enter／Escape handler、裁剪後排列維持既有 frame 比例與 viewport。
 - 固定 frame 的 1%–1600% 縮放、中心點、放大真實像素、縮小透明留白、移動露白、重設依原圖比例置中 contain；取消／復原／重做／保存重開、旋轉翻轉、無效值與有限極值、同 scale 不變更、舊極端 zoom 可在同一次 session 放大／縮小後返回、contain 小於 1% 的 slider 同步與 session 範圍重設。
 - 直接測試 OnMouseDown 使用的真實 TryBeginImageCropAt 分流：圖片雙擊啟動、Ctrl／Shift／空白／文字不被誤攔截；透明圖與上層標註的 preview／export 逐像素一致；一來源像素窄框與部分超出畫布的邊界。
@@ -38,6 +39,6 @@ harness 建立空 Avalonia Application 並使用 `SetupWithoutStarting`，不建
 
 ## 舊版失敗證據
 
-保留 `SNIPFLOW-IMAGE-CROP-001` 模型 guard，新增 `SNIPFLOW-IMAGE-CROP-ZOOM-002` 縮放 guard。所有新增 API 都透過 reflection 取得；0.8.1 應通過既有 ImageCrop contract，並因缺少 `SetImageCropZoom(double)`／`ImageCropZoom` 而在縮放 contract 明確失敗、產生結果並回傳 1。不得把 binder 載入失敗當成有效的舊紅新綠證據。
+保留 `SNIPFLOW-IMAGE-CROP-001` 與 `SNIPFLOW-IMAGE-CROP-ZOOM-002`，新增 `SNIPFLOW-DOUBLE-ARROW-003`。所有新增 API 都透過 reflection 取得；0.8.2 應通過既有 crop／zoom contract，並因缺少 `AnnotationItem.DoubleEndedArrow` 而在雙向箭頭 contract 明確失敗、產生結果並回傳 1。不得把 binder 載入失敗當成有效的舊紅新綠證據。
 
-先正常建置 harness，將其完整 output 複製到新的 ignored 驗證子目錄，再只把該副本的 `SnipFlow.dll` 換成已驗證的 0.8.1（有裁剪、沒有縮放）assembly。若舊版版本號低於 harness 編譯時的 assembly identity，應在隔離的舊 source 目錄以 `-p:Version=<目前版本>` 統一 metadata；記錄這個唯一 override，保留舊 product logic。不要把 binder 的 FileNotFoundException 當成裁剪回歸的有效紅測。執行副本及正常新版各一次、使用不同 `--output` 目錄，保留 exit code 與 `productAssemblySha256`。不要覆寫產品建置目錄、不要修改 repository 工作檔，也不要在其他工作正在 build 時重建共同輸出。
+先正常建置 harness，將其完整 output 複製到新的 ignored 驗證子目錄，再只把該副本的 `SnipFlow.dll` 換成已驗證的 0.8.2（有裁剪／縮放、沒有雙向箭頭）assembly。若舊版版本號低於 harness 編譯時的 assembly identity，應在隔離的舊 source 目錄以 `-p:Version=<目前版本>` 統一 metadata；記錄這個唯一 override，保留舊 product logic。不要把 binder 的 FileNotFoundException 當成裁剪回歸的有效紅測。執行副本及正常新版各一次、使用不同 `--output` 目錄，保留 exit code 與 `productAssemblySha256`。不要覆寫產品建置目錄、不要修改 repository 工作檔，也不要在其他工作正在 build 時重建共同輸出。

@@ -49,17 +49,23 @@ internal static partial class Program
                 Check(typeof(EditorView).GetMethod("SetImageCropZoom", Any, null, new[] { typeof(double) }, null) is not null, "SetImageCropZoom(double) is missing (expected failure on 0.8.1).");
                 Check(typeof(EditorView).GetProperty("ImageCropZoom", Any)?.PropertyType == typeof(double), "ImageCropZoom double getter is missing.");
             });
+            Case("SNIPFLOW-DOUBLE-ARROW-003 contract", () => {
+                Check(ItemType.GetProperty("DoubleEndedArrow", Any)?.PropertyType == typeof(bool), "AnnotationItem.DoubleEndedArrow is missing (expected failure on 0.8.2).");
+                Check(typeof(EditorView).GetProperty("DoubleEndedArrow", Any)?.PropertyType == typeof(bool), "EditorView.DoubleEndedArrow is missing.");
+                Check(typeof(EditorView).GetProperty("SelectedDoubleEndedArrow", Any)?.PropertyType == typeof(bool?), "SelectedDoubleEndedArrow bool? is missing.");
+            });
             if (failed == 0)
             {
                 ModelCases();
                 ProjectCases();
+                ArrowCases();
                 if (!args.Contains("--model-only")) { EditorCases(); SyntheticAndEdgeCases(); ZoomCases(); }
             }
         }
         catch (Exception ex) { failed++; Results.Add(new { name = "harness", status = "FAIL", error = Unwrap(ex).ToString() }); }
         var assemblyHash = Hash(File.ReadAllBytes(Product.Location));
         var report = new {
-            guard = "SNIPFLOW-IMAGE-CROP-ZOOM-002", timestamp = DateTimeOffset.Now, passed, failed,
+            guard = "SNIPFLOW-DOUBLE-ARROW-003", timestamp = DateTimeOffset.Now, passed, failed,
             productAssembly = Product.Location, productAssemblySha256 = assemblyHash,
             safety = "Empty application; no Avalonia Window, SnipFlow.App/MainWindow, OS input, clipboard, capture, hotkey, installation, or deployment.",
             method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations and project persistence. No OS or routed input events.",

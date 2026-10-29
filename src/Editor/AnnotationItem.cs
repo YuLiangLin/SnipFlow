@@ -36,6 +36,7 @@ internal sealed class AnnotationItem
     internal Point End { get; set; }
     internal Color Color { get; set; }
     internal double Width { get; set; }
+    internal bool DoubleEndedArrow { get; set; }
     internal List<Point> Points { get; init; } = new();
     internal string Text { get; set; } = string.Empty;
     internal double FontSize { get; set; } = 26;
@@ -59,6 +60,7 @@ internal sealed class AnnotationItem
         End = End,
         Color = Color,
         Width = Width,
+        DoubleEndedArrow = DoubleEndedArrow,
         Points = new List<Point>(Points),
         Text = Text,
         FontSize = FontSize,
@@ -137,6 +139,7 @@ internal sealed class AnnotationItem
         End = source.End;
         Color = source.Color;
         Width = source.Width;
+        DoubleEndedArrow = source.DoubleEndedArrow;
         Text = source.Text;
         FontSize = source.FontSize;
         TextWidth = source.TextWidth;
@@ -155,6 +158,7 @@ internal sealed class AnnotationItem
         static bool SamePoint(Point first, Point second) => ((Vector)(first - second)).SquaredLength < 0.0000000001;
         return Tool == other.Tool && SamePoint(Start, other.Start) && SamePoint(End, other.End)
             && Color == other.Color && Near(Width, other.Width) && Near(FontSize, other.FontSize)
+            && DoubleEndedArrow == other.DoubleEndedArrow
             && Near(TextWidth, other.TextWidth) && Near(TextBoxHeight, other.TextBoxHeight)
             && TextOrientation == other.TextOrientation
             && ReferenceEquals(Image, other.Image)
@@ -241,14 +245,19 @@ internal sealed class AnnotationItem
             if (DistanceToSegment(point, Start, End) <= tolerance + Width / 2)
                 return true;
             Vector direction = End - Start;
-            if (direction.Length < 1)
+            if (direction.Length < 0.5)
                 return false;
+            double head = ArrowHeadLength(direction.Length);
             direction = direction.Normalize();
-            Vector perpendicular = new(-direction.Y, direction.X);
-            double head = Math.Max(12, Width * 4);
-            Point first = End - direction * head + perpendicular * head * 0.5;
-            Point second = End - direction * head - perpendicular * head * 0.5;
-            return DistanceToSegment(point, End, first) <= tolerance + Width || DistanceToSegment(point, End, second) <= tolerance + Width;
+            bool HitsHead(Point tip, Vector forward)
+            {
+                Vector perpendicular = new(-forward.Y, forward.X);
+                Point first = tip - forward * head + perpendicular * head * 0.48;
+                Point second = tip - forward * head - perpendicular * head * 0.48;
+                return DistanceToSegment(point, tip, first) <= tolerance + Width
+                    || DistanceToSegment(point, tip, second) <= tolerance + Width;
+            }
+            return HitsHead(End, direction) || (DoubleEndedArrow && HitsHead(Start, -direction));
         }
 
         double radius = tolerance + (Tool == AnnotationTool.Highlight ? Width * 3 : Width / 2);
@@ -304,20 +313,29 @@ internal sealed class AnnotationItem
             return;
         double length = direction.Length;
         direction = direction.Normalize();
-        Vector perpendicular = new(-direction.Y, direction.X);
-        double head = Math.Min(length * 0.8, Math.Max(12, Width * 4));
-        context.DrawLine(pen, Start, End - direction * head * 0.55);
-        var geometry = new StreamGeometry();
-        using (StreamGeometryContext path = geometry.Open())
+        double head = ArrowHeadLength(length);
+        context.DrawLine(pen, DoubleEndedArrow ? Start + direction * head * 0.55 : Start,
+            End - direction * head * 0.55);
+        void DrawHead(Point tip, Vector forward)
         {
-            path.BeginFigure(End, true);
-            path.LineTo(End - direction * head + perpendicular * head * 0.48);
-            path.LineTo(End - direction * head * 0.7);
-            path.LineTo(End - direction * head - perpendicular * head * 0.48);
-            path.EndFigure(true);
+            Vector perpendicular = new(-forward.Y, forward.X);
+            var geometry = new StreamGeometry();
+            using (StreamGeometryContext path = geometry.Open())
+            {
+                path.BeginFigure(tip, true);
+                path.LineTo(tip - forward * head + perpendicular * head * 0.48);
+                path.LineTo(tip - forward * head * 0.7);
+                path.LineTo(tip - forward * head - perpendicular * head * 0.48);
+                path.EndFigure(true);
+            }
+            context.DrawGeometry(brush, null, geometry);
         }
-        context.DrawGeometry(brush, null, geometry);
+        DrawHead(End, direction);
+        if (DoubleEndedArrow) DrawHead(Start, -direction);
     }
+
+    private double ArrowHeadLength(double length) =>
+        Math.Min(length * (DoubleEndedArrow ? 0.4 : 0.8), Math.Max(12, Width * 4));
 
     private void DrawStroke(DrawingContext context)
     {

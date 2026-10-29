@@ -10,7 +10,7 @@ namespace SnipFlow.Services;
 internal static class EditorSessionStore
 {
     private const string SessionKind = "SnipFlow.UpdateSession";
-    private const int SchemaVersion = 5;
+    private const int SchemaVersion = 6;
     private const long MaxManifestBytes = 64 * 1024 * 1024;
     private const long MaxImageBytes = 512 * 1024 * 1024;
     private const long MaxProjectBytes = 1024L * 1024 * 1024;
@@ -233,6 +233,8 @@ internal static class EditorSessionStore
                 throw InvalidCheckpoint();
             if (!ImageOrientation.IsValid(item.TextOrientation) || (item.Tool != AnnotationTool.Text && item.TextOrientation != 0))
                 throw InvalidCheckpoint();
+            if (item.DoubleEndedArrow && item.Tool != AnnotationTool.Arrow)
+                throw InvalidCheckpoint();
             if (item.ImageCrop is { } crop && (item.Tool != AnnotationTool.Image || !ImageCropGeometry.IsValid(crop)))
                 throw InvalidCheckpoint();
             if (item.Tool == AnnotationTool.Mosaic)
@@ -288,12 +290,14 @@ internal static class EditorSessionStore
 
     private static void ValidateManifest(SessionManifest manifest)
     {
-        if (manifest.SchemaVersion is not (1 or 2 or 3 or 4 or SchemaVersion) || manifest.Kind != SessionKind
+        if (manifest.SchemaVersion is not (1 or 2 or 3 or 4 or 5 or SchemaVersion) || manifest.Kind != SessionKind
             || !Guid.TryParseExact(manifest.SessionId, "N", out _) || manifest.Annotations is null
             || manifest.Annotations.Count > MaxAnnotations)
             throw InvalidCheckpoint();
         ValidateImageSize(manifest.PixelWidth, manifest.PixelHeight);
         ValidateAnnotations(manifest.Annotations);
+        if (manifest.SchemaVersion < 6 && manifest.Annotations.Any(data => data.DoubleEndedArrow))
+            throw InvalidCheckpoint();
         if (manifest.SchemaVersion < 3 && manifest.Annotations.Any(data => data.TextOrientation != 0))
             throw InvalidCheckpoint();
         if (manifest.SchemaVersion < 4 && manifest.Annotations.Any(data => data.ImageCrop is not null))
@@ -454,6 +458,8 @@ internal static class EditorSessionStore
             if (data.ImageCrop is { } crop && (tool != AnnotationTool.Image
                 || !ImageCropGeometry.IsValid(new Rect(crop.X, crop.Y, crop.Width, crop.Height))))
                 throw InvalidCheckpoint();
+            if (data.DoubleEndedArrow && tool != AnnotationTool.Arrow)
+                throw InvalidCheckpoint();
         }
     }
 
@@ -566,6 +572,7 @@ internal static class EditorSessionStore
         Argb = ((uint)item.Color.A << 24) | ((uint)item.Color.R << 16) | ((uint)item.Color.G << 8) | item.Color.B,
         Width = item.Width, Points = item.Points.Select(ToData).ToList(), Text = item.Text,
         FontSize = item.FontSize, TextWidth = item.TextWidth, TextBoxHeight = item.TextBoxHeight, TextOrientation = item.TextOrientation,
+        DoubleEndedArrow = item.DoubleEndedArrow,
         MosaicFile = item.Tool == AnnotationTool.Mosaic ? MosaicFileName(index) : null,
         ImageFile = item.Tool == AnnotationTool.Image ? ImageFileName(index) : null,
         ImageCrop = item.ImageCrop is { } crop ? new ImageCropData { X = crop.X, Y = crop.Y, Width = crop.Width, Height = crop.Height } : null
@@ -577,6 +584,7 @@ internal static class EditorSessionStore
         Color = Color.FromArgb((byte)(data.Argb >> 24), (byte)(data.Argb >> 16), (byte)(data.Argb >> 8), (byte)data.Argb),
         Width = data.Width, Points = data.Points.Select(FromData).ToList(), Text = data.Text,
         FontSize = data.FontSize, TextWidth = data.TextWidth, TextBoxHeight = data.TextBoxHeight, TextOrientation = data.TextOrientation,
+        DoubleEndedArrow = data.DoubleEndedArrow,
         ImageCrop = data.ImageCrop is { } crop ? new Rect(crop.X, crop.Y, crop.Width, crop.Height) : null
     };
     private static Point FromData(PointData point) => new(point.X, point.Y);
@@ -610,6 +618,8 @@ internal static class EditorSessionStore
         public required double TextBoxHeight { get; init; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public int TextOrientation { get; init; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool DoubleEndedArrow { get; init; }
         public required string? MosaicFile { get; set; }
         public string? ImageFile { get; set; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

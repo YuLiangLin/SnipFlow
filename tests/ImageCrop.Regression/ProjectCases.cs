@@ -20,11 +20,11 @@ internal static partial class Program
         using var source=Quadrants();
         var checkpointRoot=Path.Combine(SettingsStore.DataRoot,"UpdateSessions");
         var existing=CheckpointInventory(checkpointRoot);
-        Case("schema 5 project roundtrip stores crop and complete original image",()=> {
+        Case("schema 6 project roundtrip stores crop and complete original image",()=> {
             var crop=new Rect(.125,.25,.5,.375);var editor=Editor(source,crop);var before=PixelHash(editor.ExportImage());
             projectSeed=Path.Combine(Output,"crop-roundtrip.snipflow");Static(StoreType,"SaveProject",editor,projectSeed);
             using(var zip=ZipFile.OpenRead(projectSeed)) {
-                var json=ReadManifest(zip);Check((int)json["SchemaVersion"]! ==5,"Crop project did not use schema 5");Check(json["Annotations"]![0]!["ImageCrop"] is not null,"Serialized crop missing");
+                var json=ReadManifest(zip);Check((int)json["SchemaVersion"]! ==6,"Crop project did not use schema 6");Check(json["Annotations"]![0]!["ImageCrop"] is not null,"Serialized crop missing");
                 using var pngStream=zip.GetEntry("image-0000.png")!.Open();using var pngBytes=new MemoryStream();pngStream.CopyTo(pngBytes);using var png=ImageTools.Decode(pngBytes.ToArray());
                 Check(png.PixelSize==source.PixelSize && PixelHash(png)==PixelHash(source),"Project flattened/truncated the source image");
             }
@@ -42,7 +42,7 @@ internal static partial class Program
             RequireSeed();var path=MutateProject(projectSeed!,"invalid-schema4-margins.snipflow",json=>{json["SchemaVersion"]=4;json["Annotations"]![0]!["ImageCrop"]!["X"]=-.5;json["Annotations"]![0]!["ImageCrop"]!["Width"]=2.0;});var editor=Editor(source,null);var before=PixelHash(editor.ExportImage());Rejected(()=>Static(StoreType,"RestoreProject",editor,path));Check(PixelHash(editor.ExportImage())==before,"Invalid old-schema viewport changed document");
         });
         Case("schema 5 blank-margin viewport roundtrips with full source payload",()=> {
-            var viewport=new Rect(-.5,-.5,2,2);var editor=Editor(source,viewport);var before=PixelHash(editor.ExportImage());var path=Path.Combine(Output,"viewport-margins.snipflow");Static(StoreType,"SaveProject",editor,path);var restored=new EditorView();Static(StoreType,"RestoreProject",restored,path);EqualRect(Crop(First(restored)),viewport,"Blank-margin project viewport lost");Check(PixelHash(restored.ExportImage())==before&&PixelHash((Bitmap)Get(First(restored),"Image")!)==PixelHash(source),"Blank-margin project lost rendered/source pixels");
+            var viewport=new Rect(-.5,-.5,2,2);var editor=Editor(source,viewport);var before=PixelHash(editor.ExportImage());var current=Path.Combine(Output,"viewport-margins.snipflow");Static(StoreType,"SaveProject",editor,current);var path=MutateProject(current,"legacy-schema5-margins.snipflow",json=>json["SchemaVersion"]=5);var restored=new EditorView();Static(StoreType,"RestoreProject",restored,path);EqualRect(Crop(First(restored)),viewport,"Schema 5 blank-margin project viewport lost");Check(PixelHash(restored.ExportImage())==before&&PixelHash((Bitmap)Get(First(restored),"Image")!)==PixelHash(source),"Schema 5 blank-margin project lost rendered/source pixels");
         });
         foreach(int schema in new[]{2,3}) Case("old schema "+schema+" rejects crop instead of silently flattening",()=> {
             RequireSeed();var path=MutateProject(projectSeed!,"invalid-schema"+schema+"-crop.snipflow",json=>json["SchemaVersion"]=schema);

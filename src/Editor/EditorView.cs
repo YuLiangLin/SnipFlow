@@ -58,6 +58,7 @@ public sealed partial class EditorView : UserControl
     private AnnotationTool _tool = AnnotationTool.Arrow;
     private Color _color = Color.FromRgb(99, 213, 197);
     private double _strokeWidth = 4;
+    private bool _doubleEndedArrow;
     private double _textSize = 26;
     private double _zoom = 1;
     private double _panX;
@@ -87,12 +88,28 @@ public sealed partial class EditorView : UserControl
     public AnnotationTool? SelectedTool => SelectedItem?.Tool;
     public Color? SelectedColor => SelectedItem?.Color;
     public double? SelectedStrokeWidth => SelectedItem?.Width;
+    public bool? SelectedDoubleEndedArrow => SelectedItem?.Tool == AnnotationTool.Arrow ? SelectedItem.DoubleEndedArrow : null;
     public double? SelectedTextSize => SelectedItem?.Tool == AnnotationTool.Text ? SelectedItem.FontSize : null;
 
     private AnnotationItem? SelectedItem => _textDraft ?? _selected;
     private bool TextHasChanges => _textDraft is not null && (_textTarget is null ? !string.IsNullOrWhiteSpace(_textDraft.Text) : !_textDraft.ContentEquals(_textTarget));
     private bool TransformHasChanges => _transformSources.Any(pair => !pair.Key.ContentEquals(pair.Value));
     private bool PropertyHasChanges => _propertySources.Any(pair => !pair.Key.ContentEquals(pair.Value));
+
+    public bool DoubleEndedArrow
+    {
+        get => _doubleEndedArrow;
+        set
+        {
+            VerifyAccess();
+            _doubleEndedArrow = value;
+            ChangeSelectedStyle(item =>
+            {
+                if (item.Tool == AnnotationTool.Arrow)
+                    item.DoubleEndedArrow = value;
+            });
+        }
+    }
 
     public double StrokeWidth
     {
@@ -607,7 +624,7 @@ public sealed partial class EditorView : UserControl
         {
             SelectItem(null);
             _gestureStart = point;
-            _pending = new AnnotationItem { Tool = _tool, Color = _color, Width = _strokeWidth, Start = point, End = point };
+            _pending = CreateShapeAnnotation(_tool, point);
             if (_tool is AnnotationTool.Pen or AnnotationTool.Highlight)
                 _pending.Points.Add(point);
             CaptureViewport(e.Pointer);
@@ -615,6 +632,12 @@ public sealed partial class EditorView : UserControl
         InvalidateScene();
         e.Handled = true;
     }
+
+    private AnnotationItem CreateShapeAnnotation(AnnotationTool tool, Point point) => new()
+    {
+        Tool = tool, Color = _color, Width = _strokeWidth, Start = point, End = point,
+        DoubleEndedArrow = tool == AnnotationTool.Arrow && _doubleEndedArrow
+    };
 
     private void OnMouseMove(object? sender, PointerEventArgs e)
     {
