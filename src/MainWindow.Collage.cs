@@ -14,6 +14,11 @@ public partial class MainWindow
         {
             if (!Editor.IsCollage)
             {
+                // Converting preserves the objects in the collage, but also publish the final
+                // single-image revision to its history card before severing that association.
+                if (SettingsStore.Current.AutoSaveCaptures && Editor.HasImage
+                    && (Editor.HasEdits || Editor.Revision != autoSavedRevision)
+                    && !SaveAutomaticallyBeforeDiscard()) return;
                 FinishAutoSaveWrite();
                 Editor.CreateCollage();
                 ResetDocumentStorage();
@@ -34,7 +39,7 @@ public partial class MainWindow
     {
         autoSaveTimer.Stop();
         documentGeneration++;
-        autoSavePath = projectPath = null;
+        autoSavePath = projectPath = documentHistoryPath = null;
         autoSavedRevision = -1;
     }
 
@@ -54,7 +59,11 @@ public partial class MainWindow
                 throw new InvalidOperationException(I18n.T("每份合圖最多可放入 24 張圖片。"));
             // Decode everything first. A bad file cannot replace the current document.
             var images = paths.Select(HistoryStore.Read).ToList();
-            if (!Editor.IsCollage) CollageClick(this, new());
+            if (!Editor.IsCollage)
+            {
+                CollageClick(this, new());
+                if (!Editor.IsCollage) return;
+            }
             Editor.AddImages(images);
             ToolClick(new Button { Tag = "Select" }, new());
             ApplyWindowMode(false);

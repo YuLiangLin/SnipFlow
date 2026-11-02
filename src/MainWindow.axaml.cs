@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     string autoSaveDirectory = SettingsStore.Current.CaptureSaveDirectory;
     bool autoSaveEnabled = SettingsStore.Current.AutoSaveCaptures;
     string? autoSavePath;
+    string? documentHistoryPath;
     long autoSavedRevision = -1;
     int documentGeneration;
     long autoSaveSequence;
@@ -349,7 +350,17 @@ public partial class MainWindow : Window
         if (IsVideoPath(path)) { _ = OpenVideoEditorAsync(path); return; }
         if (Path.GetExtension(path).Equals(".snipflow", StringComparison.OrdinalIgnoreCase)) { OpenProject(path); return; }
         if (busy || capturePending || historyDragInProgress || !CanStartCapture || !PrepareToDiscard()) return;
-        try { var image = HistoryStore.Read(path); LoadDocument(image); ApplyWindowMode(false); ImageInfo.Text = $"{image.PixelSize.Width:N0} × {image.PixelSize.Height:N0} px"; SetStatus("已開啟 {0}", Path.GetFileName(path)); RefreshDocumentState(); }
+        try
+        {
+            // Restore editable annotations before replacing the current document. Legacy PNG-only
+            // captures still open normally; a damaged project never falls back to the raw capture.
+            DocumentFileStore.Open(Editor, path);
+            ResetDocumentStorage();
+            documentHistoryPath = HistoryStore.TryGetDocumentPath(path);
+            ApplyWindowMode(false);
+            SetStatus("已開啟 {0}", Path.GetFileName(path));
+            RefreshDocumentState(); QueueAutoSave();
+        }
         catch (Exception ex) { ReportError(ex, "圖片無法開啟"); }
     }
     /// <summary>Opens files passed on the command line or from another launch: one file opens, several images form a collage.</summary>
@@ -414,24 +425,22 @@ public partial class MainWindow : Window
         try
         {
             var image = Editor.ExportImage();
-            var project = Editor.IsCollage ? Editor.CaptureSession() : null;
+            var project = Editor.CaptureSession();
             revision = Editor.Revision;
             var path = autoSavePath ??= CaptureFileStore.CreatePath(autoSaveDirectory);
+            var historyPath = documentHistoryPath;
             // The last saved revision becomes uncertain as soon as a replacement starts.
             // Undoing back to it must still wait for, and replace, the pending write.
             autoSavedRevision = -1; Editor.MarkUnsaved();
-            autoSaveWrite = Task.Run(() =>
-            {
-                CaptureFileStore.Save(image, path);
-                if (project is not null) EditorSessionStore.SaveProject(project, Path.ChangeExtension(path, ".snipflow"));
-            });
+            autoSaveWrite = Task.Run(() => DocumentFileStore.Save(project, image, path, historyPath));
             await autoSaveWrite;
             if (!isClosed && SettingsStore.Current.AutoSaveCaptures && generation == documentGeneration && sequence == autoSaveSequence && path == autoSavePath)
             {
                 autoSavedRevision = revision;
                 if (Editor.Revision == revision && !Editor.IsInteracting)
                 {
-                    Editor.MarkSaved(); SetStatus(project is null ? "已自動儲存：{0}" : "已自動儲存 PNG 與可編輯專案：{0}", project is null ? path : Path.ChangeExtension(path, ".snipflow"));
+                    Editor.MarkSaved(); SetStatus("已自動儲存 PNG 與可編輯專案：{0}", Path.ChangeExtension(path, ".snipflow"));
+                    if (historyPath is not null) RefreshHistory();
                 }
             }
         }
@@ -458,11 +467,12 @@ public partial class MainWindow : Window
             FinishAutoSaveWrite();
             autoSaveSequence++;
             var image = Editor.ExportImage();
+            var project = Editor.CaptureSession();
             var path = autoSavePath ??= CaptureFileStore.CreatePath(autoSaveDirectory);
-            CaptureFileStore.Save(image, path);
-            if (Editor.IsCollage) EditorSessionStore.SaveProject(Editor, Path.ChangeExtension(path, ".snipflow"));
+            DocumentFileStore.Save(project, image, path, documentHistoryPath);
             autoSavedRevision = Editor.Revision; Editor.MarkSaved();
-            SetStatus(Editor.IsCollage ? "已自動儲存 PNG 與可編輯專案：{0}" : "已自動儲存：{0}", Editor.IsCollage ? Path.ChangeExtension(path, ".snipflow") : path);
+            SetStatus("已自動儲存 PNG 與可編輯專案：{0}", Path.ChangeExtension(path, ".snipflow"));
+            if (documentHistoryPath is not null) RefreshHistory();
             return true;
         }
         catch (Exception ex)
@@ -663,14 +673,25 @@ public partial class MainWindow : Window
         {
             FinishAutoSaveWrite();
             var isAutoSaveFile = string.Equals(Path.GetFullPath(fileName), autoSavePath, PlatformInfo.PathComparison);
+            var companion = Path.ChangeExtension(fileName, ".snipflow");
+            if (!isAutoSaveFile && (File.Exists(companion) || Directory.Exists(companion))
+                && MessageBox.Show(this, I18n.F("同名的可編輯專案已存在：{0}\n儲存 PNG 時也會覆寫此專案，要繼續嗎？", companion),
+                    I18n.T("覆寫可編輯專案"), MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return false;
             if (isAutoSaveFile) { autoSaveSequence++; autoSavedRevision = -1; }
-            var image = Editor.ExportImage(); CaptureFileStore.Save(image, fileName);
+            var image = Editor.ExportImage();
+            var project = Editor.CaptureSession();
+            // Manual overwrite must advance the editable companion too, otherwise reopening
+            // would prefer stale objects over the newly exported PNG.
+            DocumentFileStore.Save(project, image, fileName, isAutoSaveFile ? documentHistoryPath : null);
             if (!Editor.IsCollage)
             {
                 if (isAutoSaveFile) autoSavedRevision = Editor.Revision;
                 Editor.MarkSaved();
             }
-            HistoryStore.Add(image); RefreshHistory(); SetStatus("已儲存 {0}", Path.GetFileName(fileName));
+            var historyPath = HistoryStore.Add(image);
+            if (historyPath is not null) HistoryStore.UpdateDocument(project, image, historyPath);
+            RefreshHistory(); SetStatus("已儲存 PNG 與可編輯專案：{0}", Path.ChangeExtension(fileName, ".snipflow"));
             return true;
         }
         catch (Exception ex) { ReportError(ex, "儲存失敗"); return false; }

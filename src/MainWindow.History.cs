@@ -75,9 +75,18 @@ public partial class MainWindow
 
     async Task AddHistoryAsync(Bitmap image)
     {
+        var generation = documentGeneration;
+        var linkToDocument = !Editor.IsCollage;
         try
         {
-            await Task.Run(() => HistoryStore.Add(image), historyLifetime.Token);
+            var path = await Task.Run(() => HistoryStore.Add(image), historyLifetime.Token);
+            if (!isClosed && linkToDocument && generation == documentGeneration && path is not null)
+            {
+                documentHistoryPath = path;
+                // Even an unchanged screenshot must publish its editable history document.
+                autoSavedRevision = -1;
+                QueueAutoSave();
+            }
             await RefreshHistoryAsync();
             if (!isClosed) RefreshDocumentState();
         }
@@ -121,7 +130,7 @@ public partial class MainWindow
             await RefreshHistoryAsync();
             SetStatus(item.IsRecording
                 ? deleted ? "已移除錄影紀錄，原影片保留。" : "這筆錄影紀錄已不存在。"
-                : deleted ? "已刪除這張截圖的歷史副本。" : "這張截圖的歷史副本已不存在。");
+                : deleted ? "已刪除這張截圖的歷史副本與可編輯專案。" : "這張截圖的歷史副本已不存在。");
         }
         catch (OperationCanceledException) when (isClosed) { }
         catch (Exception ex) { if (!isClosed) ReportError(ex, "歷史刪除失敗"); }
@@ -137,7 +146,7 @@ public partial class MainWindow
         e.Handled = true;
         if (!CanChangeHistory) return;
         var answer = MessageBox.Show(this,
-            I18n.T("清空最近擷取？截圖歷史副本會刪除，錄影僅移除紀錄與縮圖。原影片、已儲存圖片、專案與目前編輯內容都會保留。"),
+            I18n.T("清空最近擷取？截圖歷史副本與其可編輯專案會刪除，錄影僅移除紀錄與縮圖。原影片、另外儲存的圖片／專案與目前編輯內容都會保留。"),
             I18n.T("清空最近擷取"), MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes || !CanChangeHistory) return;
         busy = true;

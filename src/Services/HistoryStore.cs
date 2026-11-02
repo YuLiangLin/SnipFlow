@@ -1,4 +1,5 @@
 using System.Globalization;
+using SnipFlow.Editor;
 
 namespace SnipFlow.Services;
 public enum HistoryKind { Screenshot, Recording }
@@ -60,25 +61,79 @@ public static class HistoryStore
     }
 
     public static bool Delete(HistoryItem item)
+        => Delete(item, SettingsStore.HistoryDirectory);
+
+    internal static bool Delete(HistoryItem item, string directory)
     {
         ArgumentNullException.ThrowIfNull(item);
         if (item.IsRecording) throw new IOException(I18n.T("錄影紀錄只能從影片歷史中移除。"));
-        lock (Gate) return DeleteFile(GetSafeDirectory(create: false), item.Path);
+        lock (Gate) return DeleteFile(GetSafeDirectory(directory, create: false), item.Path);
     }
 
     public static HistoryClearResult Clear()
+        => ClearCore(SettingsStore.HistoryDirectory, logErrors: true);
+
+    internal static HistoryClearResult Clear(string historyDirectory)
+        => ClearCore(historyDirectory, logErrors: false);
+
+    static HistoryClearResult ClearCore(string historyDirectory, bool logErrors)
     {
         lock (Gate)
         {
-            var directory = GetSafeDirectory(create: false);
+            var directory = GetSafeDirectory(historyDirectory, create: false);
             if (!TryGetAttributes(directory, out _)) return new(0, 0);
             int deleted = 0, failed = 0;
             foreach (var file in GetHistoryFiles(directory))
             {
                 try { if (DeleteFile(directory, file.FullName)) deleted++; }
-                catch (Exception ex) when (IsFileOperationError(ex)) { failed++; SettingsStore.Log(ex); }
+                catch (Exception ex) when (IsFileOperationError(ex))
+                {
+                    failed++;
+                    if (logErrors) SettingsStore.Log(ex);
+                    else System.Diagnostics.Trace.WriteLine(ex);
+                }
             }
             return new(deleted, failed);
+        }
+    }
+
+    internal static string? TryGetDocumentPath(string path)
+        => TryGetDocumentPath(path, SettingsStore.HistoryDirectory);
+
+    internal static string? TryGetDocumentPath(string path, string directory)
+    {
+        if (!Path.IsPathFullyQualified(path) || !IsHistoryFileName(Path.GetFileName(path))) return null;
+        var target = Path.GetFullPath(path);
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        if (!string.Equals(Path.GetDirectoryName(target), root, PlatformInfo.PathComparison)) return null;
+        lock (Gate)
+        {
+            ValidateDirectoryChain(root);
+            if (!TryGetAttributes(target, out var attributes)) return null;
+            RejectNonFile(attributes);
+            return target;
+        }
+    }
+
+    internal static void UpdateDocument(EditorSessionSnapshot snapshot, Bitmap rendered, string path)
+        => UpdateDocument(snapshot, rendered, path, SettingsStore.HistoryDirectory);
+
+    internal static void UpdateDocument(EditorSessionSnapshot snapshot, Bitmap rendered, string path, string historyDirectory)
+    {
+        lock (Gate)
+        {
+            var directory = GetSafeDirectory(historyDirectory, create: false);
+            var target = ValidateHistoryPath(directory, path);
+            // Deletion and pruning share Gate. A delayed autosave must never recreate a removed card.
+            if (!TryGetAttributes(target, out var attributes)) return;
+            RejectNonFile(attributes);
+            var project = Path.ChangeExtension(target, ".snipflow");
+            ValidateSidecar(project);
+            var capturedAt = File.GetLastWriteTimeUtc(target);
+            EditorSessionStore.SaveProject(snapshot, project);
+            CaptureFileStore.Save(rendered, target);
+            // History order, age and retention refer to capture time rather than the latest edit.
+            File.SetLastWriteTimeUtc(target, capturedAt);
         }
     }
 
@@ -95,9 +150,12 @@ public static class HistoryStore
             && Guid.TryParseExact(stem.AsSpan(20), "N", out _);
     }
 
-    static string GetSafeDirectory(bool create)
+    static string GetSafeDirectory(bool create) => GetSafeDirectory(SettingsStore.HistoryDirectory, create);
+
+    static string GetSafeDirectory(string path, bool create)
     {
-        var directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(SettingsStore.HistoryDirectory));
+        if (!Path.IsPathFullyQualified(path)) throw new IOException(I18n.T("歷史檔案不在允許的資料夾內。"));
+        var directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
         ValidateDirectoryChain(directory);
         if (create)
         {
@@ -120,6 +178,21 @@ public static class HistoryStore
 
     static bool DeleteFile(string directory, string path)
     {
+        var target = ValidateHistoryPath(directory, path);
+        ValidateDirectoryChain(directory);
+        if (!TryGetAttributes(target, out var attributes)) return false;
+        RejectNonFile(attributes);
+        var project = Path.ChangeExtension(target, ".snipflow");
+        var hasProject = ValidateSidecar(project);
+        // Keep the editable project if the PNG cannot be removed. If companion removal fails,
+        // report the failure while leaving that recoverable project intact.
+        File.Delete(target);
+        if (hasProject) File.Delete(project);
+        return true;
+    }
+
+    static string ValidateHistoryPath(string directory, string path)
+    {
         if (!Path.IsPathFullyQualified(path))
             throw new IOException(I18n.T("歷史檔案不在允許的資料夾內。"));
         var target = Path.GetFullPath(path);
@@ -128,11 +201,19 @@ public static class HistoryStore
             throw new IOException(I18n.T("歷史檔案不在允許的資料夾內。"));
         if (!IsHistoryFileName(Path.GetFileName(target)))
             throw new IOException(I18n.T("歷史清理僅能刪除一般 PNG 歷史副本。"));
-        ValidateDirectoryChain(directory);
-        if (!TryGetAttributes(target, out var attributes)) return false;
+        return target;
+    }
+
+    static void RejectNonFile(FileAttributes attributes)
+    {
         if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
             throw new IOException(I18n.T("歷史清理僅能刪除一般 PNG 歷史副本。"));
-        File.Delete(target);
+    }
+
+    static bool ValidateSidecar(string path)
+    {
+        if (!TryGetAttributes(path, out var attributes)) return false;
+        RejectNonFile(attributes);
         return true;
     }
 

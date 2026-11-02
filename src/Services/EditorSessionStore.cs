@@ -52,11 +52,12 @@ internal static class EditorSessionStore
         Directory.CreateDirectory(parent);
         if (File.Exists(destination)) RejectReparsePoint(destination);
         var temporary = Path.Combine(parent, ".snipflow-" + Guid.NewGuid().ToString("N") + ".tmp");
+        using var workspace = new ProjectWorkspace();
         string? checkpoint = null;
         var temporaryCreated = false;
         try
         {
-            checkpoint = SaveSnapshot(snapshot);
+            checkpoint = SaveSnapshot(snapshot, workspace.Root);
             var manifest = ReadManifest(Path.Combine(checkpoint, "manifest.json"));
             using (var stream = CreateNewFile(temporary))
             {
@@ -88,7 +89,7 @@ internal static class EditorSessionStore
         finally
         {
             if (temporaryCreated) TryDeleteOwnFile(temporary);
-            if (checkpoint is not null) TryDeleteOwnCheckpoint(checkpoint);
+            if (checkpoint is not null) TryDeleteOwnCheckpoint(checkpoint, workspace.Root);
         }
     }
 
@@ -123,6 +124,7 @@ internal static class EditorSessionStore
         var expected = CheckpointFileNames(manifest).ToHashSet(StringComparer.Ordinal);
         if (expected.Count != entries.Count || entries.Keys.Any(name => !expected.Contains(name))) throw InvalidCheckpoint();
 
+        using var workspace = new ProjectWorkspace();
         string? checkpoint = null;
         try
         {
@@ -137,7 +139,7 @@ internal static class EditorSessionStore
                 IsCollage = manifest.IsCollage,
                 Annotations = manifest.Annotations
             };
-            checkpoint = CreateCheckpointDirectory(manifest.SessionId);
+            checkpoint = CreateCheckpointDirectory(manifest.SessionId, workspace.Root);
             foreach (var name in expected)
             {
                 if (name == "manifest.json") continue;
@@ -147,15 +149,15 @@ internal static class EditorSessionStore
             }
             WriteManifest(manifest, checkpoint);
             // Restore validates every PNG before changing the editor. ZIP paths are never extracted.
-            Restore(editor, checkpoint);
+            RestoreCheckpoint(editor, checkpoint, workspace.Root);
         }
         finally
         {
-            if (checkpoint is not null) TryDeleteOwnCheckpoint(checkpoint);
+            if (checkpoint is not null) TryDeleteOwnCheckpoint(checkpoint, workspace.Root);
         }
     }
 
-    private static string SaveSnapshot(EditorSessionSnapshot snapshot)
+    private static string SaveSnapshot(EditorSessionSnapshot snapshot, string? checkpointRoot = null)
     {
         ValidateSnapshot(snapshot);
         var manifest = new SessionManifest
@@ -173,7 +175,7 @@ internal static class EditorSessionStore
         string? directory = null;
         try
         {
-            directory = CreateCheckpointDirectory(manifest.SessionId);
+            directory = CreateCheckpointDirectory(manifest.SessionId, checkpointRoot);
             var writtenBytes = WritePng(snapshot.Image, Path.Combine(directory, "original.png"));
             for (var index = 0; index < snapshot.Annotations.Count; index++)
             {
@@ -191,16 +193,19 @@ internal static class EditorSessionStore
         }
         catch
         {
-            if (directory is not null) TryDeleteOwnCheckpoint(directory);
+            if (directory is not null) TryDeleteOwnCheckpoint(directory, checkpointRoot);
             throw;
         }
     }
 
     internal static void Restore(EditorView editor, string directory)
+        => RestoreCheckpoint(editor, directory);
+
+    private static void RestoreCheckpoint(EditorView editor, string directory, string? checkpointRoot = null)
     {
         ArgumentNullException.ThrowIfNull(editor);
         editor.VerifyAccess();
-        var checkpoint = ValidateDirectory(directory);
+        var checkpoint = ValidateDirectory(directory, checkpointRoot);
         var manifest = ReadManifest(Path.Combine(checkpoint, "manifest.json"));
         if (manifest.SessionId != Path.GetFileName(checkpoint)) throw InvalidCheckpoint();
         ValidatePngFiles(checkpoint, manifest);
@@ -255,14 +260,19 @@ internal static class EditorSessionStore
         return (long)image.PixelSize.Width * image.PixelSize.Height;
     }
 
-    private static string CreateCheckpointDirectory(string sessionId)
+    private static string CreateCheckpointDirectory(string sessionId, string? checkpointRoot = null)
     {
         if (!Guid.TryParseExact(sessionId, "N", out _)) throw InvalidCheckpoint();
-        Directory.CreateDirectory(SettingsStore.DataRoot);
-        RejectReparsePoint(SettingsStore.DataRoot);
-        Directory.CreateDirectory(Root);
-        RejectReparsePoint(Root);
-        var directory = Path.Combine(Root, sessionId);
+        if (checkpointRoot is null)
+        {
+            Directory.CreateDirectory(SettingsStore.DataRoot);
+            RejectReparsePoint(SettingsStore.DataRoot);
+            Directory.CreateDirectory(Root);
+            RejectReparsePoint(Root);
+        }
+        var root = checkpointRoot ?? Root;
+        if (checkpointRoot is not null) ValidateDirectoryChain(root);
+        var directory = Path.Combine(root, sessionId);
         if (Directory.Exists(directory) || File.Exists(directory)) throw InvalidCheckpoint();
         Directory.CreateDirectory(directory);
         RejectReparsePoint(directory);
@@ -332,17 +342,21 @@ internal static class EditorSessionStore
         }
     }
 
-    private static string ValidateDirectory(string directory)
+    private static string ValidateDirectory(string directory, string? checkpointRoot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         if (!Path.IsPathFullyQualified(directory)) throw InvalidCheckpoint();
         var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
         if (!string.Equals(normalized, Path.TrimEndingDirectorySeparator(directory), PlatformInfo.PathComparison)
-            || !string.Equals(Path.GetDirectoryName(normalized), Root, PlatformInfo.PathComparison)
+            || !string.Equals(Path.GetDirectoryName(normalized), checkpointRoot ?? Root, PlatformInfo.PathComparison)
             || !Guid.TryParseExact(Path.GetFileName(normalized), "N", out _))
             throw InvalidCheckpoint();
-        RejectReparsePoint(SettingsStore.DataRoot);
-        RejectReparsePoint(Root);
+        if (checkpointRoot is null)
+        {
+            RejectReparsePoint(SettingsStore.DataRoot);
+            RejectReparsePoint(Root);
+        }
+        else ValidateDirectoryChain(checkpointRoot);
         RejectReparsePoint(normalized);
         if (!Directory.Exists(normalized)) throw InvalidCheckpoint();
         return normalized;
@@ -542,11 +556,11 @@ internal static class EditorSessionStore
         return true;
     }
 
-    private static void TryDeleteOwnCheckpoint(string directory)
+    private static void TryDeleteOwnCheckpoint(string directory, string? checkpointRoot = null)
     {
         try
         {
-            var owned = ValidateDirectory(directory);
+            var owned = ValidateDirectory(directory, checkpointRoot);
             var files = Directory.GetFileSystemEntries(owned);
             // This flat, newly generated checkpoint is the only directory this call may remove.
             foreach (var file in files)
@@ -560,7 +574,47 @@ internal static class EditorSessionStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            SettingsStore.Log(ex);
+            if (checkpointRoot is null) SettingsStore.Log(ex);
+            else System.Diagnostics.Trace.WriteLine(ex);
+        }
+    }
+
+    // Project IO must also work in read-only source folders, and must not stage data in the
+    // user's update-recovery directory. Each operation owns only this unique temporary root.
+    private sealed class ProjectWorkspace : IDisposable
+    {
+        internal string Root { get; } = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "snipflow-project-" + Guid.NewGuid().ToString("N")));
+
+        internal ProjectWorkspace()
+        {
+            ValidateDirectoryChain(Path.GetDirectoryName(Root)!);
+            if (Directory.Exists(Root) || File.Exists(Root)) throw InvalidCheckpoint();
+            if (OperatingSystem.IsWindows()) Directory.CreateDirectory(Root);
+            else Directory.CreateDirectory(Root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            RejectReparsePoint(Root);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                ValidateDirectoryChain(Root);
+                // Cleanup is deliberately nonrecursive: unknown files are never removed.
+                Directory.Delete(Root);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                System.Diagnostics.Trace.WriteLine(ex);
+            }
+        }
+    }
+
+    private static void ValidateDirectoryChain(string directory)
+    {
+        for (DirectoryInfo? current = new(directory); current is not null; current = current.Parent)
+        {
+            if ((current.Attributes & FileAttributes.Directory) == 0) throw InvalidCheckpoint();
+            RejectReparsePoint(current.FullName);
         }
     }
 
@@ -574,7 +628,7 @@ internal static class EditorSessionStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            SettingsStore.Log(ex);
+            System.Diagnostics.Trace.WriteLine(ex);
         }
     }
 

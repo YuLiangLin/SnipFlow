@@ -2,7 +2,7 @@
 
 這是無測試框架依賴的 console regression harness。以 `ProjectReference` 呼叫產品本身的模型、渲染、合圖操作與 `.snipflow` 專案保存，不複製裁剪實作。
 
-目前 0.8.9 的完整執行預期包含 204 項（保留原 191 項，加上 `SNIPFLOW-TEXT-FONT-009` contract、10 項字型案例及 2 項最後工具偏好案例）。這是測試組成說明，實際通過／失敗數、產品 DLL hash 與平台證據以各次輸出的 `results.json` 為準；`--model-only`、probe 與 fixture-only 模式不代表完整 204 項回歸。
+目前 0.8.10 的完整執行預期包含 213 項（保留 0.8.9 原有 204 項，加上 9 項 `SNIPFLOW-HISTORY-ANNOTATION-010` 相關保存／重開／錯誤處理案例）。這是測試組成說明，實際通過／失敗數、產品 DLL hash 與平台證據以各次輸出的 `results.json` 為準；`--model-only`、probe 與 fixture-only 模式不代表完整 213 項回歸。
 
 在 repository 根目錄執行：
 
@@ -50,7 +50,19 @@ harness 建立空 Avalonia Application 並使用 `SetupWithoutStarting`，不建
 
 測試 Application 提供只有 `TargetType=Button` 的最小 `QuietButton` theme placeholder，讓箭頭設定面板的同步／preset intent 測試可建構；不建立 template，也不以此宣稱真實面板主題或排版已通過視覺驗證。標註像素仍由真實產品 renderer 產生。
 
-`SaveProject`／`RestoreProject` 使用產品原本的 checkpoint 機制：在 `SettingsStore.DataRoot/UpdateSessions` 短暫建立本次專用的 GUID 資料夾，完成後產品會清除；測試檢查既有 checkpoint 目錄清單保持不變。不修改使用者設定或既有專案。
+`SaveProject`／`RestoreProject` 使用產品的獨立暫存工作區保存／驗證 ZIP，完成後只清除自己的暫存內容。原有測試另檢查既有 `SettingsStore.DataRoot/UpdateSessions` 目錄清單保持不變；專案操作不修改使用者設定、既有 checkpoint 或既有專案。
+
+註解自動儲存回歸另可單獨執行：
+
+```powershell
+dotnet run --project tests/ImageCrop.Regression -c Release -- --history-annotation-only --output verification/autosave/run
+```
+
+`SNIPFLOW-HISTORY-ANNOTATION-010` 直接建立離屏 EditorView，輸入真正文字草稿，保存 A、切換並標註 B，再透過產品 `DocumentFileStore.Open` 開啟 A。斷言可見像素及可編輯 Text 物件／內容完整，歷史預覽 PNG 已更新且原擷取時間不變；另起新的 console process 再讀 A，檢查 process ID 不同、文字及像素一致。單張截圖即使沒有歷史也必須產生可編輯專案；純 PNG 仍可正常開啟。其餘案例涵蓋未完成文字／crop 提交、snapshot 與後續編輯隔離、重開後修改／Undo／再次保存、損壞 sidecar 原子拒絕、PNG 寫入失敗仍有完整專案可讀、Delete／Clear 僅清理成對的歷史檔案、延遲保存不重建已刪除卡片及資料夾範圍驗證。
+
+此模式只使用輸出目錄內的明確絕對路徑與 scoped HistoryStore overload，不讀 `SettingsStore.Current`，不啟動 App／MainWindow、不操作桌面、不註冊快捷鍵、不寫 live settings／registry。專案 ZIP 寫入／讀回使用產品的獨立暫存工作區；不使用 live UpdateSessions。它驗證產品共用的保存／開啟操作，MainWindow 的事件接線另由原始碼 review 確認，不能據此宣稱已操作原生擷取與歷史卡片。
+
+修正前的相同重現器已於 `verification/autosave/red/results.json` 記錄實際像素遺失失敗。為能對舊版 DLL 重跑，當舊 assembly 沒有 DocumentFileStore 時，重現器只執行當時單張截圖的原始呼叫：`CaptureFileStore.Save(rendered, generatedPng)`，再 `HistoryStore.Read(rawHistoryPng)`／`Editor.LoadImage`。缺少新 type 本身不是該重現器的失敗條件。
 
 設定偏好測試只呼叫 `ReadSettingsFile(path)`／`WriteSettingsFile(path, settings)`，檔案位於本次輸出的 `arrow-preferences/`、`arrow-appearance/`、`tool-appearance/`、`text-size/`、`text-font/` 與 `last-tool/`；以 reflection 檢查 `Lazy<UserSettings>.IsValueCreated`，不讀取 `SettingsStore.Current`、不呼叫 `Save()`、不寫入 live settings 或 registry。MainWindow 的啟動套用與使用者事件保存分流不在本 harness 建構範圍，須另做原始碼檢查或經授權的互動驗證。
 
