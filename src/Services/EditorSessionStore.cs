@@ -47,31 +47,35 @@ internal static class EditorSessionStore
     internal static void SaveProject(EditorSessionSnapshot snapshot, string path)
     {
         var destination = NormalizeProjectPath(path);
-        ValidateSnapshot(snapshot);
+        var manifest = CreateManifest(snapshot);
         var parent = Path.GetDirectoryName(destination)!;
         Directory.CreateDirectory(parent);
         if (File.Exists(destination)) RejectReparsePoint(destination);
         var temporary = Path.Combine(parent, ".snipflow-" + Guid.NewGuid().ToString("N") + ".tmp");
-        using var workspace = new ProjectWorkspace();
-        string? checkpoint = null;
         var temporaryCreated = false;
         try
         {
-            checkpoint = SaveSnapshot(snapshot, workspace.Root);
-            var manifest = ReadManifest(Path.Combine(checkpoint, "manifest.json"));
             using (var stream = CreateNewFile(temporary))
             {
                 temporaryCreated = true;
                 using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
                 {
-                    foreach (var name in CheckpointFileNames(manifest))
+                    // Encode directly into the archive instead of writing and deleting a separate
+                    // directory of PNGs and JSON for every automatic save.
+                    long writtenBytes = 0;
+                    WriteProjectEntry(archive, "manifest.json", MaxManifestBytes,
+                        output => JsonSerializer.Serialize(output, manifest, JsonOptions), ref writtenBytes);
+                    WriteProjectEntry(archive, "original.png", MaxImageBytes,
+                        output => ImageTools.SavePng(snapshot.Image, output), ref writtenBytes);
+                    for (var index = 0; index < snapshot.Annotations.Count; index++)
                     {
-                        var entry = archive.CreateEntry(name, name == "manifest.json"
-                            ? CompressionLevel.Optimal : CompressionLevel.NoCompression);
-                        using var source = OpenFile(Path.Combine(checkpoint, name),
-                            name == "manifest.json" ? MaxManifestBytes : MaxImageBytes);
-                        using var output = entry.Open();
-                        source.CopyTo(output);
+                        var item = snapshot.Annotations[index];
+                        var image = item.Tool == AnnotationTool.Mosaic ? item.Mosaic
+                            : item.Tool == AnnotationTool.Image ? item.Image : null;
+                        if (image is null) continue;
+                        var name = item.Tool == AnnotationTool.Mosaic ? MosaicFileName(index) : ImageFileName(index);
+                        WriteProjectEntry(archive, name, MaxImageBytes,
+                            output => ImageTools.SavePng(image, output), ref writtenBytes);
                     }
                 }
                 if (stream.Length > MaxArchiveBytes) throw InvalidCheckpoint();
@@ -89,8 +93,19 @@ internal static class EditorSessionStore
         finally
         {
             if (temporaryCreated) TryDeleteOwnFile(temporary);
-            if (checkpoint is not null) TryDeleteOwnCheckpoint(checkpoint, workspace.Root);
         }
+    }
+
+    private static void WriteProjectEntry(ZipArchive archive, string name, long maximumBytes,
+        Action<Stream> write, ref long totalBytes)
+    {
+        var entry = archive.CreateEntry(name, name == "manifest.json"
+            ? CompressionLevel.Optimal : CompressionLevel.NoCompression);
+        using var output = entry.Open();
+        using var limited = new LimitedWriteStream(output, Math.Min(maximumBytes, MaxProjectBytes - totalBytes));
+        write(limited);
+        if (limited.BytesWritten == 0) throw InvalidCheckpoint();
+        totalBytes += limited.BytesWritten;
     }
 
     internal static void RestoreProject(EditorView editor, string path)
@@ -157,7 +172,7 @@ internal static class EditorSessionStore
         }
     }
 
-    private static string SaveSnapshot(EditorSessionSnapshot snapshot, string? checkpointRoot = null)
+    private static SessionManifest CreateManifest(EditorSessionSnapshot snapshot)
     {
         ValidateSnapshot(snapshot);
         var manifest = new SessionManifest
@@ -172,6 +187,12 @@ internal static class EditorSessionStore
             Annotations = snapshot.Annotations.Select(ToData).ToList()
         };
         ValidateManifest(manifest);
+        return manifest;
+    }
+
+    private static string SaveSnapshot(EditorSessionSnapshot snapshot, string? checkpointRoot = null)
+    {
+        var manifest = CreateManifest(snapshot);
         string? directory = null;
         try
         {
@@ -398,6 +419,36 @@ internal static class EditorSessionStore
         if (stream.Length > MaxImageBytes) throw InvalidCheckpoint();
         stream.Flush(flushToDisk: true);
         return stream.Length;
+    }
+
+    // The encoder writes synchronously to one ZIP entry. Check each write before forwarding it,
+    // so per-entry and aggregate uncompressed limits also apply during direct streaming.
+    private sealed class LimitedWriteStream(Stream target, long limit) : Stream
+    {
+        internal long BytesWritten { get; private set; }
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => target.Flush();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            if (buffer.Length > limit - BytesWritten) throw InvalidCheckpoint();
+            target.Write(buffer);
+            BytesWritten += buffer.Length;
+        }
+        public override void WriteByte(byte value)
+        {
+            Span<byte> buffer = stackalloc byte[1];
+            buffer[0] = value;
+            Write(buffer);
+        }
+        // The surrounding entry owns the target stream; disposing this limit wrapper leaves it open.
     }
 
     private static void ValidatePngFiles(string directory, SessionManifest manifest)

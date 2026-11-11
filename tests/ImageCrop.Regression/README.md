@@ -2,7 +2,7 @@
 
 這是無測試框架依賴的 console regression harness。以 `ProjectReference` 呼叫產品本身的模型、渲染、合圖操作與 `.snipflow` 專案保存，不複製裁剪實作。
 
-目前 0.8.10 的完整執行預期包含 213 項（保留 0.8.9 原有 204 項，加上 9 項 `SNIPFLOW-HISTORY-ANNOTATION-010` 相關保存／重開／錯誤處理案例）。這是測試組成說明，實際通過／失敗數、產品 DLL hash 與平台證據以各次輸出的 `results.json` 為準；`--model-only`、probe 與 fixture-only 模式不代表完整 213 項回歸。
+目前 0.8.11 的完整執行預期包含 221 項（保留 0.8.10 的 213 項，加上 8 項 `SNIPFLOW-LOW-IO-011` 寫檔、容量限制與歷史清理案例）。這是測試組成說明，實際通過／失敗數、產品 DLL hash 與平台證據以各次輸出的 `results.json` 為準；`--model-only`、probe 與 fixture-only 模式不代表完整 221 項回歸。
 
 在 repository 根目錄執行：
 
@@ -50,7 +50,18 @@ harness 建立空 Avalonia Application 並使用 `SetupWithoutStarting`，不建
 
 測試 Application 提供只有 `TargetType=Button` 的最小 `QuietButton` theme placeholder，讓箭頭設定面板的同步／preset intent 測試可建構；不建立 template，也不以此宣稱真實面板主題或排版已通過視覺驗證。標註像素仍由真實產品 renderer 產生。
 
-`SaveProject`／`RestoreProject` 使用產品的獨立暫存工作區保存／驗證 ZIP，完成後只清除自己的暫存內容。原有測試另檢查既有 `SettingsStore.DataRoot/UpdateSessions` 目錄清單保持不變；專案操作不修改使用者設定、既有 checkpoint 或既有專案。
+`SaveProject` 直接將 JSON／PNG 寫進目的資料夾的一個 ZIP 暫存檔，完成後原子發布；不再先建立 PNG／manifest 暫存目錄。`RestoreProject` 仍使用產品的獨立暫存工作區驗證 ZIP，完成後只清除自己的暫存內容。原有測試另檢查既有 `SettingsStore.DataRoot/UpdateSessions` 目錄清單保持不變；專案操作不修改使用者設定、既有 checkpoint 或既有專案。
+
+低 I/O 回歸可單獨執行：
+
+```powershell
+dotnet run --project tests/ImageCrop.Regression -c Release -- --low-io-only --output verification/low-io/run
+dotnet run --project tests/ImageCrop.Regression -c Release -- --low-io-pattern-only --output verification/low-io/pattern
+```
+
+`SNIPFLOW-LOW-IO-011` 在新的 console 子程序設定專屬 `TEMP`／`TMP`／`TMPDIR`，以真實 `FileSystemWatcher.Created` 與前後校正 barrier 觀察同一個 `SaveProject` 呼叫。斷言沒有 PNG／manifest 暫存目錄，只產生一個目的資料夾內的原子暫存檔；不改父程序環境、不監看使用者其他暫存目錄。舊版同一個 writer 實際產生 scratch 目錄時會失敗，並非以新 API 是否存在作為該 guard 的失敗條件。`--low-io-pattern-only` 僅跑這個量測與隔離檢查，供舊／新版本對照。
+
+其餘案例驗證相同 schema 8 ZIP layout、文字／圖片原始像素／裁剪／馬賽克 payload 往返、拒絕非法 snapshot 時保留舊專案、發布失敗清理自己的暫存檔；直接使用產品的 entry stream limiter，以小型 fixture 測陣列／span／單 byte、每 entry 與總未壓縮容量上限，避免配置 GB 大小測試檔。歷史透過實際 scoped `Add`，驗證每次最多清理兩組最舊項目、積壓逐步縮減、一般上限與無關檔案保持，以及第一組受保護時停止後續清理。這些檢查量測正常檔案操作與資料完整性，不能證明防毒已接受程式或找出廠商規則的確切觸發原因。
 
 註解自動儲存回歸另可單獨執行：
 
@@ -60,7 +71,7 @@ dotnet run --project tests/ImageCrop.Regression -c Release -- --history-annotati
 
 `SNIPFLOW-HISTORY-ANNOTATION-010` 直接建立離屏 EditorView，輸入真正文字草稿，保存 A、切換並標註 B，再透過產品 `DocumentFileStore.Open` 開啟 A。斷言可見像素及可編輯 Text 物件／內容完整，歷史預覽 PNG 已更新且原擷取時間不變；另起新的 console process 再讀 A，檢查 process ID 不同、文字及像素一致。單張截圖即使沒有歷史也必須產生可編輯專案；純 PNG 仍可正常開啟。其餘案例涵蓋未完成文字／crop 提交、snapshot 與後續編輯隔離、重開後修改／Undo／再次保存、損壞 sidecar 原子拒絕、PNG 寫入失敗仍有完整專案可讀、Delete／Clear 僅清理成對的歷史檔案、延遲保存不重建已刪除卡片及資料夾範圍驗證。
 
-此模式只使用輸出目錄內的明確絕對路徑與 scoped HistoryStore overload，不讀 `SettingsStore.Current`，不啟動 App／MainWindow、不操作桌面、不註冊快捷鍵、不寫 live settings／registry。專案 ZIP 寫入／讀回使用產品的獨立暫存工作區；不使用 live UpdateSessions。它驗證產品共用的保存／開啟操作，MainWindow 的事件接線另由原始碼 review 確認，不能據此宣稱已操作原生擷取與歷史卡片。
+此模式只使用輸出目錄內的明確絕對路徑與 scoped HistoryStore overload，不讀 `SettingsStore.Current`，不啟動 App／MainWindow、不操作桌面、不註冊快捷鍵、不寫 live settings／registry。專案 ZIP 直接寫入、讀回使用產品的獨立暫存工作區，不使用 live UpdateSessions。它驗證產品共用的保存／開啟操作，MainWindow 的事件接線另由原始碼 review 確認，不能據此宣稱已操作原生擷取與歷史卡片。
 
 修正前的相同重現器已於 `verification/autosave/red/results.json` 記錄實際像素遺失失敗。為能對舊版 DLL 重跑，當舊 assembly 沒有 DocumentFileStore 時，重現器只執行當時單張截圖的原始呼叫：`CaptureFileStore.Save(rendered, generatedPng)`，再 `HistoryStore.Read(rawHistoryPng)`／`Editor.LoadImage`。缺少新 type 本身不是該重現器的失敗條件。
 

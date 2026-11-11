@@ -1,5 +1,5 @@
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.8.10',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.8.11',
     [string]$OutputRoot = (Join-Path $PSScriptRoot 'release'),
     [string]$SigningParameters = '',
     [string]$VpkToolPath = ''

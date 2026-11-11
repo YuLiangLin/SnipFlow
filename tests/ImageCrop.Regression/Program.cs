@@ -42,6 +42,14 @@ internal static partial class Program
         try
         {
             AppBuilder.Configure<CropTestApplication>().UsePlatformDetect().SetupWithoutStarting();
+            var lowIoProbe = Array.IndexOf(args, "--low-io-save-probe");
+            if (lowIoProbe >= 0)
+            {
+                if (lowIoProbe + 1 >= args.Length) throw new ArgumentException("--low-io-save-probe requires a project path.");
+                return WriteLowIoSaveProbe(args[lowIoProbe + 1]);
+            }
+            if (args.Contains("--low-io-pattern-only")) return RunLowIoOnly(patternOnly: true);
+            if (args.Contains("--low-io-only")) return RunLowIoOnly();
             var historyProbe = Array.IndexOf(args, "--history-annotation-open-probe");
             if (historyProbe >= 0)
             {
@@ -124,6 +132,7 @@ internal static partial class Program
                 TextFontCases();
                 LastToolCases();
                 HistoryAnnotationCases();
+                LowIoPersistenceCases();
                 ModelCases();
                 ProjectCases();
                 ArrowCases();
@@ -134,11 +143,12 @@ internal static partial class Program
         catch (Exception ex) { failed++; Results.Add(new { name = "harness", status = "FAIL", error = Unwrap(ex).ToString() }); }
         var assemblyHash = Hash(File.ReadAllBytes(Product.Location));
         var report = new {
-            guard = "SNIPFLOW-HISTORY-ANNOTATION-010", timestamp = DateTimeOffset.Now, passed, failed,
+            guard = "SNIPFLOW-LOW-IO-011", timestamp = DateTimeOffset.Now, passed, failed,
             productAssembly = Product.Location, productAssemblySha256 = assemblyHash,
             safety = "Empty application; no Avalonia Window, SnipFlow.App/MainWindow, OS input, clipboard, capture, hotkey, installation, or deployment.",
+            persistenceMethod = "A fresh console process uses fixture-owned TEMP/TMP/TMPDIR and calibrated FileSystemWatcher barriers to observe the actual SaveProject call: no scratch PNG/manifest directory and one atomic destination temporary file. Stream entry and aggregate byte budgets, mixed editable payload roundtrip, failed publication cleanup, cap-two oldest-pair pruning, ordinary retention, and stop-on-first-error are exercised through product operations.",
             method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations, project persistence, and isolated settings-file IO. History annotation cases call the actual shared DocumentFileStore and explicitly scoped HistoryStore operations; A/B/A retains editable objects and exact pixels, a fresh process reopens saved A without live settings, pending text/crop commits, immutable snapshots, edit/undo/resave, corrupt project rejection, PNG publication failure recovery, owned sidecar cleanup and deleted-card/outside-scope safety are checked. Two fresh preference processes load only the supplied test settings path and apply all seven tools' color/width plus five arrow options, TextSize, TextFontFamily and LastAnnotationTool to an offscreen EditorView and real drawing factory. Both invoke BeginTextEdit and CommitTextEdit and inspect draft, TextBox and committed size/family without a Window. A minimal QuietButton theme placeholder supports arrow panel state tests only; font-picker visuals use their separate mode. No OS or routed input events.",
-            limitations = "Does not instantiate MainWindow or prove its startup/save wiring, double-click routing, interactive pointer capture, native-window layout, IME, or desktop scaling. Linux execution requires an X11/XWayland display; use a virtual display such as Xvfb.",
+            limitations = "Does not instantiate MainWindow or prove its startup/save wiring, double-click routing, interactive pointer capture, native-window layout, IME, or desktop scaling. Filesystem probes measure legitimate write/cleanup activity and do not prove antivirus acceptance or a vendor detection trigger. Linux execution requires an X11/XWayland display; use a virtual display such as Xvfb.",
             tests = Results
         };
         File.WriteAllText(Path.Combine(Output, "results.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));

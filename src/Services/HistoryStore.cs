@@ -16,6 +16,7 @@ public sealed record HistoryClearResult(int DeletedCount, int FailedCount);
 public static class HistoryStore
 {
     static readonly object Gate = new();
+    const int AutomaticPruneBatchSize = 2;
 
     public static IReadOnlyList<HistoryItem> Load()
     {
@@ -47,17 +48,42 @@ public static class HistoryStore
         lock (Gate)
         {
             if (!SettingsStore.Current.KeepHistory) return null;
-            var directory = GetSafeDirectory(create: true);
-            var path = Path.Combine(directory, $"{DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture)}_{Guid.NewGuid():N}.png");
-            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)) encoded.CopyTo(stream);
-            foreach (var file in GetHistoryFiles(directory).OrderByDescending(f => f.LastWriteTimeUtc)
-                .Skip(Math.Clamp(SettingsStore.Current.HistoryLimit, 10, 200)))
-            {
-                try { DeleteFile(directory, file.FullName); }
-                catch (Exception ex) when (IsFileOperationError(ex)) { SettingsStore.Log(ex); }
-            }
-            return path;
+            return AddEncoded(encoded, GetSafeDirectory(create: true), SettingsStore.Current.HistoryLimit, logErrors: true);
         }
+    }
+
+    // Explicit scope for isolated file-IO tests; never reads the user's preferences.
+    internal static string Add(Bitmap image, string historyDirectory, int historyLimit)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        using var encoded = new MemoryStream(ImageTools.EncodePng(image), writable: false);
+        lock (Gate)
+            return AddEncoded(encoded, GetSafeDirectory(historyDirectory, create: true), historyLimit, logErrors: false);
+    }
+
+    static string AddEncoded(Stream encoded, string directory, int historyLimit, bool logErrors)
+    {
+        var path = Path.Combine(directory, $"{DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture)}_{Guid.NewGuid():N}.png");
+        using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)) encoded.CopyTo(stream);
+        // Bound automatic cleanup even when a lowered limit or an old backlog leaves many
+        // excess captures. Two removals per new capture gradually reduce that backlog.
+        var expired = GetHistoryFiles(directory).OrderByDescending(file => file.LastWriteTimeUtc)
+            .ThenBy(file => file.Name, StringComparer.Ordinal)
+            .Skip(Math.Clamp(historyLimit, 10, 200))
+            .OrderBy(file => file.LastWriteTimeUtc).ThenBy(file => file.Name, StringComparer.Ordinal)
+            .Take(AutomaticPruneBatchSize);
+        foreach (var file in expired)
+        {
+            try { DeleteFile(directory, file.FullName); }
+            catch (Exception ex) when (IsFileOperationError(ex))
+            {
+                if (logErrors) SettingsStore.Log(ex);
+                else System.Diagnostics.Trace.WriteLine(ex);
+                // A protected or locked capture must not cause a burst of retries on others.
+                break;
+            }
+        }
+        return path;
     }
 
     public static bool Delete(HistoryItem item)
