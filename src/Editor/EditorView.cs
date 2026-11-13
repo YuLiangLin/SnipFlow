@@ -58,7 +58,10 @@ public sealed partial class EditorView : UserControl
     private AnnotationTool _tool = AnnotationTool.Arrow;
     private Color _color = Color.FromRgb(99, 213, 197);
     private double _strokeWidth = 4;
+    private readonly Dictionary<AnnotationTool, (Color Color, double Width)> _toolAppearances = new();
+    private ArrowStyleOptions _arrowStyle = ArrowStyleOptions.Default;
     private double _textSize = 26;
+    private string _textFontFamily = TextFonts.DefaultFamily;
     private double _zoom = 1;
     private double _panX;
     private double _panY;
@@ -77,38 +80,142 @@ public sealed partial class EditorView : UserControl
     public event EventHandler? SelectionChanged;
 
     public bool HasImage => _image is not null;
-    public bool HasEdits => HasImage && (_revision != _savedRevision || _pending is not null || TransformHasChanges || TextHasChanges || PropertyHasChanges);
-    public bool CanUndo => _undo.Count != 0 || TextHasChanges || PropertyHasChanges;
-    public bool CanRedo => _redo.Count != 0 && !TextHasChanges && !PropertyHasChanges;
+    public bool HasEdits => HasImage && (_revision != _savedRevision || _pending is not null || TransformHasChanges || TextHasChanges || PropertyHasChanges || CropHasChanges);
+    public bool CanUndo => _undo.Count != 0 || TextHasChanges || PropertyHasChanges || CropHasChanges;
+    public bool CanRedo => _redo.Count != 0 && !TextHasChanges && !PropertyHasChanges && !IsImageCropping;
     public double ZoomFactor => _zoom;
     public bool IsTextEditing => _textDraft is not null;
     public long Revision => _revision;
-    public bool IsInteracting => _textDraft is not null || _pending is not null || _transformSource is not null || _propertySource is not null || _marqueeStart is not null;
+    public bool IsInteracting => _textDraft is not null || _pending is not null || _transformSource is not null || _propertySource is not null || _marqueeStart is not null || IsImageCropping;
     public AnnotationTool? SelectedTool => SelectedItem?.Tool;
     public Color? SelectedColor => SelectedItem?.Color;
     public double? SelectedStrokeWidth => SelectedItem?.Width;
+    public bool? SelectedDoubleEndedArrow => SelectedItem?.Tool == AnnotationTool.Arrow ? SelectedItem.DoubleEndedArrow : null;
+    public ArrowStyleOptions? SelectedArrowStyle => SelectedItem?.Tool == AnnotationTool.Arrow ? SelectedItem.ArrowStyle : null;
     public double? SelectedTextSize => SelectedItem?.Tool == AnnotationTool.Text ? SelectedItem.FontSize : null;
+    public string? SelectedTextFontFamily => SelectedItem?.Tool == AnnotationTool.Text ? SelectedItem.TextFontFamily : null;
+    public Color ArrowColor => AppearanceFor(AnnotationTool.Arrow).Color;
+    public double ArrowStrokeWidth => AppearanceFor(AnnotationTool.Arrow).Width;
+    public AnnotationTool AppearanceTool => SelectedItem?.Tool ?? _tool;
+    public Color DrawingColor => AppearanceFor(AppearanceTool).Color;
 
     private AnnotationItem? SelectedItem => _textDraft ?? _selected;
     private bool TextHasChanges => _textDraft is not null && (_textTarget is null ? !string.IsNullOrWhiteSpace(_textDraft.Text) : !_textDraft.ContentEquals(_textTarget));
     private bool TransformHasChanges => _transformSources.Any(pair => !pair.Key.ContentEquals(pair.Value));
     private bool PropertyHasChanges => _propertySources.Any(pair => !pair.Key.ContentEquals(pair.Value));
 
+    public bool DoubleEndedArrow
+    {
+        get => _arrowStyle.StartHead != ArrowHeadKind.None && _arrowStyle.EndHead != ArrowHeadKind.None;
+        set
+        {
+            VerifyAccess();
+            _arrowStyle = _arrowStyle with { StartHead = value ? ArrowHeadKind.Arrow : ArrowHeadKind.None, EndHead = ArrowHeadKind.Arrow };
+            ChangeSelectedStyle(item =>
+            {
+                if (item.Tool == AnnotationTool.Arrow)
+                    item.DoubleEndedArrow = value;
+            });
+        }
+    }
+
+    public ArrowStyleOptions ArrowStyle
+    {
+        get => _arrowStyle;
+        set
+        {
+            VerifyAccess();
+            if (!ArrowStyleOptions.IsValid(value)) throw new ArgumentOutOfRangeException(nameof(value));
+            _arrowStyle = value;
+            ChangeSelectedStyle(item =>
+            {
+                if (item.Tool == AnnotationTool.Arrow) item.ArrowStyle = value;
+            });
+        }
+    }
+
+    public void UpdateArrowStyle(ArrowStyleOptions previous, ArrowStyleOptions next)
+    {
+        VerifyAccess();
+        if (!ArrowStyleOptions.IsValid(previous)) throw new ArgumentOutOfRangeException(nameof(previous));
+        if (!ArrowStyleOptions.IsValid(next)) throw new ArgumentOutOfRangeException(nameof(next));
+        if (previous == next) return;
+        ArrowStyleOptions Apply(ArrowStyleOptions current) => current with
+        {
+            StartHead = previous.StartHead != next.StartHead ? next.StartHead : current.StartHead,
+            EndHead = previous.EndHead != next.EndHead ? next.EndHead : current.EndHead,
+            StartSize = previous.StartSize != next.StartSize ? next.StartSize : current.StartSize,
+            EndSize = previous.EndSize != next.EndSize ? next.EndSize : current.EndSize,
+            LineStyle = previous.LineStyle != next.LineStyle ? next.LineStyle : current.LineStyle
+        };
+        _arrowStyle = Apply(_arrowStyle);
+        ChangeSelectedStyle(item =>
+        {
+            if (item.Tool == AnnotationTool.Arrow) item.ArrowStyle = Apply(item.ArrowStyle);
+        });
+    }
+
+    private (Color Color, double Width) AppearanceFor(AnnotationTool tool) =>
+        ToolAppearanceOptions.Supports(tool)
+            ? _toolAppearances.TryGetValue(tool, out var appearance)
+                ? appearance : (Color.FromRgb(99, 213, 197), 4)
+            : (_color, _strokeWidth);
+
+    public ToolAppearanceOptions GetToolAppearance(AnnotationTool tool)
+    {
+        if (!ToolAppearanceOptions.Supports(tool)) throw new ArgumentOutOfRangeException(nameof(tool));
+        var appearance = AppearanceFor(tool);
+        return new ToolAppearanceOptions
+        {
+            Color = $"#{appearance.Color.R:X2}{appearance.Color.G:X2}{appearance.Color.B:X2}",
+            StrokeWidth = appearance.Width
+        };
+    }
+
+    // Restoring defaults never changes the selected document or its undo history.
+    public void RestoreToolAppearance(AnnotationTool tool, ToolAppearanceOptions appearance)
+    {
+        VerifyAccess();
+        if (!ToolAppearanceOptions.Supports(tool)) throw new ArgumentOutOfRangeException(nameof(tool));
+        if (!ToolAppearanceOptions.IsValid(appearance)) throw new ArgumentException("Invalid tool appearance.", nameof(appearance));
+        _toolAppearances[tool] = (Color.Parse(appearance.Color), appearance.StrokeWidth);
+    }
+
+    public void RestoreArrowAppearance(Color color, double width)
+    {
+        VerifyAccess();
+        if (!double.IsFinite(width) || width is < 1 or > 32)
+            throw new ArgumentOutOfRangeException(nameof(width));
+        _toolAppearances[AnnotationTool.Arrow] = (Color.FromRgb(color.R, color.G, color.B), width);
+    }
+
     public double StrokeWidth
     {
-        get => _strokeWidth;
+        get => AppearanceFor(AppearanceTool).Width;
         set
         {
             VerifyAccess();
             if (!double.IsFinite(value))
                 throw new ArgumentOutOfRangeException(nameof(value));
-            _strokeWidth = Math.Clamp(value, 1, 32);
+            var width = Math.Clamp(value, 1, 32);
+            var tool = AppearanceTool;
+            if (ToolAppearanceOptions.Supports(tool)) _toolAppearances[tool] = (AppearanceFor(tool).Color, width);
+            else _strokeWidth = width;
             ChangeSelectedStyle(item =>
             {
                 if (item.Tool is not (AnnotationTool.Text or AnnotationTool.Image))
-                    item.Width = _strokeWidth;
+                    item.Width = width;
             });
         }
+    }
+
+    // Loading a preference changes future text only, even if existing text is selected.
+    public void RestoreTextSize(double size)
+    {
+        VerifyAccess();
+        if (!double.IsFinite(size) || size is < 12 or > 240)
+            throw new ArgumentOutOfRangeException(nameof(size));
+        _textSize = size;
     }
 
     public double TextSize
@@ -124,6 +231,27 @@ public sealed partial class EditorView : UserControl
             {
                 if (item.Tool == AnnotationTool.Text)
                     item.FontSize = _textSize;
+            });
+        }
+    }
+
+    public void RestoreTextFontFamily(string family)
+    {
+        VerifyAccess();
+        _textFontFamily = TextFonts.NormalizeFamily(family);
+    }
+
+    public string TextFontFamily
+    {
+        get => _textFontFamily;
+        set
+        {
+            VerifyAccess();
+            var family = TextFonts.NormalizeFamily(value);
+            _textFontFamily = family;
+            ChangeSelectedStyle(item =>
+            {
+                if (item.Tool == AnnotationTool.Text) item.TextFontFamily = family;
             });
         }
     }
@@ -218,6 +346,7 @@ public sealed partial class EditorView : UserControl
         _hintLabel = new TextBlock
         {
             Text = I18n.T(CanvasHint),
+            TextWrapping = TextWrapping.Wrap,
             FontSize = 12,
             Foreground = ThemeService.Brush("Muted"),
             Margin = new Thickness(20, 0, 20, 15),
@@ -226,6 +355,8 @@ public sealed partial class EditorView : UserControl
             IsHitTestVisible = false
         };
         layout.Children.Add(_hintLabel);
+        _cropToolbar = CreateCropToolbar();
+        layout.Children.Add(_cropToolbar);
         Content = layout;
 
         _viewport.AddHandler(PointerPressedEvent, OnMouseDown, RoutingStrategies.Tunnel);
@@ -237,6 +368,7 @@ public sealed partial class EditorView : UserControl
             if (ReferenceEquals(e.Source, _viewport) && ReferenceEquals(e.Pointer, _capturedPointer))
             {
                 _capturedPointer = null;
+                EndImageCropGesture();
                 CompleteGesture();
             }
         };
@@ -285,6 +417,7 @@ public sealed partial class EditorView : UserControl
         if (image.PixelSize.Width < 1 || image.PixelSize.Height < 1)
             throw new ArgumentException(I18n.T("影像尺寸不得為零。"), nameof(image));
 
+        CancelImageCrop();
         CancelTextEdit();
         CancelGesture();
         EndPropertyEdit();
@@ -314,6 +447,7 @@ public sealed partial class EditorView : UserControl
         VerifyAccess();
         if (_image is null)
             throw new InvalidOperationException(I18n.T("請先開啟或擷取影像。"));
+        CommitImageCrop();
         CompleteGesture();
         CommitTextEdit();
         EndPropertyEdit();
@@ -355,6 +489,7 @@ public sealed partial class EditorView : UserControl
         if (_image is null)
             throw new InvalidOperationException(I18n.T("請先開啟或擷取影像。"));
 
+        CommitImageCrop();
         CompleteGesture();
         CommitTextEdit();
         EndPropertyEdit();
@@ -369,6 +504,7 @@ public sealed partial class EditorView : UserControl
     public void MarkSaved()
     {
         VerifyAccess();
+        CommitImageCrop();
         CompleteGesture();
         CommitTextEdit();
         EndPropertyEdit();
@@ -387,6 +523,7 @@ public sealed partial class EditorView : UserControl
     public void Undo()
     {
         VerifyAccess();
+        if (IsImageCropping) { CancelImageCrop(); return; }
         CommitTextEdit();
         EndPropertyEdit();
         CancelGesture();
@@ -400,6 +537,7 @@ public sealed partial class EditorView : UserControl
     public void Redo()
     {
         VerifyAccess();
+        if (IsImageCropping) { CancelImageCrop(); return; }
         CommitTextEdit();
         EndPropertyEdit();
         CancelGesture();
@@ -413,6 +551,7 @@ public sealed partial class EditorView : UserControl
     public void SetTool(AnnotationTool tool)
     {
         VerifyAccess();
+        CommitImageCrop();
         CommitTextEdit();
         EndPropertyEdit();
         CancelGesture();
@@ -426,7 +565,9 @@ public sealed partial class EditorView : UserControl
     public void SetColor(Color color)
     {
         VerifyAccess();
-        _color = color;
+        var tool = AppearanceTool;
+        if (ToolAppearanceOptions.Supports(tool)) _toolAppearances[tool] = (color, AppearanceFor(tool).Width);
+        else _color = color;
         ChangeSelectedStyle(item =>
         {
             if (item.Tool is not (AnnotationTool.Mosaic or AnnotationTool.Image))
@@ -437,6 +578,7 @@ public sealed partial class EditorView : UserControl
     public void DeleteSelection()
     {
         VerifyAccess();
+        CommitImageCrop();
         CommitTextEdit();
         EndPropertyEdit();
         CancelGesture();
@@ -511,6 +653,24 @@ public sealed partial class EditorView : UserControl
         EndPropertyEdit();
         Focus();
         Point point = ViewportToImage(e.GetPosition(_viewport));
+        if (IsImageCropping)
+        {
+            var cropHandle = HitImageCrop(point);
+            if (cropHandle != SelectionHandle.None)
+            {
+                BeginImageCropGesture(cropHandle, point);
+                CaptureViewport(e.Pointer);
+                UpdateCursor();
+                e.Handled = true;
+                return;
+            }
+            CommitImageCrop();
+        }
+        if (TryBeginImageCropAt(point, e.ClickCount, e.KeyModifiers))
+        {
+            e.Handled = true;
+            return;
+        }
         SelectionHandle handle = HitSelectionHandle(point);
         if (_selected is not null && handle != SelectionHandle.None)
         {
@@ -569,7 +729,7 @@ public sealed partial class EditorView : UserControl
             {
                 SelectItem(null);
                 _gestureStart = point;
-                _pending = new AnnotationItem { Tool = AnnotationTool.Text, Color = _color, Width = _strokeWidth, FontSize = _textSize, Start = point, End = point };
+                _pending = CreateShapeAnnotation(AnnotationTool.Text, point);
                 CaptureViewport(e.Pointer);
             }
         }
@@ -577,13 +737,29 @@ public sealed partial class EditorView : UserControl
         {
             SelectItem(null);
             _gestureStart = point;
-            _pending = new AnnotationItem { Tool = _tool, Color = _color, Width = _strokeWidth, Start = point, End = point };
+            _pending = CreateShapeAnnotation(_tool, point);
             if (_tool is AnnotationTool.Pen or AnnotationTool.Highlight)
                 _pending.Points.Add(point);
             CaptureViewport(e.Pointer);
         }
         InvalidateScene();
         e.Handled = true;
+    }
+
+    private AnnotationItem CreateShapeAnnotation(AnnotationTool tool, Point point)
+    {
+        var appearance = AppearanceFor(tool);
+        var item = new AnnotationItem
+        {
+            Tool = tool, Color = appearance.Color, Width = appearance.Width, Start = point, End = point,
+            ArrowStyle = tool == AnnotationTool.Arrow ? _arrowStyle : ArrowStyleOptions.Default
+        };
+        if (tool == AnnotationTool.Text)
+        {
+            item.FontSize = _textSize;
+            item.TextFontFamily = _textFontFamily;
+        }
+        return item;
     }
 
     private void OnMouseMove(object? sender, PointerEventArgs e)
@@ -602,6 +778,13 @@ public sealed partial class EditorView : UserControl
             return;
 
         Point point = ClampPoint(ViewportToImage(e.GetPosition(_viewport)));
+        if (IsImageCropping)
+        {
+            if (_cropDragSource is not null) UpdateImageCropGesture(point);
+            else { _hoverHandle = HitImageCrop(point); UpdateCursor(); }
+            e.Handled = true;
+            return;
+        }
         if (_marqueeStart is not null)
         {
             _marquee = AnnotationItem.Span(_marqueeStart.Value, point);
@@ -630,6 +813,14 @@ public sealed partial class EditorView : UserControl
     {
         if (ChangedButton(e) is not (MouseButton.Left or MouseButton.Middle))
             return;
+        if (_cropDragSource is not null)
+        {
+            UpdateImageCropGesture(ClampPoint(ViewportToImage(e.GetPosition(_viewport))));
+            EndImageCropGesture();
+            UpdateCursor();
+            e.Handled = true;
+            return;
+        }
         if (_pending is not null)
         {
             Point point = ClampPoint(ViewportToImage(e.GetPosition(_viewport)));
@@ -651,6 +842,12 @@ public sealed partial class EditorView : UserControl
         CompleteGesture();
         // One wheel notch is Delta.Y = 1 (WPF reported 120).
         double factor = Math.Pow(1.12, e.Delta.Y);
+        if (IsImageCropping && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            SetImageCropZoom(ImageCropZoom * factor);
+            e.Handled = true;
+            return;
+        }
         ZoomAt(e.GetPosition(_viewport), _zoom * factor);
         e.Handled = true;
     }
@@ -658,6 +855,16 @@ public sealed partial class EditorView : UserControl
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
         KeyModifiers modifiers = e.KeyModifiers;
+        if (HandleImageCropKey(e)) return;
+        if (IsImageCropping)
+        {
+            if (modifiers == KeyModifiers.Control && e.Key == Key.Z) { Undo(); e.Handled = true; }
+            else if ((modifiers == KeyModifiers.Control && e.Key == Key.Y)
+                || (modifiers == (KeyModifiers.Control | KeyModifiers.Shift) && e.Key == Key.Z)) { Redo(); e.Handled = true; }
+            else if (modifiers == KeyModifiers.None && e.Key == Key.Space)
+            { _spaceDown = true; UpdateCursor(); e.Handled = true; }
+            return;
+        }
         if (IsTextEditing)
         {
             if (modifiers == KeyModifiers.Control && e.Key == Key.Enter)
@@ -756,9 +963,10 @@ public sealed partial class EditorView : UserControl
                 Tool = AnnotationTool.Text,
                 Start = start,
                 End = start,
-                Color = _color,
-                Width = _strokeWidth,
+                Color = AppearanceFor(AnnotationTool.Text).Color,
+                Width = AppearanceFor(AnnotationTool.Text).Width,
                 FontSize = _textSize,
+                TextFontFamily = _textFontFamily,
                 TextWidth = Math.Min(placement?.Width > 1 ? placement.Value.Width : 360, availableWidth),
                 TextBoxHeight = placement?.Height ?? 0
             };
@@ -874,6 +1082,11 @@ public sealed partial class EditorView : UserControl
         double border = 1 / _zoom;
         _textEditBorder.BorderThickness = new Thickness(border);
         _textEditor.FontSize = _textDraft.FontSize;
+        var typeface = _textDraft.EffectiveTextTypeface;
+        _textEditor.FontFamily = typeface.FontFamily;
+        _textEditor.FontWeight = typeface.Weight;
+        _textEditor.FontStyle = typeface.Style;
+        _textEditor.FontStretch = typeface.Stretch;
         if ((_textEditor.Foreground as ISolidColorBrush)?.Color != _textDraft.Color)
         {
             var foreground = new SolidColorBrush(_textDraft.Color);
@@ -946,6 +1159,8 @@ public sealed partial class EditorView : UserControl
 
     private void OnHostMouseDown(object? sender, PointerPressedEventArgs e)
     {
+        if (e.GetCurrentPoint(null).Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed && IsImageCropping && !IsWithin(this, e.Source))
+            CommitImageCrop();
         if (e.GetCurrentPoint(null).Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed && IsTextEditing && !IsWithin(_textEditor, e.Source))
         {
             _outsideTextClick = IsWithin(_viewport, e.Source);
@@ -989,6 +1204,7 @@ public sealed partial class EditorView : UserControl
 
     private void CompleteGesture()
     {
+        EndImageCropGesture();
         Rect? marquee = _marquee;
         HashSet<AnnotationItem>? marqueeOriginal = _marqueeOriginal;
         _marquee = null;
@@ -1470,12 +1686,19 @@ public sealed partial class EditorView : UserControl
                     context.DrawImage(_image, imageBounds);
                 if ((layers & SceneLayers.Annotations) != 0)
                     foreach (AnnotationItem annotation in _annotations)
-                        if (!onScreen || !IsTextEditing || !ReferenceEquals(annotation, _textTarget))
+                        if (onScreen && IsImageCropping && ReferenceEquals(annotation, _cropTarget))
+                            _cropDraft!.Draw(context);
+                        else if (!onScreen || !IsTextEditing || !ReferenceEquals(annotation, _textTarget))
                             annotation.Draw(context);
             }
         }
         if ((layers & SceneLayers.Interaction) != 0)
         {
+            if (onScreen && IsImageCropping)
+            {
+                DrawImageCrop(context, imageBounds);
+                return;
+            }
             if (_pending?.Tool == AnnotationTool.Text)
             {
                 Rect bounds = _pending.Bounds;
@@ -1556,7 +1779,7 @@ public sealed partial class EditorView : UserControl
 
     private void UpdateCursor()
     {
-        _viewport.Cursor = _panning || _spaceDown ? EditorCursor(StandardCursorType.Hand) : (_transformHandle != SelectionHandle.None ? _transformHandle : _hoverHandle) switch
+        _viewport.Cursor = _panning || _spaceDown ? EditorCursor(StandardCursorType.Hand) : (_cropHandle != SelectionHandle.None ? _cropHandle : _transformHandle != SelectionHandle.None ? _transformHandle : _hoverHandle) switch
         {
             SelectionHandle.TopLeft => EditorCursor(StandardCursorType.TopLeftCorner),
             SelectionHandle.BottomRight => EditorCursor(StandardCursorType.BottomRightCorner),
@@ -1659,7 +1882,12 @@ public sealed partial class EditorView : UserControl
         else Dispatcher.UIThread.Post(Redraw);
     }
 
-    private void RefreshLanguage() => _hintLabel.Text = I18n.T(IsTextEditing ? TextHint : IsCollage ? "Ctrl / Shift 多選 · 拖曳空白處框選 · 方向鍵微調 · 右鍵排列" : CanvasHint);
+    private void RefreshLanguage()
+    {
+        _hintLabel.Text = I18n.T(IsImageCropping ? CropHint : IsTextEditing ? TextHint : IsCollage
+            ? "Ctrl / Shift 多選 · 雙擊圖片裁剪 · 拖曳空白處框選 · 方向鍵微調" : CanvasHint);
+        RefreshImageCropLanguage();
+    }
 
     private static Border CreateBadge(TextBlock label, HorizontalAlignment alignment) => new()
     {

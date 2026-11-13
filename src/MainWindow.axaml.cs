@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     string autoSaveDirectory = SettingsStore.Current.CaptureSaveDirectory;
     bool autoSaveEnabled = SettingsStore.Current.AutoSaveCaptures;
     string? autoSavePath;
+    string? documentHistoryPath;
     long autoSavedRevision = -1;
     int documentGeneration;
     long autoSaveSequence;
@@ -50,6 +51,8 @@ public partial class MainWindow : Window
     bool showingUpdateStatus;
     AnnotationTool activeTool = AnnotationTool.Pen;
     Color activeColor = Color.FromRgb(99, 213, 197);
+    ArrowStylePanel? arrowStylePanel;
+    Flyout? arrowStyleFlyout;
 #if WINDOWS
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -62,7 +65,13 @@ public partial class MainWindow : Window
     bool CanStartCapture => !historyDragInProgress && IsEnabled && IsNativeWindowEnabled && !OwnedWindows.Any(window => window.IsDialog && window.IsVisible);
     public MainWindow()
     {
-        InitializeComponent(); ToolClick(new Button { Tag = "Pen" }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
+        InitializeComponent(); Editor.ArrowStyle = SettingsStore.Current.ArrowStyle;
+        ToolClick(new Button { Tag = SettingsStore.Current.LastAnnotationTool.ToString() }, new()); Editor.SetColor(Color.FromRgb(99, 213, 197));
+        foreach (var tool in Enum.GetValues<AnnotationTool>().Where(ToolAppearanceOptions.Supports))
+            Editor.RestoreToolAppearance(tool, SettingsStore.Current.GetToolAppearance(tool));
+        Editor.RestoreTextSize(SettingsStore.Current.TextSize);
+        Editor.RestoreTextFontFamily(SettingsStore.Current.TextFontFamily);
+        RefreshProperties();
         if (!PlatformInfo.IsWindows) RootBorder.CornerRadius = default;
         else RootBorder.CornerRadius = new CornerRadius(10);
         if (Application.Current?.TryGetResource("SnipFlowIcon", null, out var icon) == true && icon is WindowIcon windowIcon) Icon = windowIcon;
@@ -79,12 +88,12 @@ public partial class MainWindow : Window
         SettingsStore.Changed += SettingsChanged;
         autoSaveTimer.Tick += AutoSaveTick;
         Closing += WindowClosing;
-        Closed += (_, _) => { isClosed = true; CloseColorPalette(); autoSaveTimer.Stop(); Updates.Changed -= UpdateChanged; SettingsStore.Changed -= SettingsChanged; I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
+        Closed += (_, _) => { isClosed = true; CloseColorPalette(); arrowStyleFlyout?.Hide(); autoSaveTimer.Stop(); Updates.Changed -= UpdateChanged; SettingsStore.Changed -= SettingsChanged; I18n.Changed -= LanguageChanged; ReleaseHotkey(); };
         ApplyWindowMode(true);
         // The native window exists from construction (WPF: SourceInitialized), even when SnipFlow starts in the tray.
         WindowAppearance.Apply(this); WindowBoundsService.Attach(this); UpdateMinimumWindowSize(); SetHotkey(SettingsStore.Current.Hotkey);
         RefreshDesktopShortcut();
-        SizeChanged += (_, _) => { UpdateMinimumWindowSize(); RememberNormalBounds(); };
+        SizeChanged += (_, _) => { UpdateMinimumWindowSize(); RememberNormalBounds(); FitArrowStylePanel(); };
         PositionChanged += (_, _) => { UpdateMinimumWindowSize(); RememberNormalBounds(); };
         // The first Show centers the panel; later shows keep the position set by the user or the editor layout.
         Opened += (_, _) => WindowStartupLocation = WindowStartupLocation.Manual;
@@ -341,7 +350,17 @@ public partial class MainWindow : Window
         if (IsVideoPath(path)) { _ = OpenVideoEditorAsync(path); return; }
         if (Path.GetExtension(path).Equals(".snipflow", StringComparison.OrdinalIgnoreCase)) { OpenProject(path); return; }
         if (busy || capturePending || historyDragInProgress || !CanStartCapture || !PrepareToDiscard()) return;
-        try { var image = HistoryStore.Read(path); LoadDocument(image); ApplyWindowMode(false); ImageInfo.Text = $"{image.PixelSize.Width:N0} × {image.PixelSize.Height:N0} px"; SetStatus("已開啟 {0}", Path.GetFileName(path)); RefreshDocumentState(); }
+        try
+        {
+            // Restore editable annotations before replacing the current document. Legacy PNG-only
+            // captures still open normally; a damaged project never falls back to the raw capture.
+            DocumentFileStore.Open(Editor, path);
+            ResetDocumentStorage();
+            documentHistoryPath = HistoryStore.TryGetDocumentPath(path);
+            ApplyWindowMode(false);
+            SetStatus("已開啟 {0}", Path.GetFileName(path));
+            RefreshDocumentState(); QueueAutoSave();
+        }
         catch (Exception ex) { ReportError(ex, "圖片無法開啟"); }
     }
     /// <summary>Opens files passed on the command line or from another launch: one file opens, several images form a collage.</summary>
@@ -406,24 +425,22 @@ public partial class MainWindow : Window
         try
         {
             var image = Editor.ExportImage();
-            var project = Editor.IsCollage ? Editor.CaptureSession() : null;
+            var project = Editor.CaptureSession();
             revision = Editor.Revision;
             var path = autoSavePath ??= CaptureFileStore.CreatePath(autoSaveDirectory);
+            var historyPath = documentHistoryPath;
             // The last saved revision becomes uncertain as soon as a replacement starts.
             // Undoing back to it must still wait for, and replace, the pending write.
             autoSavedRevision = -1; Editor.MarkUnsaved();
-            autoSaveWrite = Task.Run(() =>
-            {
-                CaptureFileStore.Save(image, path);
-                if (project is not null) EditorSessionStore.SaveProject(project, Path.ChangeExtension(path, ".snipflow"));
-            });
+            autoSaveWrite = Task.Run(() => DocumentFileStore.Save(project, image, path, historyPath));
             await autoSaveWrite;
             if (!isClosed && SettingsStore.Current.AutoSaveCaptures && generation == documentGeneration && sequence == autoSaveSequence && path == autoSavePath)
             {
                 autoSavedRevision = revision;
                 if (Editor.Revision == revision && !Editor.IsInteracting)
                 {
-                    Editor.MarkSaved(); SetStatus(project is null ? "已自動儲存：{0}" : "已自動儲存 PNG 與可編輯專案：{0}", project is null ? path : Path.ChangeExtension(path, ".snipflow"));
+                    Editor.MarkSaved(); SetStatus("已自動儲存 PNG 與可編輯專案：{0}", Path.ChangeExtension(path, ".snipflow"));
+                    if (historyPath is not null) RefreshHistory();
                 }
             }
         }
@@ -450,11 +467,12 @@ public partial class MainWindow : Window
             FinishAutoSaveWrite();
             autoSaveSequence++;
             var image = Editor.ExportImage();
+            var project = Editor.CaptureSession();
             var path = autoSavePath ??= CaptureFileStore.CreatePath(autoSaveDirectory);
-            CaptureFileStore.Save(image, path);
-            if (Editor.IsCollage) EditorSessionStore.SaveProject(Editor, Path.ChangeExtension(path, ".snipflow"));
+            DocumentFileStore.Save(project, image, path, documentHistoryPath);
             autoSavedRevision = Editor.Revision; Editor.MarkSaved();
-            SetStatus(Editor.IsCollage ? "已自動儲存 PNG 與可編輯專案：{0}" : "已自動儲存：{0}", Editor.IsCollage ? Path.ChangeExtension(path, ".snipflow") : path);
+            SetStatus("已自動儲存 PNG 與可編輯專案：{0}", Path.ChangeExtension(path, ".snipflow"));
+            if (documentHistoryPath is not null) RefreshHistory();
             return true;
         }
         catch (Exception ex)
@@ -548,6 +566,7 @@ public partial class MainWindow : Window
     void ExpandClick(object? sender, RoutedEventArgs e) => ApplyWindowMode(false);
     void LanguageChanged(object? sender, EventArgs e) => Dispatcher.UIThread.Post(() =>
     {
+        TextFontSelector.RefreshLanguage();
         RefreshDocumentState();
         RefreshHistory();
         RefreshHotkeyHint();
@@ -599,14 +618,26 @@ public partial class MainWindow : Window
         refreshingProperties = true;
         try
         {
+            CropImageButton.IsEnabled = !busy && !capturePending && !Editor.IsImageCropping
+                && Editor.SelectionCount == 1 && Editor.SelectedImageCount == 1;
             var shownTool = Editor.SelectedTool ?? activeTool;
             ToolLabel.Text = ToolName(shownTool);
             TextProperties.IsVisible = shownTool == AnnotationTool.Text;
             WidthProperties.IsVisible = shownTool is not (AnnotationTool.Text or AnnotationTool.Image);
+            ArrowStyleButton.IsVisible = shownTool == AnnotationTool.Arrow && !Editor.IsImageCropping;
+            ArrowStyleButton.IsEnabled = !busy && !capturePending && !Editor.IsImageCropping;
+            if (!ArrowStyleButton.IsVisible || !ArrowStyleButton.IsEnabled) arrowStyleFlyout?.Hide();
+            if (arrowStylePanel is not null)
+            {
+                arrowStylePanel.Value = Editor.SelectedArrowStyle ?? Editor.ArrowStyle;
+                arrowStylePanel.PreviewColor = Editor.SelectedColor ?? Editor.DrawingColor;
+                arrowStylePanel.PreviewWidth = Editor.SelectedStrokeWidth ?? Editor.StrokeWidth;
+            }
             ColorButtons.IsVisible = shownTool is not (AnnotationTool.Image or AnnotationTool.Mosaic);
             WidthSlider.Value = Editor.SelectedStrokeWidth ?? Editor.StrokeWidth;
             if (!TextSizeBox.IsKeyboardFocusWithin) TextSizeBox.Text = (Editor.SelectedTextSize ?? Editor.TextSize).ToString("0.#", CultureInfo.CurrentCulture);
-            var color = Editor.SelectedColor ?? activeColor;
+            TextFontSelector.Value = Editor.SelectedTextFontFamily ?? Editor.TextFontFamily;
+            var color = Editor.SelectedColor ?? Editor.DrawingColor;
             foreach (var button in ColorButtons.Children.OfType<Button>())
             {
                 if (button.Tag is not string hex) continue;
@@ -642,14 +673,25 @@ public partial class MainWindow : Window
         {
             FinishAutoSaveWrite();
             var isAutoSaveFile = string.Equals(Path.GetFullPath(fileName), autoSavePath, PlatformInfo.PathComparison);
+            var companion = Path.ChangeExtension(fileName, ".snipflow");
+            if (!isAutoSaveFile && (File.Exists(companion) || Directory.Exists(companion))
+                && MessageBox.Show(this, I18n.F("同名的可編輯專案已存在：{0}\n儲存 PNG 時也會覆寫此專案，要繼續嗎？", companion),
+                    I18n.T("覆寫可編輯專案"), MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return false;
             if (isAutoSaveFile) { autoSaveSequence++; autoSavedRevision = -1; }
-            var image = Editor.ExportImage(); CaptureFileStore.Save(image, fileName);
+            var image = Editor.ExportImage();
+            var project = Editor.CaptureSession();
+            // Manual overwrite must advance the editable companion too, otherwise reopening
+            // would prefer stale objects over the newly exported PNG.
+            DocumentFileStore.Save(project, image, fileName, isAutoSaveFile ? documentHistoryPath : null);
             if (!Editor.IsCollage)
             {
                 if (isAutoSaveFile) autoSavedRevision = Editor.Revision;
                 Editor.MarkSaved();
             }
-            HistoryStore.Add(image); RefreshHistory(); SetStatus("已儲存 {0}", Path.GetFileName(fileName));
+            var historyPath = HistoryStore.Add(image);
+            if (historyPath is not null) HistoryStore.UpdateDocument(project, image, historyPath);
+            RefreshHistory(); SetStatus("已儲存 PNG 與可編輯專案：{0}", Path.ChangeExtension(fileName, ".snipflow"));
             return true;
         }
         catch (Exception ex) { ReportError(ex, "儲存失敗"); return false; }
@@ -700,17 +742,123 @@ public partial class MainWindow : Window
     }
     void ToolClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: string tag } && Enum.TryParse<AnnotationTool>(tag, out var tool))
-        { activeTool = tool; Editor.SetTool(tool); foreach (var candidate in ToolButtons.Children.OfType<Button>().Where(b => b.Tag is string)) { candidate.Background = candidate.Tag?.ToString() == tag ? ThemeService.Brush("Selected") : Brushes.Transparent; candidate.Foreground = ThemeService.Brush("Ink"); } RefreshProperties(); SetStatus(ToolKey(tool)); }
+        if (sender is not Button { Tag: string tag } || !Enum.TryParse<AnnotationTool>(tag, out var tool)
+            || (tool != AnnotationTool.Select && !ToolAppearanceOptions.Supports(tool))) return;
+        activeTool = tool;
+        Editor.SetTool(tool);
+        foreach (var candidate in ToolButtons.Children.OfType<Button>().Where(b => b.Tag is string))
+        {
+            candidate.Background = candidate.Tag?.ToString() == tag ? ThemeService.Brush("Selected") : Brushes.Transparent;
+            candidate.Foreground = ThemeService.Brush("Ink");
+        }
+        RefreshProperties();
+        SetStatus(ToolKey(tool));
+        var previous = SettingsStore.Current.LastAnnotationTool;
+        if (previous == tool) return;
+        SettingsStore.Current.LastAnnotationTool = tool;
+        try { SettingsStore.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            SettingsStore.Current.LastAnnotationTool = previous;
+            SettingsStore.Log(ex);
+            SetStatus("工具已切換，但偏好設定未儲存。");
+        }
     }
     void ColorClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: string value }) ApplyAnnotationColor(Color.Parse(value));
     }
-    void StrokeChanged(object? sender, RangeBaseValueChangedEventArgs e) { if (Editor != null && !refreshingProperties) Editor.StrokeWidth = e.NewValue; }
+    void StrokeChanged(object? sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (Editor == null || refreshingProperties || busy || capturePending || Editor.IsImageCropping) return;
+        var appearanceTool = Editor.AppearanceTool;
+        Editor.StrokeWidth = e.NewValue;
+        if (ToolAppearanceOptions.Supports(appearanceTool)) SaveToolAppearancePreferences(appearanceTool);
+    }
+
+    void SaveToolAppearancePreferences(AnnotationTool tool, List<string>? previousRecentColors = null)
+    {
+        var previous = SettingsStore.Current.GetToolAppearance(tool);
+        var appearance = Editor.GetToolAppearance(tool);
+        if (previousRecentColors is null && previous == appearance) return;
+        SettingsStore.Current.SetToolAppearance(tool, appearance);
+        try { SettingsStore.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            SettingsStore.Current.SetToolAppearance(tool, previous);
+            if (previousRecentColors is not null) SettingsStore.Current.RecentColors = previousRecentColors;
+            SettingsStore.Log(ex);
+            SetStatus("工具顏色與粗細已套用，但偏好設定未儲存。");
+        }
+    }
+    void ArrowStyleClick(object? sender, RoutedEventArgs e)
+    {
+        if (Editor == null || refreshingProperties || busy || capturePending || Editor.IsImageCropping) return;
+        if ((Editor.SelectedTool ?? activeTool) != AnnotationTool.Arrow) return;
+        if (arrowStyleFlyout?.IsOpen == true) { arrowStyleFlyout.Hide(); return; }
+        CloseColorPalette();
+        Editor.EndPropertyEdit();
+        if (arrowStylePanel is null)
+        {
+            arrowStylePanel = new ArrowStylePanel();
+            arrowStylePanel.ValueChanged += ArrowStyleChanged;
+            arrowStyleFlyout = new Flyout { Content = arrowStylePanel, Placement = PlacementMode.Bottom, VerticalOffset = 6 };
+            if (Application.Current is { } app && app.TryGetResource(typeof(FlyoutPresenter), app.ActualThemeVariant, out var resource)
+                && resource is Avalonia.Styling.ControlTheme theme)
+            {
+                var presenterTheme = new Avalonia.Styling.ControlTheme { TargetType = typeof(FlyoutPresenter), BasedOn = theme };
+                presenterTheme.Setters.Add(new Avalonia.Styling.Setter(PaddingProperty, new Thickness(12)));
+                presenterTheme.Setters.Add(new Avalonia.Styling.Setter(MaxWidthProperty, 380d));
+                arrowStyleFlyout.FlyoutPresenterTheme = presenterTheme;
+            }
+        }
+        FitArrowStylePanel();
+        RefreshProperties();
+        arrowStyleFlyout!.ShowAt(ArrowStyleButton);
+    }
+    void FitArrowStylePanel()
+    {
+        if (arrowStylePanel is null) return;
+        arrowStylePanel.Width = Math.Min(340, Math.Max(1, Bounds.Width - 64));
+        arrowStylePanel.MaxHeight = Math.Min(500, Math.Max(1, Bounds.Height - 64));
+    }
+    void ArrowStyleChanged(object? sender, ArrowStyleChangedEventArgs e)
+    {
+        if (Editor == null || refreshingProperties || busy || capturePending || Editor.IsImageCropping) return;
+        if ((Editor.SelectedTool ?? activeTool) != AnnotationTool.Arrow) return;
+        if (e.DirectionPreset is { } doubleEnded) Editor.DoubleEndedArrow = doubleEnded;
+        else Editor.UpdateArrowStyle(e.Previous, e.Value);
+        var previous = SettingsStore.Current.ArrowStyle;
+        if (previous == Editor.ArrowStyle) return;
+        SettingsStore.Current.ArrowStyle = Editor.ArrowStyle;
+        try { SettingsStore.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            SettingsStore.Current.ArrowStyle = previous;
+            SettingsStore.Log(ex);
+            SetStatus("箭頭樣式已套用，但偏好設定未儲存。");
+        }
+    }
     void PropertyDragStarted(object? sender, VectorEventArgs e) => Editor.BeginPropertyEdit();
     void PropertyDragCompleted(object? sender, VectorEventArgs e) => Editor.EndPropertyEdit();
     void TextSizeChanged(object? sender, RoutedEventArgs e) => ApplyTextSize();
+    void TextFontChanged(object? sender, EventArgs e)
+    {
+        if (refreshingProperties || Editor == null || busy || capturePending || Editor.IsImageCropping
+            || Editor.AppearanceTool != AnnotationTool.Text) return;
+        Editor.TextFontFamily = TextFontSelector.Value;
+        var previous = SettingsStore.Current.TextFontFamily;
+        var font = Editor.TextFontFamily;
+        if (previous == font) return;
+        SettingsStore.Current.TextFontFamily = font;
+        try { SettingsStore.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            SettingsStore.Current.TextFontFamily = previous;
+            SettingsStore.Log(ex);
+            SetStatus("文字字型已套用，但偏好設定未儲存。");
+        }
+    }
     void TextSizeKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter) { ApplyTextSize(); Editor.Focus(); e.Handled = true; }
@@ -718,9 +866,39 @@ public partial class MainWindow : Window
     }
     void ApplyTextSize()
     {
-        if (refreshingProperties || Editor == null) return;
-        if (double.TryParse(TextSizeBox.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var size) && double.IsFinite(size)) Editor.TextSize = Math.Clamp(size, 12, 240);
+        if (refreshingProperties || Editor == null || busy || capturePending || Editor.IsImageCropping) return;
+        var current = Editor.SelectedTextSize ?? Editor.TextSize;
+        if (TryGetTextSizeChange(TextSizeBox.Text, current, CultureInfo.CurrentCulture, out var size))
+        {
+            Editor.TextSize = size;
+            SaveTextSizePreference();
+        }
         TextSizeBox.Text = (Editor.SelectedTextSize ?? Editor.TextSize).ToString("0.#", CultureInfo.CurrentCulture);
+    }
+    static bool TryGetTextSizeChange(string? input, double current, CultureInfo culture, out double normalized)
+    {
+        normalized = current;
+        // The field displays one decimal place. An untouched value must not round an existing
+        // object's font size or turn its size into the default merely because focus moved away.
+        if (string.Equals(input, current.ToString("0.#", culture), StringComparison.Ordinal)
+            || !double.TryParse(input, NumberStyles.Float, culture, out var size) || !double.IsFinite(size)) return false;
+        size = Math.Clamp(size, 12, 240);
+        if (size == current) return false;
+        normalized = size;
+        return true;
+    }
+    void SaveTextSizePreference()
+    {
+        var previous = SettingsStore.Current.TextSize;
+        if (previous == Editor.TextSize) return;
+        SettingsStore.Current.TextSize = Editor.TextSize;
+        try { SettingsStore.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            SettingsStore.Current.TextSize = previous;
+            SettingsStore.Log(ex);
+            SetStatus("文字字級已套用，但偏好設定未儲存。");
+        }
     }
     void UndoClick(object? sender, RoutedEventArgs e) { if (!busy && !capturePending) Editor.Undo(); }
     void RedoClick(object? sender, RoutedEventArgs e) { if (!busy && !capturePending) Editor.Redo(); }
@@ -783,6 +961,24 @@ public partial class MainWindow : Window
     {
         if (busy || capturePending || historyDragInProgress) return;
         var modifiers = e.KeyModifiers;
+        if (arrowStyleFlyout?.IsOpen == true) return;
+        if (IsFontPickerInput(TextFontSelector.IsChoosingFont, modifiers)) return;
+        if (Editor.IsImageCropping)
+        {
+            if (modifiers == KeyModifiers.Control && e.Key == Key.S)
+            { Editor.CommitImageCrop(); SaveDocument(); e.Handled = true; }
+            else if (modifiers == (KeyModifiers.Control | KeyModifiers.Shift) && e.Key == Key.S)
+            { Editor.CommitImageCrop(); SaveProjectCurrent(saveAs: true); e.Handled = true; }
+            else if (modifiers == KeyModifiers.Control && e.Key == Key.C)
+            { Editor.CommitImageCrop(); CopyClick(this, new()); e.Handled = true; }
+            else if (modifiers == KeyModifiers.Control && e.Key == Key.Z)
+            { Editor.Undo(); e.Handled = true; }
+            else if ((modifiers == KeyModifiers.Control && e.Key == Key.Y)
+                || (modifiers == (KeyModifiers.Control | KeyModifiers.Shift) && e.Key == Key.Z))
+            { Editor.Redo(); e.Handled = true; }
+            else Editor.HandleImageCropKey(e);
+            return;
+        }
         if (Editor.IsTextEditing)
         {
             if (modifiers == KeyModifiers.Control && e.Key == Key.S) { Editor.CommitTextEdit(); SaveDocument(); e.Handled = true; }
@@ -819,6 +1015,8 @@ public partial class MainWindow : Window
         if (key != null) { ToolClick(new Button { Tag = key }, new()); e.Handled = true; }
     }
     void MinimizeClick(object? sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    static bool IsFontPickerInput(bool choosingFont, KeyModifiers modifiers) =>
+        choosingFont && (modifiers & (KeyModifiers.Control | KeyModifiers.Meta)) == 0;
     void MaximizeClick(object? sender, RoutedEventArgs e) => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
     void HideClick(object? sender, RoutedEventArgs e) => Hide();
     void ExitClick(object? sender, RoutedEventArgs e) => ((App)Application.Current!).ExitRequested();

@@ -10,7 +10,7 @@ namespace SnipFlow.Services;
 internal static class EditorSessionStore
 {
     private const string SessionKind = "SnipFlow.UpdateSession";
-    private const int SchemaVersion = 3;
+    private const int SchemaVersion = 8;
     private const long MaxManifestBytes = 64 * 1024 * 1024;
     private const long MaxImageBytes = 512 * 1024 * 1024;
     private const long MaxProjectBytes = 1024L * 1024 * 1024;
@@ -47,30 +47,35 @@ internal static class EditorSessionStore
     internal static void SaveProject(EditorSessionSnapshot snapshot, string path)
     {
         var destination = NormalizeProjectPath(path);
-        ValidateSnapshot(snapshot);
+        var manifest = CreateManifest(snapshot);
         var parent = Path.GetDirectoryName(destination)!;
         Directory.CreateDirectory(parent);
         if (File.Exists(destination)) RejectReparsePoint(destination);
         var temporary = Path.Combine(parent, ".snipflow-" + Guid.NewGuid().ToString("N") + ".tmp");
-        string? checkpoint = null;
         var temporaryCreated = false;
         try
         {
-            checkpoint = SaveSnapshot(snapshot);
-            var manifest = ReadManifest(Path.Combine(checkpoint, "manifest.json"));
             using (var stream = CreateNewFile(temporary))
             {
                 temporaryCreated = true;
                 using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
                 {
-                    foreach (var name in CheckpointFileNames(manifest))
+                    // Encode directly into the archive instead of writing and deleting a separate
+                    // directory of PNGs and JSON for every automatic save.
+                    long writtenBytes = 0;
+                    WriteProjectEntry(archive, "manifest.json", MaxManifestBytes,
+                        output => JsonSerializer.Serialize(output, manifest, JsonOptions), ref writtenBytes);
+                    WriteProjectEntry(archive, "original.png", MaxImageBytes,
+                        output => ImageTools.SavePng(snapshot.Image, output), ref writtenBytes);
+                    for (var index = 0; index < snapshot.Annotations.Count; index++)
                     {
-                        var entry = archive.CreateEntry(name, name == "manifest.json"
-                            ? CompressionLevel.Optimal : CompressionLevel.NoCompression);
-                        using var source = OpenFile(Path.Combine(checkpoint, name),
-                            name == "manifest.json" ? MaxManifestBytes : MaxImageBytes);
-                        using var output = entry.Open();
-                        source.CopyTo(output);
+                        var item = snapshot.Annotations[index];
+                        var image = item.Tool == AnnotationTool.Mosaic ? item.Mosaic
+                            : item.Tool == AnnotationTool.Image ? item.Image : null;
+                        if (image is null) continue;
+                        var name = item.Tool == AnnotationTool.Mosaic ? MosaicFileName(index) : ImageFileName(index);
+                        WriteProjectEntry(archive, name, MaxImageBytes,
+                            output => ImageTools.SavePng(image, output), ref writtenBytes);
                     }
                 }
                 if (stream.Length > MaxArchiveBytes) throw InvalidCheckpoint();
@@ -88,8 +93,19 @@ internal static class EditorSessionStore
         finally
         {
             if (temporaryCreated) TryDeleteOwnFile(temporary);
-            if (checkpoint is not null) TryDeleteOwnCheckpoint(checkpoint);
         }
+    }
+
+    private static void WriteProjectEntry(ZipArchive archive, string name, long maximumBytes,
+        Action<Stream> write, ref long totalBytes)
+    {
+        var entry = archive.CreateEntry(name, name == "manifest.json"
+            ? CompressionLevel.Optimal : CompressionLevel.NoCompression);
+        using var output = entry.Open();
+        using var limited = new LimitedWriteStream(output, Math.Min(maximumBytes, MaxProjectBytes - totalBytes));
+        write(limited);
+        if (limited.BytesWritten == 0) throw InvalidCheckpoint();
+        totalBytes += limited.BytesWritten;
     }
 
     internal static void RestoreProject(EditorView editor, string path)
@@ -123,6 +139,7 @@ internal static class EditorSessionStore
         var expected = CheckpointFileNames(manifest).ToHashSet(StringComparer.Ordinal);
         if (expected.Count != entries.Count || entries.Keys.Any(name => !expected.Contains(name))) throw InvalidCheckpoint();
 
+        using var workspace = new ProjectWorkspace();
         string? checkpoint = null;
         try
         {
@@ -137,7 +154,7 @@ internal static class EditorSessionStore
                 IsCollage = manifest.IsCollage,
                 Annotations = manifest.Annotations
             };
-            checkpoint = CreateCheckpointDirectory(manifest.SessionId);
+            checkpoint = CreateCheckpointDirectory(manifest.SessionId, workspace.Root);
             foreach (var name in expected)
             {
                 if (name == "manifest.json") continue;
@@ -147,15 +164,15 @@ internal static class EditorSessionStore
             }
             WriteManifest(manifest, checkpoint);
             // Restore validates every PNG before changing the editor. ZIP paths are never extracted.
-            Restore(editor, checkpoint);
+            RestoreCheckpoint(editor, checkpoint, workspace.Root);
         }
         finally
         {
-            if (checkpoint is not null) TryDeleteOwnCheckpoint(checkpoint);
+            if (checkpoint is not null) TryDeleteOwnCheckpoint(checkpoint, workspace.Root);
         }
     }
 
-    private static string SaveSnapshot(EditorSessionSnapshot snapshot)
+    private static SessionManifest CreateManifest(EditorSessionSnapshot snapshot)
     {
         ValidateSnapshot(snapshot);
         var manifest = new SessionManifest
@@ -170,10 +187,16 @@ internal static class EditorSessionStore
             Annotations = snapshot.Annotations.Select(ToData).ToList()
         };
         ValidateManifest(manifest);
+        return manifest;
+    }
+
+    private static string SaveSnapshot(EditorSessionSnapshot snapshot, string? checkpointRoot = null)
+    {
+        var manifest = CreateManifest(snapshot);
         string? directory = null;
         try
         {
-            directory = CreateCheckpointDirectory(manifest.SessionId);
+            directory = CreateCheckpointDirectory(manifest.SessionId, checkpointRoot);
             var writtenBytes = WritePng(snapshot.Image, Path.Combine(directory, "original.png"));
             for (var index = 0; index < snapshot.Annotations.Count; index++)
             {
@@ -191,16 +214,19 @@ internal static class EditorSessionStore
         }
         catch
         {
-            if (directory is not null) TryDeleteOwnCheckpoint(directory);
+            if (directory is not null) TryDeleteOwnCheckpoint(directory, checkpointRoot);
             throw;
         }
     }
 
     internal static void Restore(EditorView editor, string directory)
+        => RestoreCheckpoint(editor, directory);
+
+    private static void RestoreCheckpoint(EditorView editor, string directory, string? checkpointRoot = null)
     {
         ArgumentNullException.ThrowIfNull(editor);
         editor.VerifyAccess();
-        var checkpoint = ValidateDirectory(directory);
+        var checkpoint = ValidateDirectory(directory, checkpointRoot);
         var manifest = ReadManifest(Path.Combine(checkpoint, "manifest.json"));
         if (manifest.SessionId != Path.GetFileName(checkpoint)) throw InvalidCheckpoint();
         ValidatePngFiles(checkpoint, manifest);
@@ -231,7 +257,15 @@ internal static class EditorSessionStore
         {
             if (item is null)
                 throw InvalidCheckpoint();
+            if (!TextFonts.TryNormalizeFamily(item.TextFontFamily, out var fontFamily)
+                || (item.Tool != AnnotationTool.Text && fontFamily != TextFonts.DefaultFamily))
+                throw InvalidCheckpoint();
             if (!ImageOrientation.IsValid(item.TextOrientation) || (item.Tool != AnnotationTool.Text && item.TextOrientation != 0))
+                throw InvalidCheckpoint();
+            if (!ArrowStyleOptions.IsValid(item.ArrowStyle)
+                || (item.Tool != AnnotationTool.Arrow && item.ArrowStyle != ArrowStyleOptions.Default))
+                throw InvalidCheckpoint();
+            if (item.ImageCrop is { } crop && (item.Tool != AnnotationTool.Image || !ImageCropGeometry.IsValid(crop)))
                 throw InvalidCheckpoint();
             if (item.Tool == AnnotationTool.Mosaic)
                 pixels += ImagePixels(item.Mosaic ?? throw InvalidCheckpoint());
@@ -247,14 +281,19 @@ internal static class EditorSessionStore
         return (long)image.PixelSize.Width * image.PixelSize.Height;
     }
 
-    private static string CreateCheckpointDirectory(string sessionId)
+    private static string CreateCheckpointDirectory(string sessionId, string? checkpointRoot = null)
     {
         if (!Guid.TryParseExact(sessionId, "N", out _)) throw InvalidCheckpoint();
-        Directory.CreateDirectory(SettingsStore.DataRoot);
-        RejectReparsePoint(SettingsStore.DataRoot);
-        Directory.CreateDirectory(Root);
-        RejectReparsePoint(Root);
-        var directory = Path.Combine(Root, sessionId);
+        if (checkpointRoot is null)
+        {
+            Directory.CreateDirectory(SettingsStore.DataRoot);
+            RejectReparsePoint(SettingsStore.DataRoot);
+            Directory.CreateDirectory(Root);
+            RejectReparsePoint(Root);
+        }
+        var root = checkpointRoot ?? Root;
+        if (checkpointRoot is not null) ValidateDirectoryChain(root);
+        var directory = Path.Combine(root, sessionId);
         if (Directory.Exists(directory) || File.Exists(directory)) throw InvalidCheckpoint();
         Directory.CreateDirectory(directory);
         RejectReparsePoint(directory);
@@ -286,13 +325,27 @@ internal static class EditorSessionStore
 
     private static void ValidateManifest(SessionManifest manifest)
     {
-        if (manifest.SchemaVersion is not (1 or 2 or SchemaVersion) || manifest.Kind != SessionKind
+        if (manifest.SchemaVersion is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or SchemaVersion) || manifest.Kind != SessionKind
             || !Guid.TryParseExact(manifest.SessionId, "N", out _) || manifest.Annotations is null
             || manifest.Annotations.Count > MaxAnnotations)
             throw InvalidCheckpoint();
         ValidateImageSize(manifest.PixelWidth, manifest.PixelHeight);
         ValidateAnnotations(manifest.Annotations);
+        if (manifest.SchemaVersion < 7 && manifest.Annotations.Any(data => data.HasArrowStyle))
+            throw InvalidCheckpoint();
+        if (manifest.SchemaVersion >= 7 && manifest.Annotations.Any(data => data.HasDoubleEndedArrow
+            || (data.Tool == nameof(AnnotationTool.Arrow) && !data.HasArrowStyle)))
+            throw InvalidCheckpoint();
+        if (manifest.SchemaVersion < 6 && manifest.Annotations.Any(data => data.DoubleEndedArrow))
+            throw InvalidCheckpoint();
+        if (manifest.SchemaVersion < 8 && manifest.Annotations.Any(data => TextFonts.NormalizeFamily(data.TextFontFamily) != TextFonts.DefaultFamily))
+            throw InvalidCheckpoint();
         if (manifest.SchemaVersion < 3 && manifest.Annotations.Any(data => data.TextOrientation != 0))
+            throw InvalidCheckpoint();
+        if (manifest.SchemaVersion < 4 && manifest.Annotations.Any(data => data.ImageCrop is not null))
+            throw InvalidCheckpoint();
+        if (manifest.SchemaVersion == 4 && manifest.Annotations.Any(data => data.ImageCrop is { } crop
+            && !ImageCropGeometry.IsLegacyCrop(new Rect(crop.X, crop.Y, crop.Width, crop.Height))))
             throw InvalidCheckpoint();
         if (manifest.SchemaVersion == 1 && (manifest.IsCollage
             || manifest.Annotations.Any(data => data.Tool == AnnotationTool.Image.ToString() || data.ImageFile is not null)))
@@ -310,17 +363,21 @@ internal static class EditorSessionStore
         }
     }
 
-    private static string ValidateDirectory(string directory)
+    private static string ValidateDirectory(string directory, string? checkpointRoot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         if (!Path.IsPathFullyQualified(directory)) throw InvalidCheckpoint();
         var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
         if (!string.Equals(normalized, Path.TrimEndingDirectorySeparator(directory), PlatformInfo.PathComparison)
-            || !string.Equals(Path.GetDirectoryName(normalized), Root, PlatformInfo.PathComparison)
+            || !string.Equals(Path.GetDirectoryName(normalized), checkpointRoot ?? Root, PlatformInfo.PathComparison)
             || !Guid.TryParseExact(Path.GetFileName(normalized), "N", out _))
             throw InvalidCheckpoint();
-        RejectReparsePoint(SettingsStore.DataRoot);
-        RejectReparsePoint(Root);
+        if (checkpointRoot is null)
+        {
+            RejectReparsePoint(SettingsStore.DataRoot);
+            RejectReparsePoint(Root);
+        }
+        else ValidateDirectoryChain(checkpointRoot);
         RejectReparsePoint(normalized);
         if (!Directory.Exists(normalized)) throw InvalidCheckpoint();
         return normalized;
@@ -362,6 +419,36 @@ internal static class EditorSessionStore
         if (stream.Length > MaxImageBytes) throw InvalidCheckpoint();
         stream.Flush(flushToDisk: true);
         return stream.Length;
+    }
+
+    // The encoder writes synchronously to one ZIP entry. Check each write before forwarding it,
+    // so per-entry and aggregate uncompressed limits also apply during direct streaming.
+    private sealed class LimitedWriteStream(Stream target, long limit) : Stream
+    {
+        internal long BytesWritten { get; private set; }
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => target.Flush();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            if (buffer.Length > limit - BytesWritten) throw InvalidCheckpoint();
+            target.Write(buffer);
+            BytesWritten += buffer.Length;
+        }
+        public override void WriteByte(byte value)
+        {
+            Span<byte> buffer = stackalloc byte[1];
+            buffer[0] = value;
+            Write(buffer);
+        }
+        // The surrounding entry owns the target stream; disposing this limit wrapper leaves it open.
     }
 
     private static void ValidatePngFiles(string directory, SessionManifest manifest)
@@ -432,6 +519,9 @@ internal static class EditorSessionStore
                 throw InvalidCheckpoint();
             ValidatePoint(data.Start);
             ValidatePoint(data.End);
+            if (!TextFonts.TryNormalizeFamily(data.TextFontFamily, out var fontFamily)
+                || (tool != AnnotationTool.Text && fontFamily != TextFonts.DefaultFamily))
+                throw InvalidCheckpoint();
             points += data.Points.Count;
             if (points > MaxPoints) throw InvalidCheckpoint();
             foreach (var point in data.Points) ValidatePoint(point);
@@ -444,6 +534,17 @@ internal static class EditorSessionStore
             if (data.MosaicFile != (tool == AnnotationTool.Mosaic ? MosaicFileName(index) : null)
                 || data.ImageFile != (tool == AnnotationTool.Image ? ImageFileName(index) : null))
                 throw InvalidCheckpoint();
+            if (data.ImageCrop is { } crop && (tool != AnnotationTool.Image
+                || !ImageCropGeometry.IsValid(new Rect(crop.X, crop.Y, crop.Width, crop.Height))))
+                throw InvalidCheckpoint();
+            if (data.DoubleEndedArrow && tool != AnnotationTool.Arrow)
+                throw InvalidCheckpoint();
+            if (data.HasArrowStyle)
+            {
+                if (tool != AnnotationTool.Arrow || data.ArrowStyle is null)
+                    throw InvalidCheckpoint();
+                _ = ReadArrowStyle(data.ArrowStyle);
+            }
         }
     }
 
@@ -506,11 +607,11 @@ internal static class EditorSessionStore
         return true;
     }
 
-    private static void TryDeleteOwnCheckpoint(string directory)
+    private static void TryDeleteOwnCheckpoint(string directory, string? checkpointRoot = null)
     {
         try
         {
-            var owned = ValidateDirectory(directory);
+            var owned = ValidateDirectory(directory, checkpointRoot);
             var files = Directory.GetFileSystemEntries(owned);
             // This flat, newly generated checkpoint is the only directory this call may remove.
             foreach (var file in files)
@@ -524,7 +625,47 @@ internal static class EditorSessionStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            SettingsStore.Log(ex);
+            if (checkpointRoot is null) SettingsStore.Log(ex);
+            else System.Diagnostics.Trace.WriteLine(ex);
+        }
+    }
+
+    // Project IO must also work in read-only source folders, and must not stage data in the
+    // user's update-recovery directory. Each operation owns only this unique temporary root.
+    private sealed class ProjectWorkspace : IDisposable
+    {
+        internal string Root { get; } = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "snipflow-project-" + Guid.NewGuid().ToString("N")));
+
+        internal ProjectWorkspace()
+        {
+            ValidateDirectoryChain(Path.GetDirectoryName(Root)!);
+            if (Directory.Exists(Root) || File.Exists(Root)) throw InvalidCheckpoint();
+            if (OperatingSystem.IsWindows()) Directory.CreateDirectory(Root);
+            else Directory.CreateDirectory(Root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            RejectReparsePoint(Root);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                ValidateDirectoryChain(Root);
+                // Cleanup is deliberately nonrecursive: unknown files are never removed.
+                Directory.Delete(Root);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                System.Diagnostics.Trace.WriteLine(ex);
+            }
+        }
+    }
+
+    private static void ValidateDirectoryChain(string directory)
+    {
+        for (DirectoryInfo? current = new(directory); current is not null; current = current.Parent)
+        {
+            if ((current.Attributes & FileAttributes.Directory) == 0) throw InvalidCheckpoint();
+            RejectReparsePoint(current.FullName);
         }
     }
 
@@ -538,7 +679,7 @@ internal static class EditorSessionStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            SettingsStore.Log(ex);
+            System.Diagnostics.Trace.WriteLine(ex);
         }
     }
 
@@ -550,24 +691,50 @@ internal static class EditorSessionStore
             throw InvalidCheckpoint();
     }
 
-    private static AnnotationData ToData(AnnotationItem item, int index) => new()
+    private static AnnotationData ToData(AnnotationItem item, int index)
     {
-        Tool = item.Tool.ToString(), Start = ToData(item.Start), End = ToData(item.End),
-        Argb = ((uint)item.Color.A << 24) | ((uint)item.Color.R << 16) | ((uint)item.Color.G << 8) | item.Color.B,
-        Width = item.Width, Points = item.Points.Select(ToData).ToList(), Text = item.Text,
-        FontSize = item.FontSize, TextWidth = item.TextWidth, TextBoxHeight = item.TextBoxHeight, TextOrientation = item.TextOrientation,
-        MosaicFile = item.Tool == AnnotationTool.Mosaic ? MosaicFileName(index) : null,
-        ImageFile = item.Tool == AnnotationTool.Image ? ImageFileName(index) : null
-    };
+        var data = new AnnotationData
+        {
+            Tool = item.Tool.ToString(), Start = ToData(item.Start), End = ToData(item.End),
+            Argb = ((uint)item.Color.A << 24) | ((uint)item.Color.R << 16) | ((uint)item.Color.G << 8) | item.Color.B,
+            Width = item.Width, Points = item.Points.Select(ToData).ToList(), Text = item.Text,
+            FontSize = item.FontSize, TextWidth = item.TextWidth, TextBoxHeight = item.TextBoxHeight, TextOrientation = item.TextOrientation,
+            TextFontFamily = TextFonts.NormalizeFamily(item.TextFontFamily),
+            MosaicFile = item.Tool == AnnotationTool.Mosaic ? MosaicFileName(index) : null,
+            ImageFile = item.Tool == AnnotationTool.Image ? ImageFileName(index) : null,
+            ImageCrop = item.ImageCrop is { } crop ? new ImageCropData { X = crop.X, Y = crop.Y, Width = crop.Width, Height = crop.Height } : null
+        };
+        if (item.Tool == AnnotationTool.Arrow)
+            data.ArrowStyle = new ArrowStyleData
+            {
+                StartHead = item.ArrowStyle.StartHead.ToString(), EndHead = item.ArrowStyle.EndHead.ToString(),
+                StartSize = item.ArrowStyle.StartSize.ToString(), EndSize = item.ArrowStyle.EndSize.ToString(),
+                LineStyle = item.ArrowStyle.LineStyle.ToString()
+            };
+        return data;
+    }
     private static PointData ToData(Point point) => new() { X = point.X, Y = point.Y };
     private static AnnotationItem FromData(AnnotationData data) => new()
     {
         Tool = Enum.Parse<AnnotationTool>(data.Tool), Start = FromData(data.Start), End = FromData(data.End),
         Color = Color.FromArgb((byte)(data.Argb >> 24), (byte)(data.Argb >> 16), (byte)(data.Argb >> 8), (byte)data.Argb),
         Width = data.Width, Points = data.Points.Select(FromData).ToList(), Text = data.Text,
-        FontSize = data.FontSize, TextWidth = data.TextWidth, TextBoxHeight = data.TextBoxHeight, TextOrientation = data.TextOrientation
+        FontSize = data.FontSize, TextWidth = data.TextWidth, TextBoxHeight = data.TextBoxHeight, TextOrientation = data.TextOrientation,
+        TextFontFamily = TextFonts.NormalizeFamily(data.TextFontFamily),
+        ArrowStyle = data.ArrowStyle is { } style ? ReadArrowStyle(style)
+            : ArrowStyleOptions.Default with { StartHead = data.DoubleEndedArrow ? ArrowHeadKind.Arrow : ArrowHeadKind.None },
+        ImageCrop = data.ImageCrop is { } crop ? new Rect(crop.X, crop.Y, crop.Width, crop.Height) : null
     };
     private static Point FromData(PointData point) => new(point.X, point.Y);
+    private static ArrowStyleOptions ReadArrowStyle(ArrowStyleData data) => new()
+    {
+        StartHead = ReadArrowEnum<ArrowHeadKind>(data.StartHead), EndHead = ReadArrowEnum<ArrowHeadKind>(data.EndHead),
+        StartSize = ReadArrowEnum<ArrowHeadSize>(data.StartSize), EndSize = ReadArrowEnum<ArrowHeadSize>(data.EndSize),
+        LineStyle = ReadArrowEnum<ArrowLineStyle>(data.LineStyle)
+    };
+    private static T ReadArrowEnum<T>(string? value) where T : struct, Enum =>
+        Enum.TryParse<T>(value, out var result) && Enum.IsDefined(result) && value == result.ToString()
+            ? result : throw InvalidCheckpoint();
     private static string MosaicFileName(int index) => $"mosaic-{index:D4}.png";
     private static string ImageFileName(int index) => $"image-{index:D4}.png";
     private static InvalidDataException InvalidCheckpoint() => new("The SnipFlow project or update checkpoint is invalid or unsupported.");
@@ -594,12 +761,48 @@ internal static class EditorSessionStore
         public required List<PointData> Points { get; init; }
         public required string Text { get; init; }
         public required double FontSize { get; init; }
+        public string TextFontFamily { get; init; } = TextFonts.DefaultFamily;
         public required double TextWidth { get; init; }
         public required double TextBoxHeight { get; init; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public int TextOrientation { get; init; }
+        private bool _doubleEndedArrow;
+        internal bool HasDoubleEndedArrow { get; private set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool DoubleEndedArrow
+        {
+            get => _doubleEndedArrow;
+            set { _doubleEndedArrow = value; HasDoubleEndedArrow = true; }
+        }
+        private ArrowStyleData? _arrowStyle;
+        internal bool HasArrowStyle { get; private set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public ArrowStyleData? ArrowStyle
+        {
+            get => _arrowStyle;
+            set { _arrowStyle = value; HasArrowStyle = true; }
+        }
         public required string? MosaicFile { get; set; }
         public string? ImageFile { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public ImageCropData? ImageCrop { get; init; }
+    }
+
+    private sealed class ImageCropData
+    {
+        public required double X { get; init; }
+        public required double Y { get; init; }
+        public required double Width { get; init; }
+        public required double Height { get; init; }
+    }
+
+    private sealed class ArrowStyleData
+    {
+        public required string StartHead { get; init; }
+        public required string EndHead { get; init; }
+        public required string StartSize { get; init; }
+        public required string EndSize { get; init; }
+        public required string LineStyle { get; init; }
     }
 
     private sealed class PointData
