@@ -84,7 +84,7 @@
           </Grid>
         </Border>
 
-        <Grid Grid.Column="1" RowDefinitions="Auto,Auto,Auto,*,Auto">
+        <Grid Grid.Column="1" RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
           <Border Grid.Row="0" MinHeight="48" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
             <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
               <DockPanel Margin="12,8">
@@ -111,6 +111,9 @@
                   </Button>
                   <Button Tag="Ellipse" Click="ToolClick" ToolTip.Tip="{ui:Tr '橢圓 (E)'}" AutomationProperties.Name="{ui:Tr '橢圓'}">
                     <Grid Width="18" Height="18" UseLayoutRounding="True"><Ellipse Width="14" Height="14" Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1.5" HorizontalAlignment="Center" VerticalAlignment="Center" /></Grid>
+                  </Button>
+                  <Button Tag="Shape" Click="ToolClick" ToolTip.Tip="{ui:Tr '圖形 (G)'}" AutomationProperties.Name="{ui:Tr '圖形'}">
+                    <Path Data="M9,1 L17,15 H1 Z" Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="1.5" Width="18" Height="18" Stretch="Uniform" />
                   </Button>
                   <Button Tag="Pen" Click="ToolClick" ToolTip.Tip="{ui:Tr '畫筆 (P)'}"><PathIcon Data="{local:Icon Edit}" Width="16" Height="16" /></Button>
                   <Button Tag="Highlight" Click="ToolClick" ToolTip.Tip="{ui:Tr '螢光筆 (H)'}"><PathIcon Data="{local:Icon Highlight}" Width="16" Height="16" /></Button>
@@ -178,7 +181,32 @@
             </ScrollViewer>
           </Border>
 
-          <Border Grid.Row="2" x:Name="CollageBar" IsVisible="False" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+          <StackPanel Grid.Row="2">
+            <Border x:Name="ArrowPresetsBorder" IsVisible="False" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+              <editor:ArrowPresetBar x:Name="ArrowPresets" Margin="12,6" StyleChanged="ArrowStyleChanged" />
+            </Border>
+            <Border x:Name="ShapePickerBorder" IsVisible="False" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+              <editor:ShapePicker x:Name="ShapeSelector" Margin="12,6" ShapeChanged="ShapeKindChanged" FillChanged="ShapeFillChanged" />
+            </Border>
+            <Border x:Name="ImageActionsBorder" IsVisible="False" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+              <WrapPanel x:Name="ImageActions" Margin="12,4">
+                <WrapPanel.Styles>
+                  <Style Selector="Button">
+                    <Setter Property="Theme" Value="{StaticResource QuietButton}" />
+                    <Setter Property="Padding" Value="8,5" />
+                    <Setter Property="Margin" Value="0,0,4,0" />
+                  </Style>
+                </WrapPanel.Styles>
+                <TextBlock x:Name="ImageActionTarget" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="6,0,10,0" />
+                <Button Content="{ui:Tr '向左旋轉 90°'}" Tag="RotateLeft" Click="ImageTransformClick" />
+                <Button Content="{ui:Tr '向右旋轉 90°'}" Tag="RotateRight" Click="ImageTransformClick" />
+                <Button Content="{ui:Tr '水平翻轉'}" Tag="FlipHorizontal" Click="ImageTransformClick" />
+                <Button Content="{ui:Tr '垂直翻轉'}" Tag="FlipVertical" Click="ImageTransformClick" />
+              </WrapPanel>
+            </Border>
+          </StackPanel>
+
+          <Border Grid.Row="3" x:Name="CollageBar" IsVisible="False" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
             <WrapPanel Margin="12,6">
               <WrapPanel.Styles>
                 <Style Selector="Button">
@@ -187,6 +215,7 @@
                   <Setter Property="Margin" Value="0,0,4,0" />
                 </Style>
               </WrapPanel.Styles>
+              <Button x:Name="ExitCollageButton" Content="{ui:Tr '離開合圖'}" Click="ExitCollageClick" Background="{DynamicResource Raised}" ToolTip.Tip="{ui:Tr '返回進入合圖前的原圖；也可雙擊右側最近擷取開啟圖片。'}" />
               <Button x:Name="AddImagesButton" Content="{ui:Tr '加入圖片'}" Click="AddImagesClick" ToolTip.Tip="{ui:Tr '多選檔案、拖入圖片或 Ctrl + V'}" />
               <Button x:Name="PasteImagesButton" Content="{ui:Tr '貼上圖片'}" Click="PasteImagesClick" ToolTip.Tip="Ctrl + V" AutomationProperties.Name="{ui:Tr '貼上圖片'}" />
               <Button x:Name="CropImageButton" Content="{ui:Tr '裁剪圖片'}" Click="CropImageClick" ToolTip.Tip="{ui:Tr '選取一張圖片，或雙擊圖片進入裁剪'}" />
@@ -198,8 +227,8 @@
             </WrapPanel>
           </Border>
 
-          <editor:EditorView Grid.Row="3" x:Name="Editor" />
-          <Grid Grid.Row="3" x:Name="EmptyState" Background="{DynamicResource Bg}">
+          <editor:EditorView Grid.Row="4" x:Name="Editor" />
+          <Grid Grid.Row="4" x:Name="EmptyState" Background="{DynamicResource Bg}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="420" Margin="35">
               <Image Source="avares://SnipFlow/Assets/SnipFlow-v3.png" Width="96" Height="96" HorizontalAlignment="Center" Margin="0,0,0,20" />
               <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
@@ -217,7 +246,7 @@
               <TextBlock Text="Ctrl + O ／ Ctrl + V" Foreground="{DynamicResource Muted}" FontSize="12" HorizontalAlignment="Center" Margin="0,12,0,0" />
             </StackPanel>
           </Grid>
-          <Border Grid.Row="4" x:Name="UpdateBanner" IsVisible="False" Background="{DynamicResource Raised}" Padding="14,9">
+          <Border Grid.Row="5" x:Name="UpdateBanner" IsVisible="False" Background="{DynamicResource Raised}" Padding="14,9">
             <DockPanel>
               <Button x:Name="EditorUpdateButton" Content="{ui:Tr '重新啟動並更新'}" DockPanel.Dock="Right" Click="ApplyUpdateClick" Padding="10,4" Theme="{StaticResource Primary}" />
               <TextBlock Text="{ui:Tr '新版本已下載。完成編輯後即可更新。'}" VerticalAlignment="Center" Foreground="{DynamicResource Ink}" />

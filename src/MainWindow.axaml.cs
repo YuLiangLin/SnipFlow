@@ -71,6 +71,7 @@ public partial class MainWindow : Window
             Editor.RestoreToolAppearance(tool, SettingsStore.Current.GetToolAppearance(tool));
         Editor.RestoreTextSize(SettingsStore.Current.TextSize);
         Editor.RestoreTextFontFamily(SettingsStore.Current.TextFontFamily);
+        Editor.RestoreShapeOptions(SettingsStore.Current.ShapeKind, SettingsStore.Current.ShapeFilled);
         RefreshProperties();
         if (!PlatformInfo.IsWindows) RootBorder.CornerRadius = default;
         else RootBorder.CornerRadius = new CornerRadius(10);
@@ -81,8 +82,10 @@ public partial class MainWindow : Window
         InitializeHistoryLifecycle();
         InitializeInput();
         TaskbarIconService.Attach(this);
-        Editor.Changed += (_, _) => { RefreshDocumentState(); QueueAutoSave(); };
-        Editor.SelectionChanged += (_, _) => RefreshProperties();
+        // A navigation restore raises events before its storage identity has been restored.
+        // Publish state only after the image and its save paths belong to the same document.
+        Editor.Changed += (_, _) => { if (!collageNavigation.IsTransitioning) { RefreshDocumentState(); QueueAutoSave(); } };
+        Editor.SelectionChanged += (_, _) => { if (!collageNavigation.IsTransitioning) RefreshProperties(); };
         Updates.Changed += UpdateChanged;
         I18n.Changed += LanguageChanged;
         SettingsStore.Changed += SettingsChanged;
@@ -495,6 +498,7 @@ public partial class MainWindow : Window
         ImageTransformButton.IsEnabled = Editor.HasImage && !busy && !capturePending;
         Editor.IsEnabled = !busy;
         CollageBar.IsVisible = Editor.IsCollage;
+        ExitCollageButton.IsEnabled = !busy && !capturePending && !historyDragInProgress;
         AddImagesButton.IsEnabled = PasteImagesButton.IsEnabled = ProjectButton.IsEnabled = !busy;
         ImageInfo.Text = Editor.HasImage ? $"{Editor.PixelWidth:N0} × {Editor.PixelHeight:N0} px" : "";
         UndoButton.IsEnabled = Editor.CanUndo && !busy && !capturePending;
@@ -567,6 +571,8 @@ public partial class MainWindow : Window
     void LanguageChanged(object? sender, EventArgs e) => Dispatcher.UIThread.Post(() =>
     {
         TextFontSelector.RefreshLanguage();
+        ArrowPresets.RefreshLanguage();
+        ShapeSelector.RefreshLanguage();
         RefreshDocumentState();
         RefreshHistory();
         RefreshHotkeyHint();
@@ -621,6 +627,7 @@ public partial class MainWindow : Window
             CropImageButton.IsEnabled = !busy && !capturePending && !Editor.IsImageCropping
                 && Editor.SelectionCount == 1 && Editor.SelectedImageCount == 1;
             var shownTool = Editor.SelectedTool ?? activeTool;
+            RefreshEditingTools(shownTool);
             ToolLabel.Text = ToolName(shownTool);
             TextProperties.IsVisible = shownTool == AnnotationTool.Text;
             WidthProperties.IsVisible = shownTool is not (AnnotationTool.Text or AnnotationTool.Image);
@@ -649,7 +656,7 @@ public partial class MainWindow : Window
         }
         finally { refreshingProperties = false; }
     }
-    static string ToolKey(AnnotationTool tool) => tool switch { AnnotationTool.Select => "選取／移動", AnnotationTool.Arrow => "箭頭", AnnotationTool.Rectangle => "矩形", AnnotationTool.Ellipse => "橢圓", AnnotationTool.Pen => "畫筆", AnnotationTool.Highlight => "螢光筆", AnnotationTool.Text => "文字", AnnotationTool.Image => "圖片", _ => "馬賽克" };
+    static string ToolKey(AnnotationTool tool) => tool switch { AnnotationTool.Select => "選取／移動", AnnotationTool.Arrow => "箭頭", AnnotationTool.Rectangle => "矩形", AnnotationTool.Ellipse => "橢圓", AnnotationTool.Shape => "圖形", AnnotationTool.Pen => "畫筆", AnnotationTool.Highlight => "螢光筆", AnnotationTool.Text => "文字", AnnotationTool.Image => "圖片", _ => "馬賽克" };
     static string ToolName(AnnotationTool tool) => I18n.T(ToolKey(tool));
     Task CopyImageAsync(Bitmap image)
         => ClipboardImageService.SetImageAsync(Clipboard ?? throw new InvalidOperationException(I18n.T("剪貼簿目前無法使用。")), image);
@@ -826,7 +833,8 @@ public partial class MainWindow : Window
     {
         if (Editor == null || refreshingProperties || busy || capturePending || Editor.IsImageCropping) return;
         if ((Editor.SelectedTool ?? activeTool) != AnnotationTool.Arrow) return;
-        if (e.DirectionPreset is { } doubleEnded) Editor.DoubleEndedArrow = doubleEnded;
+        if (sender is ArrowPresetBar) Editor.ApplyArrowPreset(e.Value);
+        else if (e.DirectionPreset is { } doubleEnded) Editor.DoubleEndedArrow = doubleEnded;
         else Editor.UpdateArrowStyle(e.Previous, e.Value);
         var previous = SettingsStore.Current.ArrowStyle;
         if (previous == Editor.ArrowStyle) return;
@@ -906,8 +914,9 @@ public partial class MainWindow : Window
     {
         if (!selectingHistory && CanChangeHistory && HistoryList.SelectedItem is HistoryItem item)
         {
+            if (!CollageNavigation.ShouldOpenHistory(Editor.IsCollage, 1, item.IsRecording)) return;
             if (item.IsRecording) await OpenVideoEditorAsync(item.Path);
-            else if (!Editor.IsCollage) OpenImage(item.Path);
+            else OpenImage(item.Path);
         }
     }
     async void OcrClick(object? sender, RoutedEventArgs e)
@@ -1011,7 +1020,7 @@ public partial class MainWindow : Window
             e.Handled = true; return;
         }
         if (modifiers != KeyModifiers.None) return;
-        var key = e.Key switch { Key.V => "Select", Key.A => "Arrow", Key.R => "Rectangle", Key.E => "Ellipse", Key.P => "Pen", Key.H => "Highlight", Key.T => "Text", Key.M => "Mosaic", _ => null };
+        var key = e.Key switch { Key.V => "Select", Key.A => "Arrow", Key.R => "Rectangle", Key.E => "Ellipse", Key.G => "Shape", Key.P => "Pen", Key.H => "Highlight", Key.T => "Text", Key.M => "Mosaic", _ => null };
         if (key != null) { ToolClick(new Button { Tag = key }, new()); e.Handled = true; }
     }
     void MinimizeClick(object? sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;

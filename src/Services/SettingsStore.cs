@@ -24,6 +24,8 @@ public sealed class UserSettings
     public double ArrowStrokeWidth { get; set; } = 4;
     public double TextSize { get; set; } = 26;
     public string TextFontFamily { get; set; } = TextFonts.DefaultFamily;
+    public ShapeKind ShapeKind { get; set; } = ShapeKind.RoundedRectangle;
+    public bool ShapeFilled { get; set; }
     public AnnotationTool LastAnnotationTool { get; set; } = AnnotationTool.Pen;
     // The settings-file codec reads entries individually so one malformed tool cannot discard
     // other preferences. It also excludes Arrow, whose original fields remain authoritative.
@@ -103,7 +105,7 @@ public static class SettingsStore
         if (document.RootElement.ValueKind != JsonValueKind.Object)
             throw new JsonException("Settings must be an object.");
         JsonElement arrow = default, arrowColor = default, arrowStrokeWidth = default, toolAppearances = default,
-            textSize = default, textFontFamily = default, lastTool = default;
+            textSize = default, textFontFamily = default, lastTool = default, shapeKind = default, shapeFilled = default;
         using var otherSettings = new MemoryStream();
         using (var writer = new Utf8JsonWriter(otherSettings))
         {
@@ -117,6 +119,8 @@ public static class SettingsStore
                 else if (property.NameEquals(nameof(UserSettings.TextSize))) textSize = property.Value;
                 else if (property.NameEquals(nameof(UserSettings.TextFontFamily))) textFontFamily = property.Value;
                 else if (property.NameEquals(nameof(UserSettings.LastAnnotationTool))) lastTool = property.Value;
+                else if (property.NameEquals(nameof(UserSettings.ShapeKind))) shapeKind = property.Value;
+                else if (property.NameEquals(nameof(UserSettings.ShapeFilled))) shapeFilled = property.Value;
                 else property.WriteTo(writer);
             }
             writer.WriteEndObject();
@@ -140,6 +144,11 @@ public static class SettingsStore
             settings.TextSize = size;
         if (textFontFamily.ValueKind == JsonValueKind.String && TextFonts.TryNormalizeFamily(textFontFamily.GetString(), out var font))
             settings.TextFontFamily = font;
+        if (shapeKind.ValueKind == JsonValueKind.String && Enum.TryParse<ShapeKind>(shapeKind.GetString(), out var kind)
+            && Enum.IsDefined(kind) && kind.ToString() == shapeKind.GetString())
+            settings.ShapeKind = kind;
+        if (shapeFilled.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            settings.ShapeFilled = shapeFilled.GetBoolean();
         if (lastTool.ValueKind == JsonValueKind.String && Enum.TryParse<AnnotationTool>(lastTool.GetString(), out var tool)
             && tool.ToString() == lastTool.GetString() && IsValidAnnotationTool(tool))
             settings.LastAnnotationTool = tool;
@@ -165,6 +174,8 @@ public static class SettingsStore
             throw new ArgumentOutOfRangeException(nameof(settings), "Text size must be finite and between 12 and 240.");
         if (!TextFonts.TryNormalizeFamily(settings.TextFontFamily, out var font))
             throw new ArgumentException("Text font must be a family name or the empty default.", nameof(settings));
+        if (!Enum.IsDefined(settings.ShapeKind))
+            throw new ArgumentOutOfRangeException(nameof(settings), "Unsupported shape kind.");
         if (!IsValidAnnotationTool(settings.LastAnnotationTool))
             throw new ArgumentOutOfRangeException(nameof(settings), "The last annotation tool must be selectable from the toolbar.");
         if (!TryNormalizeArrowColor(settings.ArrowColor, out var color))
@@ -193,6 +204,7 @@ public static class SettingsStore
         json[nameof(UserSettings.ToolAppearances)] = tools;
         json[nameof(UserSettings.TextFontFamily)] = font;
         json[nameof(UserSettings.LastAnnotationTool)] = settings.LastAnnotationTool.ToString();
+        json[nameof(UserSettings.ShapeKind)] = settings.ShapeKind.ToString();
         File.WriteAllText(path + ".tmp", json.ToJsonString(JsonOptions));
         File.Move(path + ".tmp", path, true);
     }

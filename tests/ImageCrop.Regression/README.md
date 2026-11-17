@@ -2,7 +2,7 @@
 
 這是無測試框架依賴的 console regression harness。以 `ProjectReference` 呼叫產品本身的模型、渲染、合圖操作與 `.snipflow` 專案保存，不複製裁剪實作。
 
-目前 0.8.11 的完整執行預期包含 221 項（保留 0.8.10 的 213 項，加上 8 項 `SNIPFLOW-LOW-IO-011` 寫檔、容量限制與歷史清理案例）。這是測試組成說明，實際通過／失敗數、產品 DLL hash 與平台證據以各次輸出的 `results.json` 為準；`--model-only`、probe 與 fixture-only 模式不代表完整 221 項回歸。
+目前 0.9.0 的完整執行預期包含 251 項（保留 0.8.11 的 221 項，加上 30 項 `SNIPFLOW-EDITING-TOOLS-012` 常用圖形、箭頭快選及合圖返回案例）。這是測試組成說明，實際通過／失敗數、產品 DLL hash 與平台證據以各次輸出的 `results.json` 為準；`--model-only`、focused、probe 與 fixture-only 模式不代表完整 251 項回歸。
 
 在 repository 根目錄執行：
 
@@ -36,12 +36,12 @@ dotnet run --project tests/ImageCrop.Regression -c Release -- --model-only
 - `TextSize` 使用 26 作相容預設，驗證 37.5 小數與 12／240 端點的真實設定 roundtrip；缺值、null、字串、bool、object、array、越界與 overflow 只回復該欄，保留七工具色寬、箭頭五樣式與其他偏好，duplicate 依最後值決定。NaN／Infinity／越界寫入在 I/O 前拒絕且不改原檔、不建目錄、不讀 Current。`RestoreTextSize` 只改未來預設，選取既有文字的字級、像素、revision 與 undo 保持；主動 `TextSize` 編輯仍套用選取 Text 並 clamp 到 12–240，Undo／Redo 只還原文件、預設跨工具切換／載入／新合圖保留。真正新增文字 draft、TextBox、commit 與 redo 均保留 37.5，編輯舊文字仍使用該物件原字級。
 - 不建構 MainWindow，直接以 reflection 呼叫實際 `TryGetTextSizeChange` 純判定 helper。表格驗證 42.125 顯示為 42.1 或既有文字顯示 32 時不改字級、相同數字的不同格式不變更、空白／非法／NaN／Infinity 拒絕、真正變更及 12–240 clamp；en-US／de-DE／fr-FR／zh-TW 的一位小數 formatter 輸出保持原精度，de-DE／fr-FR 逗號小數依文化解析。此案例驗證保存判定函式，不發送焦點或鍵盤事件，不能替代真實 MainWindow 事件接線的互動驗證。
 - 字型目錄與名稱安全驗證：空字串維持舊 AppFont；trim、128 字元上限、control／URI／分隔符拒絕，未安裝的合法名稱仍保存並由真正 resolver 回退 AppFont。以實際安裝、ASCII 字寬不同的兩個字型測 layout cache、不同像素、hit bounds、Clone／CopyFrom／ContentEquals 與各物件獨立；保存本平台使用的字型、度量與像素 hash，不要求 Windows／Linux 字型像素跨平台相同。
-- 字型設定的合法／缺值／錯型／非法名稱與 duplicate last-wins、upfront 原子寫入及 Current 隔離；其他七工具色寬、Arrow 七欄與 TextSize 保留。Restore 字型只改預設；主動編輯套用選取 Text 且不覆蓋各自字級，Undo／Redo／載入／新文件保留未來預設；真正 TextBox 同步有效 family／weight／style／stretch，新文字 commit 保存字型、舊文字保留原字型。schema 8 兩個 Text 的獨立字型／字級與同平台像素往返；schema 1–7 缺字型使用舊預設，舊 schema 非空字型、null／錯型／URI／unsafe 或 non-Text 非空字型原子拒絕。
+- 字型設定的合法／缺值／錯型／非法名稱與 duplicate last-wins、upfront 原子寫入及 Current 隔離；其他七工具色寬、Arrow 七欄與 TextSize 保留。Restore 字型只改預設；主動編輯套用選取 Text 且不覆蓋各自字級，Undo／Redo／載入／新文件保留未來預設；真正 TextBox 同步有效 family／weight／style／stretch，新文字 commit 保存字型、舊文字保留原字型。schema 9 兩個 Text 的獨立字型／字級與同平台像素往返；schema 1–7 缺字型使用舊預設，舊 schema 非空字型、null／錯型／URI／unsafe 或 non-Text 非空字型原子拒絕。
 - 最後工具偏好以固定英文 enum 名保存；Select 與七個工具各自往返，既有 defined numeric 值可讀。missing／非法值只回復 Pen，保留字型／字級／七工具與 Arrow 偏好；非法寫入不改原檔、不建目錄、不讀 Current。新程序檢查設定及新 Editor 的初始工具 Text；不以此宣稱 MainWindow 啟動／快捷鍵保存接線已互動驗證。
 - 真正 font picker 的 Value／RefreshLanguage 同步不發 FontChanged，實際 ComboBox 改選只通知一次；非法 Value 不改狀態。直接呼叫 MainWindow 的純 `IsFontPickerInput` 判定：選單 choosing 時 None／Shift／Alt 留給字型輸入，Ctrl／Ctrl+Shift／Meta 交回文件快捷鍵；未 choosing 一律不攔截。此處不建立 MainWindow，也不能證明原生 focus 或 routed keyboard 事件。
-- 單向／雙向箭頭兩端渲染與 hit-test、方向／粗細／極短線安全、預設套用至真實畫圖 factory、Clone／CopyFrom／ContentEquals、多選樣式與單步 Undo／Redo／no-op、複製／session／旋轉、schema 8 寫入完整樣式、舊 schema 1–5 預設單向與 schema 6 boolean 映射、非 Arrow 與 malformed flag 拒絕。
+- 單向／雙向箭頭兩端渲染與 hit-test、方向／粗細／極短線安全、預設套用至真實畫圖 factory、Clone／CopyFrom／ContentEquals、多選樣式與單步 Undo／Redo／no-op、複製／session／旋轉、schema 9 寫入完整樣式、舊 schema 1–5 預設單向與 schema 6 boolean 映射、非 Arrow 與 malformed flag 拒絕。
 - 全部八個 D4 orientation、選取圖片與整張合圖的旋轉／翻轉、Undo／Redo、四次旋轉回原。
-- schema 8 保存／重開保留完整內嵌 PNG 與 viewport；schema 3 不帶 crop、schema 4 嚴格 0..1 crop 與 schema 5 留白 viewport 的相容性；舊 schema 帶新留白 viewport、不安全座標、非圖片帶 crop 與篡改檔拒絕，失敗保留開啟文件。
+- schema 9 保存／重開保留完整內嵌 PNG 與 viewport；schema 3 不帶 crop、schema 4 嚴格 0..1 crop 與 schema 5 留白 viewport 的相容性；舊 schema 帶新留白 viewport、不安全座標、非圖片帶 crop 與篡改檔拒絕，失敗保留開啟文件。
 - 裁剪草稿與正式文件隔離、改 frame、frame 內平移、完成／取消／重設、單一步 Undo／Redo、匯出／session snapshot 提交、載圖取消、Enter／Escape handler、裁剪後排列維持既有 frame 比例與 viewport。
 - 固定 frame 的 1%–1600% 縮放、中心點、放大真實像素、縮小透明留白、移動露白、重設依原圖比例置中 contain；取消／復原／重做／保存重開、旋轉翻轉、無效值與有限極值、同 scale 不變更、舊極端 zoom 可在同一次 session 放大／縮小後返回、contain 小於 1% 的 slider 同步與 session 範圍重設。
 - 直接測試 OnMouseDown 使用的真實 TryBeginImageCropAt 分流：圖片雙擊啟動、Ctrl／Shift／空白／文字不被誤攔截；透明圖與上層標註的 preview／export 逐像素一致；一來源像素窄框與部分超出畫布的邊界。
@@ -61,7 +61,7 @@ dotnet run --project tests/ImageCrop.Regression -c Release -- --low-io-pattern-o
 
 `SNIPFLOW-LOW-IO-011` 在新的 console 子程序設定專屬 `TEMP`／`TMP`／`TMPDIR`，以真實 `FileSystemWatcher.Created` 與前後校正 barrier 觀察同一個 `SaveProject` 呼叫。斷言沒有 PNG／manifest 暫存目錄，只產生一個目的資料夾內的原子暫存檔；不改父程序環境、不監看使用者其他暫存目錄。舊版同一個 writer 實際產生 scratch 目錄時會失敗，並非以新 API 是否存在作為該 guard 的失敗條件。`--low-io-pattern-only` 僅跑這個量測與隔離檢查，供舊／新版本對照。
 
-其餘案例驗證相同 schema 8 ZIP layout、文字／圖片原始像素／裁剪／馬賽克 payload 往返、拒絕非法 snapshot 時保留舊專案、發布失敗清理自己的暫存檔；直接使用產品的 entry stream limiter，以小型 fixture 測陣列／span／單 byte、每 entry 與總未壓縮容量上限，避免配置 GB 大小測試檔。歷史透過實際 scoped `Add`，驗證每次最多清理兩組最舊項目、積壓逐步縮減、一般上限與無關檔案保持，以及第一組受保護時停止後續清理。這些檢查量測正常檔案操作與資料完整性，不能證明防毒已接受程式或找出廠商規則的確切觸發原因。
+其餘案例驗證schema 9 ZIP layout（保留既有 entries 與 payload 格式）、文字／圖片原始像素／裁剪／馬賽克 payload 往返、拒絕非法 snapshot 時保留舊專案、發布失敗清理自己的暫存檔；直接使用產品的 entry stream limiter，以小型 fixture 測陣列／span／單 byte、每 entry 與總未壓縮容量上限，避免配置 GB 大小測試檔。歷史透過實際 scoped `Add`，驗證每次最多清理兩組最舊項目、積壓逐步縮減、一般上限與無關檔案保持，以及第一組受保護時停止後續清理。這些檢查量測正常檔案操作與資料完整性，不能證明防毒已接受程式或找出廠商規則的確切觸發原因。
 
 註解自動儲存回歸另可單獨執行：
 
@@ -118,6 +118,30 @@ dotnet tests/ImageCrop.Regression/bin/Release/net10.0-windows10.0.19041.0/ImageC
 離屏控制項沒有視窗 logical root，因此 fixture 以真正 ThemeVariantScope 提供來源樣式與資源，繼承 App.axaml 的 Window 字級及 AppFont／Ink context。依序 BeginInit／EndInit、從真 Fluent 資源取得 ControlTheme、ApplyStyling／ApplyTemplate、ContentPresenter.UpdateChild，再 Measure／Arrange；UpdateChild 是 Avalonia 提供給 unattached 控制項測試的子控件建立方式，不替換產品控制項或模板。另斷言實際 CornerRadius 等於來源 setter（目前為 9）、Foreground 等於當前真 palette、所有 Popup 保持關閉，並保留 host／picker／ComboBox／所有 presenter 的 Bounds、DesiredSize 與模板診斷。
 
 模式標記 `fullRegressionRun=false`，只驗閉合的共用 picker；不建立 Window／Popup／MainWindow、不展開 ComboBox、不送 OS 或 routed input。其餘 App.axaml styles 未載入，不能宣稱整個 MainWindow 的窄視窗排列、popup 原生定位、鍵盤 focus／字母搜尋、IME 或桌面 DPI 已互動驗證。PNG 仍須目視檢查，bounds 與像素檔存在本身不等於視覺品質通過。
+
+## 常用圖形、箭頭快選與合圖返回
+
+```powershell
+dotnet run --project tests/ImageCrop.Regression -c Release -- --editing-tools-only --output verification/editing-tools/focused
+dotnet run --project tests/ImageCrop.Regression -c Release -- --editing-palette-visual --app-theme-source src/App.axaml --output verification/editing-tools/palette-visuals
+```
+
+focused 模式為 30 項新行為加上 1 項離屏／live settings 隔離檢查，合計 31 項；不代表完整回歸。這組案例直接呼叫產品實作，包含：
+
+- 18 種真實 vector geometry 的 outline／filled 像素、每種填滿圖形的獨立像素 hash、已繪製區域 hit-test；三角形的空白角落不能以外接矩形誤選，只有填滿時中央可選。
+- ShapeKind／ShapeFilled／ShapeOrientation 的 Clone／CopyFrom／ContentEquals，factory 的獨立色寬與圖形預設，defaults-only restore、工具切換與 LoadImage 保留預設；選取的圖形種類／填滿批次編輯、移動／resize／duplicate 及 Undo／Redo。
+- 非正方形 Callout 在 0／1／4／7 四種既有 orientation 下執行左轉／右轉／水平／垂直翻轉，以真正 bitmap D4 轉換結果作像素對照；容許少量向量邊緣反鋸齒差異，避免只檢查 orientation 數字。
+- schema 9 寫入每個 Shape 的 Kind／Filled／Orientation，重開可編輯物件與同平台像素一致；schema 1–8 的舊 Rectangle 檔保留既有行為。缺 Shape、null、未知／數字 kind、錯型 fill、非法 orientation、未知欄位、非 Shape 攜帶 Shape、舊 schema 攜帶 Shape 均原子拒絕，既有文件／revision／undo 保留。既有 current-writer 斷言更新為 9，舊 schema 8 fixture 仍保持 8。
+- 真正隔離設定檔保存 ShapeKind／ShapeFilled／色寬／最後工具，重新讀回後套至新 Editor 與真實 factory；非法欄位獨立回退、非法寫入保留原檔，不讀 live Current。
+- ArrowPresetBar 的 10 個常用樣式、ShapePicker 的 18 個圖形；Value／RefreshLanguage 同步不發使用者事件，對真正 Button 發送一次離屏 Click 事件只通知一次。箭頭 preset 保留 StartSize／EndSize，多選批次也保留每個物件各自的大小及單步 Undo；填滿切換不改圖形種類。
+- 實際被 MainWindow 使用的 CollageNavigation.ShouldOpenHistory／Enter／Exit／Forget。合圖單擊歷史圖片不另開，雙擊可返回歷史文件；離開合圖還原原圖、可編輯註解及 HasEdits，沒有來源則 ClearDocument。ClearDocument 清除內容與 undo，保留各工具格式並只發最後 Changed／SelectionChanged。
+- 合圖返回時，文件 revision 可能都從 1 開始。以真正 Editor.Changed callback 模擬舊文件的 savedRevision 判定，驗證 Enter／Exit 的 IsTransitioning 能阻止舊身份將返回的未存文件 MarkSaved，且 transition 結束確實解除 guard。此案例不建立 MainWindow，不能證明其所有事件接線及磁碟保存已原生互動驗證。
+
+回歸 guard 的紅綠驗證：在 owner 暫時將 CollageNavigation.Enter／Exit 的 `IsTransitioning = true` 改為 false、source freeze 後，用 `dotnet build tests/ImageCrop.Regression -c Release --no-restore -t:Rebuild` 重編，再執行 focused，應僅上述 callback 案例失敗（30 PASS／1 FAIL）。owner 還原兩處 true，強制 Rebuild 後 focused 應 31／0。暫改不是可提交的產品修改；保留紅綠的 results.json、exit code 與產品 hash，切勿在另一工作 build 時改 source，以免 csc 已取樣舊文字卻產生更新時間較新的 DLL。缺新 Shape API 只屬新功能 contract-red，不能當成既有合圖問題的執行證據；原 0.8.11 HistorySelected 的 `!Editor.IsCollage` guard 可由 source 證明歷史圖片在合圖內被跳過。
+
+palette 視覺模式輸出 24 張 PNG 與 `editing-palette-visual.json`，另有 18 種 outline／filled contact sheet。使用實際 ArrowPresetBar／ShapePicker、真 Fluent ControlTheme、指定 App.axaml 的 AppFont／Window 字級／TextBlock 樣式與經來源斷言的 QuietButton setters、真正 ThemeService palette，在 ThemeVariantScope 內量測 280／820px，涵蓋 light／dark、zh-TW／en-US 及 shape outline／fill。斷言真實 template、各按鈕可及名稱、preview control、窄寬換列及 bounds 無裁切。PNG 還須目視確認；此模式不使用一般行為測試的 QuietButton placeholder。
+
+這些檢查全程不建立 Window／MainWindow、不開 Popup、不發 OS input、不操作現有桌面視窗。離屏 Click 僅呼叫產品 handler，不能宣稱原生滑鼠 double-click、pointer capture、hover、鍵盤焦點、DPI 或整個 MainWindow 的窄視窗配置已驗證。
 
 ## 舊版預設箭頭像素對照
 

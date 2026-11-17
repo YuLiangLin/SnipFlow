@@ -69,6 +69,14 @@ public sealed partial class EditorView
                     item.TextOrientation = ImageOrientation.Compose(item.TextOrientation, orientation);
                     item.Start = item.End = bounds.TopLeft;
                 }
+                else if (item.Tool == AnnotationTool.Shape)
+                {
+                    var bounds = ImageOrientation.TransformBounds(item.Bounds, matrix);
+                    ValidateTransformBounds(bounds);
+                    item.ShapeOrientation = ImageOrientation.Compose(item.ShapeOrientation, orientation);
+                    item.Start = bounds.TopLeft;
+                    item.End = bounds.BottomRight;
+                }
                 else
                 {
                     item.Start = matrix.Transform(item.Start);
@@ -108,13 +116,15 @@ public sealed partial class EditorView
             || (item.Tool != AnnotationTool.Text && fontFamily != TextFonts.DefaultFamily))
             throw new InvalidOperationException(I18n.T("圖面資料無法旋轉或翻轉。"));
         if (!ImageOrientation.IsValid(item.TextOrientation) || (item.Tool != AnnotationTool.Text && item.TextOrientation != 0)
+            || !Enum.IsDefined(item.ShapeKind) || !ImageOrientation.IsValid(item.ShapeOrientation)
+            || (item.Tool != AnnotationTool.Shape && (item.ShapeKind != ShapeKind.RoundedRectangle || item.ShapeFilled || item.ShapeOrientation != 0))
             || !double.IsFinite(item.Width) || item.Width is < 1 or > 32
             || !double.IsFinite(item.FontSize) || item.FontSize is < 12 or > 240
             || !double.IsFinite(item.TextWidth) || item.TextWidth is < 0 or > 1_000_000
             || !double.IsFinite(item.TextBoxHeight) || item.TextBoxHeight is < 0 or > 1_000_000
             || (item.ImageCrop is { } crop && (item.Tool != AnnotationTool.Image || !ImageCropGeometry.IsValid(crop))))
             throw new InvalidOperationException(I18n.T("圖面資料無法旋轉或翻轉。"));
-        if (item.Tool is AnnotationTool.Text or AnnotationTool.Image or AnnotationTool.Mosaic)
+        if (item.Tool is AnnotationTool.Text or AnnotationTool.Image or AnnotationTool.Mosaic or AnnotationTool.Shape)
             ValidateTransformBounds(item.Bounds);
     }
 

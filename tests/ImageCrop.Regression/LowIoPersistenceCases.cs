@@ -101,7 +101,7 @@ internal static partial class Program
                 var names = archive.Entries.Select(entry => entry.FullName).Order(StringComparer.Ordinal).ToArray();
                 Check(names.SequenceEqual(new[] { "image-0000.png", "manifest.json", "mosaic-0002.png", "original.png" }), "Streamed ZIP changed the project file layout.");
                 var manifest = ReadManifest(archive);
-                Check((int)manifest["SchemaVersion"]! == 8 && manifest["Annotations"]!.AsArray().Count == 3, "Streamed project lost schema compatibility or annotations.");
+                Check((int)manifest["SchemaVersion"]! == 9 && manifest["Annotations"]!.AsArray().Count == 3, "Streamed project lost schema compatibility or annotations.");
             }
             var reopened = new EditorView(); Static(StoreType, "RestoreProject", reopened, path);
             Check(reopened.IsCollage && Items(reopened).Count == 3 && PixelHash(reopened.ExportImage()) == pixels, "Streamed project changed render pixels or editable objects.");

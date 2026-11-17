@@ -5,6 +5,19 @@ namespace SnipFlow;
 
 public partial class MainWindow
 {
+    void ImageTransformClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanChangeHistory || !Editor.HasImage || Editor.IsImageCropping
+            || sender is not Button { Tag: string tag }
+            || !Enum.TryParse<ImageTransformCommand>(tag, out var command)) return;
+        var entireCanvas = Editor.SelectedImageCount == 0;
+        RunObjectCommand(() =>
+        {
+            Editor.ApplyImageTransform(command, entireCanvas);
+            SetStatus(entireCanvas ? "圖面已旋轉或翻轉。" : "選取圖片已旋轉或翻轉。");
+        });
+    }
+
     void ImageTransformMenuClick(object? sender, RoutedEventArgs e)
     {
         if (!CanChangeHistory || !Editor.HasImage || sender is not Button button) return;

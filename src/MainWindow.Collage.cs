@@ -6,6 +6,19 @@ namespace SnipFlow;
 public partial class MainWindow
 {
     string? projectPath;
+    readonly CollageNavigation collageNavigation = new();
+    DocumentLocation? collageReturnLocation;
+    sealed record DocumentLocation(string? AutoSavePath, string? ProjectPath, string? HistoryPath, string Directory);
+
+    void EnterCollage(bool blankCanvas)
+    {
+        var wasCollage = Editor.IsCollage;
+        var location = !wasCollage && Editor.HasImage
+            ? new DocumentLocation(autoSavePath, projectPath, documentHistoryPath, autoSaveDirectory) : null;
+        collageNavigation.Enter(Editor, blankCanvas);
+        if (!wasCollage) collageReturnLocation = location;
+        ResetDocumentStorage(preserveCollageReturn: true);
+    }
 
     void CollageClick(object? sender, RoutedEventArgs e)
     {
@@ -20,8 +33,7 @@ public partial class MainWindow
                     && (Editor.HasEdits || Editor.Revision != autoSavedRevision)
                     && !SaveAutomaticallyBeforeDiscard()) return;
                 FinishAutoSaveWrite();
-                Editor.CreateCollage();
-                ResetDocumentStorage();
+                EnterCollage(blankCanvas: false);
                 activeColor = Color.FromRgb(17, 24, 39);
                 Editor.SetColor(activeColor);
             }
@@ -35,12 +47,45 @@ public partial class MainWindow
         catch (Exception ex) { ReportError(ex, "無法建立合圖"); }
     }
 
-    void ResetDocumentStorage()
+    void ExitCollageClick(object? sender, RoutedEventArgs e)
+    {
+        if (!CanChangeHistory || !Editor.IsCollage || !PrepareToDiscard()) return;
+        try
+        {
+            FinishAutoSaveWrite();
+            var location = collageReturnLocation;
+            var restored = collageNavigation.Exit(Editor);
+            ResetDocumentStorage();
+            if (restored && location is not null)
+            {
+                projectPath = location.ProjectPath;
+                documentHistoryPath = location.HistoryPath;
+                if (string.Equals(location.Directory, autoSaveDirectory, PlatformInfo.PathComparison))
+                {
+                    autoSavePath = location.AutoSavePath;
+                    if (autoSavePath is not null && !Editor.HasEdits) autoSavedRevision = Editor.Revision;
+                }
+            }
+            ToolClick(new Button { Tag = "Select" }, new());
+            RefreshDocumentState();
+            QueueAutoSave();
+            SetStatus(restored ? "已離開合圖，返回原圖。" : "已離開合圖，可從最近擷取開啟圖片。");
+            Editor.Focus();
+        }
+        catch (Exception ex) { ReportError(ex, "無法離開合圖"); }
+    }
+
+    void ResetDocumentStorage(bool preserveCollageReturn = false)
     {
         autoSaveTimer.Stop();
         documentGeneration++;
         autoSavePath = projectPath = documentHistoryPath = null;
         autoSavedRevision = -1;
+        if (!preserveCollageReturn)
+        {
+            collageNavigation.Forget();
+            collageReturnLocation = null;
+        }
     }
 
     void AddImagesClick(object? sender, RoutedEventArgs e)
@@ -139,8 +184,7 @@ public partial class MainWindow
         try
         {
             FinishAutoSaveWrite();
-            ResetDocumentStorage();
-            Editor.NewCollage();
+            EnterCollage(blankCanvas: true);
             activeColor = Color.FromRgb(17, 24, 39);
             Editor.SetColor(activeColor);
             ToolClick(new Button { Tag = "Select" }, new());
