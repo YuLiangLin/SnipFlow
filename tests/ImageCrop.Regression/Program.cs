@@ -140,6 +140,7 @@ internal static partial class Program
                 ArrowCases();
                 ArrowStyleCases();
                 EditingToolCases();
+                RemoteHotkeyCases();
                 if (!args.Contains("--model-only")) { EditorCases(); SyntheticAndEdgeCases(); ZoomCases(); }
             }
         }
@@ -148,7 +149,8 @@ internal static partial class Program
         var report = new {
             guard = "SNIPFLOW-EDITING-TOOLS-012", timestamp = DateTimeOffset.Now, passed, failed,
             productAssembly = Product.Location, productAssemblySha256 = assemblyHash,
-            safety = "Empty application; no Avalonia Window, SnipFlow.App/MainWindow, OS input, clipboard, capture, hotkey, installation, or deployment.",
+            safety = "Empty application; no Avalonia Window, SnipFlow.App/MainWindow, OS input, clipboard, capture, native hotkey registration, installation, or deployment.",
+            remoteHotkeyMethod = "Check the product's Windows shortcut binding with simulated foreground changes and in-memory native registration functions. No real focus changes, keypresses or remote sessions.",
             persistenceMethod = "A fresh console process uses fixture-owned TEMP/TMP/TMPDIR and calibrated FileSystemWatcher barriers to observe the actual SaveProject call: no scratch PNG/manifest directory and one atomic destination temporary file. Stream entry and aggregate byte budgets, mixed editable payload roundtrip, failed publication cleanup, cap-two oldest-pair pruning, ordinary retention, and stop-on-first-error are exercised through product operations.",
             method = "Real compiled product via ProjectReference and reflection; assertions call product rendering, document operations, project persistence, and isolated settings-file IO. History annotation cases call the actual shared DocumentFileStore and explicitly scoped HistoryStore operations; A/B/A retains editable objects and exact pixels, a fresh process reopens saved A without live settings, pending text/crop commits, immutable snapshots, edit/undo/resave, corrupt project rejection, PNG publication failure recovery, owned sidecar cleanup and deleted-card/outside-scope safety are checked. Two fresh preference processes load only the supplied test settings path and apply all seven legacy tools' color/width plus five arrow options, TextSize, TextFontFamily and LastAnnotationTool to an offscreen EditorView and real drawing factory. Both invoke BeginTextEdit and CommitTextEdit and inspect draft, TextBox and committed size/family without a Window. Editing cases exercise 18 real vector geometries, painted-region hit tests, defaults, selection edits/undo, D4 transforms, schema9 and old schemas1-8, isolated shape settings, actual palette events and shared CollageNavigation callbacks. A minimal QuietButton theme placeholder supports palette state tests only; separate visual modes use real Fluent templates and App.axaml source styles. Synthetic Button.Click events invoke actual handlers without OS input or native routing.",
             limitations = "Does not instantiate MainWindow or prove its startup/save wiring, double-click routing, interactive pointer capture, native-window layout, IME, or desktop scaling. Filesystem probes measure legitimate write/cleanup activity and do not prove antivirus acceptance or a vendor detection trigger. Linux execution requires an X11/XWayland display; use a virtual display such as Xvfb.",

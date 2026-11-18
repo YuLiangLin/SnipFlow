@@ -23,6 +23,7 @@ public partial class MainWindow : Window
         ?? (desktopShortcut is { Registered: true, IsCurrent: true, Gesture: { } desktopGesture } ? desktopGesture.ToString() : null);
     /// <summary>The active shortcut as shown to the user; a portal may describe its trigger in its own words.</summary>
     public string? ActiveHotkeyDisplay => hotkeys?.ActiveGesture is not null ? hotkeys.ActiveDescription ?? hotkeys.ActiveGesture.ToString() : ActiveHotkey;
+    internal bool IsHotkeyPausedForRemoteDesktop => hotkeys?.IsPausedForRemoteDesktop == true;
     public string HotkeyError { get; private set; } = "";
     /// <summary>Raised after the global shortcut changed asynchronously (desktop portal, desktop keyboard settings).</summary>
     public event EventHandler? HotkeyStateChanged;
@@ -149,7 +150,13 @@ public partial class MainWindow : Window
         { HotkeyError = I18n.T("請使用至少兩個修飾鍵加字母／數字，或 F1–F11。"); RefreshHotkeyHint(); return false; }
         try
         {
-            if (hotkeys == null) { hotkeys = new GlobalHotkeyService(); hotkeys.Pressed += GlobalHotkeyPressed; hotkeys.StateChanged += GlobalHotkeyStateChanged; }
+            if (hotkeys == null)
+            {
+                hotkeys = new GlobalHotkeyService();
+                hotkeys.Pressed += GlobalHotkeyPressed;
+                hotkeys.StateChanged += GlobalHotkeyStateChanged;
+                hotkeys.SetRemoteDesktopPriority(SettingsStore.Current.PreferRemoteDesktopHotkeys);
+            }
             if (!hotkeys.TryRegister(gesture, out var error))
             {
                 if (error == GlobalHotkeyService.ErrorPending)
@@ -174,13 +181,19 @@ public partial class MainWindow : Window
             SettingsStore.Log(ex); HotkeyError = I18n.T("全域快捷鍵無法啟用。");
             SetStatus("全域快捷鍵無法啟用。"); RefreshHotkeyHint(); return false;
         }
-        HotkeyError = ""; RefreshHotkeyHint(); SetStatus("全域截圖快捷鍵：{0}", gesture.ToString()); return true;
+        HotkeyError = "";
+        RefreshHotkeyHint();
+        if (IsHotkeyPausedForRemoteDesktop) SetStatus("本機截圖快捷鍵已暫停，遠端視窗優先。");
+        else SetStatus("全域截圖快捷鍵：{0}", gesture.ToString());
+        return true;
     }
 
     void GlobalHotkeyStateChanged(object? sender, EventArgs e)
     {
         if (isClosed || hotkeys is not { } service) return;
-        if (service.ActiveGesture is not null)
+        // Focus changes only update the shortcut hints. Preserve the current document status.
+        if (PlatformInfo.IsWindows) HotkeyError = service.PendingError;
+        else if (service.ActiveGesture is not null)
         {
             HotkeyError = "";
             SetStatus("全域截圖快捷鍵：{0}", ActiveHotkeyDisplay);
@@ -237,6 +250,8 @@ public partial class MainWindow : Window
         get
         {
             if (hotkeys is { IsPending: true }) return I18n.T("正在等待桌面環境確認全域快捷鍵…");
+            if (IsHotkeyPausedForRemoteDesktop) return I18n.T("本機截圖快捷鍵已暫停，遠端視窗優先。");
+            if (PlatformInfo.IsWindows && hotkeys?.PendingError is { Length: > 0 } error) return error;
             if (hotkeys?.ActiveGesture is not null)
                 return hotkeys.ActiveDescription is { } trigger ? I18n.F("桌面環境設定的觸發鍵：{0}", trigger) : "";
             if (desktopShortcut is { Registered: true } shortcut)
@@ -260,7 +275,8 @@ public partial class MainWindow : Window
         }
     }
 
-    void RefreshHotkeyHint() => HotkeyHint.Text = CompactHotkeyHint.Text = ActiveHotkeyDisplay ?? I18n.T("全域快捷鍵未啟用");
+    void RefreshHotkeyHint() => HotkeyHint.Text = CompactHotkeyHint.Text = IsHotkeyPausedForRemoteDesktop
+        ? I18n.T("遠端視窗優先") : ActiveHotkeyDisplay ?? I18n.T("全域快捷鍵未啟用");
     public void ReleaseHotkey()
     {
         hotkeys?.Dispose(); hotkeys = null; RefreshHotkeyHint();
@@ -404,6 +420,7 @@ public partial class MainWindow : Window
     {
         if (isClosed) return;
         if (!Dispatcher.UIThread.CheckAccess()) { Dispatcher.UIThread.Post(() => SettingsChanged(sender, e)); return; }
+        hotkeys?.SetRemoteDesktopPriority(SettingsStore.Current.PreferRemoteDesktopHotkeys);
         var finishPendingSave = autoSaveEnabled && !SettingsStore.Current.AutoSaveCaptures;
         autoSaveEnabled = SettingsStore.Current.AutoSaveCaptures;
         if (finishPendingSave && Editor.HasImage && (autoSavePath != null || autoSaveWrite != null)

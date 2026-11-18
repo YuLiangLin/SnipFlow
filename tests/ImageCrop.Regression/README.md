@@ -2,7 +2,7 @@
 
 這是無測試框架依賴的 console regression harness。以 `ProjectReference` 呼叫產品本身的模型、渲染、合圖操作與 `.snipflow` 專案保存，不複製裁剪實作。
 
-目前 0.9.0 的完整執行預期包含 251 項（保留 0.8.11 的 221 項，加上 30 項 `SNIPFLOW-EDITING-TOOLS-012` 常用圖形、箭頭快選及合圖返回案例）。這是測試組成說明，實際通過／失敗數、產品 DLL hash 與平台證據以各次輸出的 `results.json` 為準；`--model-only`、focused、probe 與 fixture-only 模式不代表完整 251 項回歸。
+目前 0.9.1 的完整執行預期包含 257 項，包括既有 251 項回歸和 6 項遠端快捷鍵檢查。快捷鍵案例使用程式本身的註冊狀態與代用 Windows 註冊函式，驗證暫停、恢復、訊息過期和既有偏好讀寫。實際結果與產品 DLL hash 見各次 `results.json`。`--model-only`、focused、probe 與 fixture-only 模式是部分驗證，遠端連線的按鍵轉送需用實際連線確認。
 
 在 repository 根目錄執行：
 

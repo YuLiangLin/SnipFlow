@@ -17,6 +17,7 @@ public sealed class UserSettings
     // Login start on every platform; the JSON name is kept so existing Windows settings still load.
     public bool StartWithWindows { get; set; }
     public string Hotkey { get; set; } = HotkeyGesture.DefaultShortcut;
+    public bool PreferRemoteDesktopHotkeys { get; set; } = true;
     public int HistoryLimit { get; set; } = 80;
     public List<string> RecentColors { get; set; } = new();
     public ArrowStyleOptions ArrowStyle { get; set; } = ArrowStyleOptions.Default;
