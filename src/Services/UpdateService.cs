@@ -17,13 +17,13 @@ public sealed class UpdateService
     // Velopack channel per operating system: Windows installers and Linux AppImages are separate feeds.
     static readonly string DefaultChannel = PlatformInfo.IsWindows ? "win" : "linux";
     const string LatestReleaseApi = "https://api.github.com/repos/YuLiangLin/SnipFlow/releases/latest";
-    static readonly HttpClient releaseClient = CreateReleaseClient();
+    static readonly HttpClient sharedReleaseClient = CreateReleaseClient();
+    readonly HttpClient releaseClient;
     readonly SemaphoreSlim gate = new(1, 1);
     readonly UpdateManager? manager;
     readonly SemanticVersion currentVersion;
     // Only the raw Windows publish can convert itself into an installed copy; Linux has no bootstrap installer.
-    readonly bool canBootstrap = PlatformInfo.IsWindows
-        && string.Equals(Path.GetFileName(Environment.ProcessPath), "SnipFlow.exe", StringComparison.OrdinalIgnoreCase);
+    readonly bool canBootstrap;
     UpdateInfo? available;
     LatestRelease? latestRelease;
     string? bootstrapInstallerPath;
@@ -52,11 +52,18 @@ public sealed class UpdateService
     public string ReleaseUrl { get; private set; } = DefaultRepositoryUrl + "/releases/latest";
     public DateTimeOffset? LastCheckedAt { get; private set; }
     public bool CanDownload => !IsBusy && !ReadyToRestart && (IsInstalled ? available != null
-        : canBootstrap && latestRelease?.Installer != null && latestRelease.Version >= currentVersion);
+        : canBootstrap && latestRelease?.Installer != null && latestRelease.Version > currentVersion);
     public bool CanUpdateNow => !IsBusy && (ReadyToRestart || CanDownload);
 
-    public UpdateService()
+    public UpdateService() : this(sharedReleaseClient, PlatformInfo.IsWindows
+        && string.Equals(Path.GetFileName(Environment.ProcessPath), "SnipFlow.exe", StringComparison.OrdinalIgnoreCase))
     {
+    }
+
+    internal UpdateService(HttpClient releaseClient, bool canBootstrap)
+    {
+        this.releaseClient = releaseClient;
+        this.canBootstrap = canBootstrap;
         RepositoryUrl = ReadRepositoryUrl();
         currentVersion = ReadCurrentVersion();
         // Preview hosts do not run App.Main, so they have no Velopack locator.
@@ -106,7 +113,8 @@ public sealed class UpdateService
             LatestVersion = release.Version.ToString();
             ReleaseUrl = RepositoryUrl + "/releases/tag/" + Uri.EscapeDataString(release.Tag);
             available = null;
-            if (release.Version < currentVersion || release.Version == currentVersion && IsInstalled)
+            // An equal release is already current, including copies the installer cannot identify.
+            if (release.Version <= currentVersion)
             {
                 State = UpdateState.UpToDate;
                 SetStatus("目前已是最新版本");
@@ -117,7 +125,7 @@ public sealed class UpdateService
                 if (!canBootstrap) { State = UpdateState.Available; SetStatus("此預覽程式無法套用更新。"); return; }
                 if (release.Installer == null) throw new InvalidDataException("The release has no verified installer for automatic setup.");
                 State = UpdateState.Available;
-                SetStatus(release.Version > currentVersion ? "發現新版本 {0}" : "更新已可套用", LatestVersion);
+                SetStatus("發現新版本 {0}", LatestVersion);
                 if (download) await DownloadCoreAsync();
                 return;
             }
@@ -288,7 +296,7 @@ public sealed class UpdateService
         return client;
     }
 
-    static async Task<LatestRelease> ReadLatestReleaseAsync()
+    async Task<LatestRelease> ReadLatestReleaseAsync()
     {
         using var response = await releaseClient.GetAsync(LatestReleaseApi);
         response.EnsureSuccessStatusCode();

@@ -141,6 +141,7 @@ internal static partial class Program
                 ArrowStyleCases();
                 EditingToolCases();
                 RemoteHotkeyCases();
+                if (OperatingSystem.IsWindows()) UpdateServiceCases();
                 if (!args.Contains("--model-only")) { EditorCases(); SyntheticAndEdgeCases(); ZoomCases(); }
             }
         }
