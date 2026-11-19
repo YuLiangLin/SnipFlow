@@ -260,7 +260,6 @@ public static partial class I18n
         ["檢查更新"] = ("Check for updates", "检查更新"),
         ["立即更新"] = ("Update now", "立即更新"),
         ["按一下即可下載並重啟更新。"] = ("Download the update and restart with one click.", "按一下即可下载并重启更新。"),
-        ["更新已可套用"] = ("Ready to update", "更新已可应用"),
         ["此預覽程式無法套用更新。"] = ("This preview host cannot apply updates.", "此预览程序无法应用更新。"),
         ["更新套件尚未就緒，請稍後重試。"] = ("The update package is not ready. Try again later.", "更新包尚未就绪，请稍后重试。"),
         ["已恢復更新前的編輯。"] = ("Your editing session has been restored.", "已恢复更新前的编辑。"),
