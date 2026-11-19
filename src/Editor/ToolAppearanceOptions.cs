@@ -10,7 +10,7 @@ public sealed record ToolAppearanceOptions
 
     public static bool Supports(AnnotationTool tool) => tool is AnnotationTool.Arrow
         or AnnotationTool.Rectangle or AnnotationTool.Ellipse or AnnotationTool.Pen
-        or AnnotationTool.Highlight or AnnotationTool.Text or AnnotationTool.Mosaic;
+        or AnnotationTool.Highlight or AnnotationTool.Text or AnnotationTool.Mosaic or AnnotationTool.Shape;
 
     public static bool IsValid(ToolAppearanceOptions? value) => value is not null
         && TryNormalizeColor(value.Color, out _)

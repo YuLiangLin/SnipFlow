@@ -32,9 +32,10 @@ public sealed partial class GlobalHotkeyService : IDisposable
     public HotkeyGesture? ActiveGesture { get; private set; }
     /// <summary>The trigger as the desktop describes it when it may differ from the requested gesture (portal), otherwise null.</summary>
     public string? ActiveDescription { get; private set; }
-    /// <summary>The last asynchronous failure reported by the desktop (portal), translated; empty when none.</summary>
+    /// <summary>The latest shortcut registration or focus-monitoring notice; empty when none.</summary>
     public string PendingError { get; private set; } = "";
     public bool IsPending { get; private set; }
+    internal bool IsPausedForRemoteDesktop { get; private set; }
     public event EventHandler? Pressed;
     /// <summary>Raised on the UI thread after an asynchronous registration finished or the desktop changed the shortcut.</summary>
     public event EventHandler? StateChanged;
@@ -57,6 +58,13 @@ public sealed partial class GlobalHotkeyService : IDisposable
         errorCode = 0;
         if (ActiveGesture == gesture && !IsPending) return true;
         return TryRegisterNative(gesture, out errorCode);
+    }
+
+    internal void SetRemoteDesktopPriority(bool enabled)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        Dispatcher.UIThread.VerifyAccess();
+        SetRemoteDesktopPriorityNative(enabled);
     }
 
     void SetActive(HotkeyGesture? gesture, string? description = null)
@@ -87,7 +95,7 @@ public sealed partial class GlobalHotkeyService : IDisposable
         Dispatcher.UIThread.VerifyAccess();
         disposed = true;
         DisposeNative();
-        ActiveGesture = null; ActiveDescription = null; Pressed = null; StateChanged = null;
+        ActiveGesture = null; ActiveDescription = null; IsPausedForRemoteDesktop = false; Pressed = null; StateChanged = null;
     }
 
     /// <summary>True once this session turned out to have no global shortcut API (see <see cref="ErrorUnsupported"/>).</summary>
@@ -120,6 +128,7 @@ public sealed partial class GlobalHotkeyService : IDisposable
 
     partial void InitializeNative();
     private partial bool TryRegisterNative(HotkeyGesture gesture, out int errorCode);
+    partial void SetRemoteDesktopPriorityNative(bool enabled);
     partial void DisposeNative();
     static partial void CanRegisterDesktopShortcutNative(ref bool result);
     static partial void ReadDesktopShortcutNative(ref Task<DesktopShortcut?> result);

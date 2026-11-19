@@ -60,6 +60,8 @@ public sealed partial class EditorView : UserControl
     private double _strokeWidth = 4;
     private readonly Dictionary<AnnotationTool, (Color Color, double Width)> _toolAppearances = new();
     private ArrowStyleOptions _arrowStyle = ArrowStyleOptions.Default;
+    private ShapeKind _shapeKind = ShapeKind.RoundedRectangle;
+    private bool _shapeFilled;
     private double _textSize = 26;
     private string _textFontFamily = TextFonts.DefaultFamily;
     private double _zoom = 1;
@@ -92,6 +94,8 @@ public sealed partial class EditorView : UserControl
     public double? SelectedStrokeWidth => SelectedItem?.Width;
     public bool? SelectedDoubleEndedArrow => SelectedItem?.Tool == AnnotationTool.Arrow ? SelectedItem.DoubleEndedArrow : null;
     public ArrowStyleOptions? SelectedArrowStyle => SelectedItem?.Tool == AnnotationTool.Arrow ? SelectedItem.ArrowStyle : null;
+    public ShapeKind? SelectedShapeKind => SelectedItem?.Tool == AnnotationTool.Shape ? SelectedItem.ShapeKind : null;
+    public bool? SelectedShapeFilled => SelectedItem?.Tool == AnnotationTool.Shape ? SelectedItem.ShapeFilled : null;
     public double? SelectedTextSize => SelectedItem?.Tool == AnnotationTool.Text ? SelectedItem.FontSize : null;
     public string? SelectedTextFontFamily => SelectedItem?.Tool == AnnotationTool.Text ? SelectedItem.TextFontFamily : null;
     public Color ArrowColor => AppearanceFor(AnnotationTool.Arrow).Color;
@@ -153,6 +157,58 @@ public sealed partial class EditorView : UserControl
         {
             if (item.Tool == AnnotationTool.Arrow) item.ArrowStyle = Apply(item.ArrowStyle);
         });
+    }
+
+    public void ApplyArrowPreset(ArrowStyleOptions requested)
+    {
+        VerifyAccess();
+        if (!ArrowStyleOptions.IsValid(requested)) throw new ArgumentOutOfRangeException(nameof(requested));
+        ArrowStyleOptions Apply(ArrowStyleOptions current) => current with
+        {
+            StartHead = requested.StartHead, EndHead = requested.EndHead, LineStyle = requested.LineStyle
+        };
+        _arrowStyle = Apply(_arrowStyle);
+        ChangeSelectedStyle(item =>
+        {
+            if (item.Tool == AnnotationTool.Arrow) item.ArrowStyle = Apply(item.ArrowStyle);
+        });
+    }
+
+    public ShapeKind ShapeKind
+    {
+        get => _shapeKind;
+        set
+        {
+            VerifyAccess();
+            if (!Enum.IsDefined(value)) throw new ArgumentOutOfRangeException(nameof(value));
+            _shapeKind = value;
+            ChangeSelectedStyle(item =>
+            {
+                if (item.Tool == AnnotationTool.Shape) item.ShapeKind = value;
+            });
+        }
+    }
+
+    public bool ShapeFilled
+    {
+        get => _shapeFilled;
+        set
+        {
+            VerifyAccess();
+            _shapeFilled = value;
+            ChangeSelectedStyle(item =>
+            {
+                if (item.Tool == AnnotationTool.Shape) item.ShapeFilled = value;
+            });
+        }
+    }
+
+    public void RestoreShapeOptions(ShapeKind kind, bool filled)
+    {
+        VerifyAccess();
+        if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
+        _shapeKind = kind;
+        _shapeFilled = filled;
     }
 
     private (Color Color, double Width) AppearanceFor(AnnotationTool tool) =>
@@ -454,6 +510,45 @@ public sealed partial class EditorView : UserControl
         return new(_image, _annotations.Select(item => item.Clone()).ToList(), HasEdits, IsCollage);
     }
 
+    internal void ClearDocument()
+    {
+        VerifyAccess();
+        var suppressed = _suppressEvents;
+        _suppressEvents = true;
+        try
+        {
+            CancelImageCrop();
+            CancelTextEdit();
+            CancelGesture();
+            EndPropertyEdit();
+            _image = null;
+            _pixelSource = null;
+            _annotations.Clear();
+            _selection.Clear();
+            _selected = null;
+            IsCollage = false;
+            _undo.Clear();
+            _redo.Clear();
+            _revision = _nextRevision = _savedRevision = 0;
+            _documentLayer.IsVisible = false;
+            _emptyState.IsVisible = true;
+            _imageBadge.IsVisible = _zoomBadge.IsVisible = false;
+            _imageLabel.Text = string.Empty;
+            _zoom = 1;
+            _panX = _panY = 0;
+            _fitMode = true;
+            _spaceDown = false;
+            _hoverHandle = SelectionHandle.None;
+            RefreshLanguage();
+            UpdateCursor();
+            _imageSurface.InvalidateVisual();
+            InvalidateScene();
+        }
+        finally { _suppressEvents = suppressed; }
+        RaiseSelectionChanged();
+        RaiseChanged();
+    }
+
     internal void RestoreSession(Bitmap image, IReadOnlyList<AnnotationItem> annotations, bool hasEdits, bool isCollage = false)
     {
         VerifyAccess();
@@ -690,6 +785,9 @@ public sealed partial class EditorView : UserControl
             AnnotationItem? item = _annotations.LastOrDefault(candidate => candidate.HitTest(point, 6 / _zoom));
             if (item is null && _selected is { Tool: AnnotationTool.Rectangle or AnnotationTool.Ellipse or AnnotationTool.Text or AnnotationTool.Mosaic } && _selected.Bounds.Contains(point))
                 item = _selected;
+            if (item is null && _selected is { Tool: AnnotationTool.Shape } shape
+                && ShapeGeometry.Create(shape.ShapeKind, shape.Bounds, shape.ShapeOrientation).FillContains(point))
+                item = shape;
             bool extend = (e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Shift)) != 0;
             if (item is null)
             {
@@ -758,6 +856,11 @@ public sealed partial class EditorView : UserControl
         {
             item.FontSize = _textSize;
             item.TextFontFamily = _textFontFamily;
+        }
+        if (tool == AnnotationTool.Shape)
+        {
+            item.ShapeKind = _shapeKind;
+            item.ShapeFilled = _shapeFilled;
         }
         return item;
     }

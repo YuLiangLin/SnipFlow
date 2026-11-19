@@ -47,6 +47,9 @@ internal sealed class AnnotationItem
     // Normalized source viewport; it can extend beyond the bitmap to leave blank space in the frame.
     // The complete bitmap is kept so its scale and position can always be reset.
     internal Rect? ImageCrop { get; set; }
+    internal ShapeKind ShapeKind { get; set; } = ShapeKind.RoundedRectangle;
+    internal bool ShapeFilled { get; set; }
+    internal int ShapeOrientation { get; set; }
 
     // Laying out text is the expensive part of Bounds; the cache is keyed by every input of the layout.
     private TextLayout? _layout;
@@ -67,6 +70,9 @@ internal sealed class AnnotationItem
         TextWidth = TextWidth,
         TextBoxHeight = TextBoxHeight,
         TextOrientation = TextOrientation,
+        ShapeKind = ShapeKind,
+        ShapeFilled = ShapeFilled,
+        ShapeOrientation = ShapeOrientation,
         // Bitmaps are never modified after they are stored.
         Mosaic = Mosaic,
         Image = Image,
@@ -146,6 +152,9 @@ internal sealed class AnnotationItem
         TextWidth = source.TextWidth;
         TextBoxHeight = source.TextBoxHeight;
         TextOrientation = source.TextOrientation;
+        ShapeKind = source.ShapeKind;
+        ShapeFilled = source.ShapeFilled;
+        ShapeOrientation = source.ShapeOrientation;
         Mosaic = source.Mosaic;
         Image = source.Image;
         ImageCrop = source.ImageCrop;
@@ -163,6 +172,7 @@ internal sealed class AnnotationItem
             && ArrowStyle == other.ArrowStyle
             && Near(TextWidth, other.TextWidth) && Near(TextBoxHeight, other.TextBoxHeight)
             && TextOrientation == other.TextOrientation
+            && ShapeKind == other.ShapeKind && ShapeFilled == other.ShapeFilled && ShapeOrientation == other.ShapeOrientation
             && ReferenceEquals(Image, other.Image)
             && ImageCrop == other.ImageCrop
             && Text.Replace("\r\n", "\n", StringComparison.Ordinal) == other.Text.Replace("\r\n", "\n", StringComparison.Ordinal)
@@ -186,6 +196,9 @@ internal sealed class AnnotationItem
                 break;
             case AnnotationTool.Rectangle:
                 context.DrawRectangle(null, pen, Bounds);
+                break;
+            case AnnotationTool.Shape:
+                context.DrawGeometry(ShapeFilled ? brush : null, pen, ShapeGeometry.Create(ShapeKind, Bounds, ShapeOrientation));
                 break;
             case AnnotationTool.Ellipse:
                 Rect bounds = Bounds;
@@ -213,6 +226,13 @@ internal sealed class AnnotationItem
 
     internal bool HitTest(Point point, double tolerance)
     {
+        if (Tool == AnnotationTool.Shape)
+        {
+            if (!double.IsFinite(tolerance) || tolerance < 0) return false;
+            var geometry = ShapeGeometry.Create(ShapeKind, Bounds, ShapeOrientation);
+            return (ShapeFilled && geometry.FillContains(point))
+                || geometry.StrokeContains(new Pen(Brushes.Black, Width + tolerance * 2, lineCap: PenLineCap.Round, lineJoin: PenLineJoin.Round), point);
+        }
         if (Tool is AnnotationTool.Text or AnnotationTool.Mosaic or AnnotationTool.Image)
             return Bounds.Inflate(tolerance).Contains(point);
 

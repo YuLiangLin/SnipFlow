@@ -171,10 +171,10 @@ internal static partial class Program
         });
 
         var project = Path.Combine(root, "two-fonts.snipflow");
-        Case("schema 8 project preserves two independent text fonts sizes and exact same-platform pixels", () => {
+        Case("schema 9 project preserves two independent text fonts sizes and exact same-platform pixels", () => {
             var pair = DifferentMetricFonts(); var first = FontText(pair.First, "First font", new Point(20, 20)); var second = FontText(pair.Second, "Second font", new Point(20, 120)); Set(first, "FontSize", 18.5); Set(second, "FontSize", 37.5);
             var editor = ArrowEditor(first, second); var before = PixelHash(editor.ExportImage()); Static(StoreType, "SaveProject", editor, project);
-            using (var archive = ZipFile.OpenRead(project)) { var manifest = ReadManifest(archive); Check((int)manifest["SchemaVersion"]! == 8, "Font project did not use schema 8."); Check((string?)manifest["Annotations"]![0]!["TextFontFamily"] == pair.First && (string?)manifest["Annotations"]![1]!["TextFontFamily"] == pair.Second, "Manifest lost per-text font."); }
+            using (var archive = ZipFile.OpenRead(project)) { var manifest = ReadManifest(archive); Check((int)manifest["SchemaVersion"]! == 9, "Font project did not use schema 9."); Check((string?)manifest["Annotations"]![0]!["TextFontFamily"] == pair.First && (string?)manifest["Annotations"]![1]!["TextFontFamily"] == pair.Second, "Manifest lost per-text font."); }
             var reopened = new EditorView(); Static(StoreType, "RestoreProject", reopened, project);
             Check(FontOf(Items(reopened)[0]!) == pair.First && FontOf(Items(reopened)[1]!) == pair.Second && (double)Get(Items(reopened)[0]!, "FontSize")! == 18.5 && (double)Get(Items(reopened)[1]!, "FontSize")! == 37.5, "Reopened text preferences differ.");
             Check(PixelHash(reopened.ExportImage()) == before && !reopened.HasEdits, "Font project roundtrip changed pixels/saved state.");

@@ -10,7 +10,7 @@ namespace SnipFlow.Services;
 internal static class EditorSessionStore
 {
     private const string SessionKind = "SnipFlow.UpdateSession";
-    private const int SchemaVersion = 8;
+    private const int SchemaVersion = 9;
     private const long MaxManifestBytes = 64 * 1024 * 1024;
     private const long MaxImageBytes = 512 * 1024 * 1024;
     private const long MaxProjectBytes = 1024L * 1024 * 1024;
@@ -262,6 +262,9 @@ internal static class EditorSessionStore
                 throw InvalidCheckpoint();
             if (!ImageOrientation.IsValid(item.TextOrientation) || (item.Tool != AnnotationTool.Text && item.TextOrientation != 0))
                 throw InvalidCheckpoint();
+            if (!Enum.IsDefined(item.ShapeKind) || !ImageOrientation.IsValid(item.ShapeOrientation)
+                || (item.Tool != AnnotationTool.Shape && (item.ShapeKind != ShapeKind.RoundedRectangle || item.ShapeFilled || item.ShapeOrientation != 0)))
+                throw InvalidCheckpoint();
             if (!ArrowStyleOptions.IsValid(item.ArrowStyle)
                 || (item.Tool != AnnotationTool.Arrow && item.ArrowStyle != ArrowStyleOptions.Default))
                 throw InvalidCheckpoint();
@@ -325,12 +328,14 @@ internal static class EditorSessionStore
 
     private static void ValidateManifest(SessionManifest manifest)
     {
-        if (manifest.SchemaVersion is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or SchemaVersion) || manifest.Kind != SessionKind
+        if (manifest.SchemaVersion is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8 or SchemaVersion) || manifest.Kind != SessionKind
             || !Guid.TryParseExact(manifest.SessionId, "N", out _) || manifest.Annotations is null
             || manifest.Annotations.Count > MaxAnnotations)
             throw InvalidCheckpoint();
         ValidateImageSize(manifest.PixelWidth, manifest.PixelHeight);
         ValidateAnnotations(manifest.Annotations);
+        if (manifest.SchemaVersion < 9 && manifest.Annotations.Any(data => data.HasShape || data.Tool == nameof(AnnotationTool.Shape)))
+            throw InvalidCheckpoint();
         if (manifest.SchemaVersion < 7 && manifest.Annotations.Any(data => data.HasArrowStyle))
             throw InvalidCheckpoint();
         if (manifest.SchemaVersion >= 7 && manifest.Annotations.Any(data => data.HasDoubleEndedArrow
@@ -545,6 +550,15 @@ internal static class EditorSessionStore
                     throw InvalidCheckpoint();
                 _ = ReadArrowStyle(data.ArrowStyle);
             }
+            if (tool == AnnotationTool.Shape)
+            {
+                if (!data.HasShape || data.Shape is null || !ImageOrientation.IsValid(data.Shape.Orientation)
+                    || data.Start.X == data.End.X || data.Start.Y == data.End.Y)
+                    throw InvalidCheckpoint();
+                _ = ReadArrowEnum<ShapeKind>(data.Shape.Kind);
+            }
+            else if (data.HasShape)
+                throw InvalidCheckpoint();
         }
     }
 
@@ -711,6 +725,11 @@ internal static class EditorSessionStore
                 StartSize = item.ArrowStyle.StartSize.ToString(), EndSize = item.ArrowStyle.EndSize.ToString(),
                 LineStyle = item.ArrowStyle.LineStyle.ToString()
             };
+        if (item.Tool == AnnotationTool.Shape)
+            data.Shape = new ShapeData
+            {
+                Kind = item.ShapeKind.ToString(), Filled = item.ShapeFilled, Orientation = item.ShapeOrientation
+            };
         return data;
     }
     private static PointData ToData(Point point) => new() { X = point.X, Y = point.Y };
@@ -721,6 +740,9 @@ internal static class EditorSessionStore
         Width = data.Width, Points = data.Points.Select(FromData).ToList(), Text = data.Text,
         FontSize = data.FontSize, TextWidth = data.TextWidth, TextBoxHeight = data.TextBoxHeight, TextOrientation = data.TextOrientation,
         TextFontFamily = TextFonts.NormalizeFamily(data.TextFontFamily),
+        ShapeKind = data.Shape is { } shape ? ReadArrowEnum<ShapeKind>(shape.Kind) : ShapeKind.RoundedRectangle,
+        ShapeFilled = data.Shape?.Filled ?? false,
+        ShapeOrientation = data.Shape?.Orientation ?? 0,
         ArrowStyle = data.ArrowStyle is { } style ? ReadArrowStyle(style)
             : ArrowStyleOptions.Default with { StartHead = data.DoubleEndedArrow ? ArrowHeadKind.Arrow : ArrowHeadKind.None },
         ImageCrop = data.ImageCrop is { } crop ? new Rect(crop.X, crop.Y, crop.Width, crop.Height) : null
@@ -782,6 +804,14 @@ internal static class EditorSessionStore
             get => _arrowStyle;
             set { _arrowStyle = value; HasArrowStyle = true; }
         }
+        private ShapeData? _shape;
+        internal bool HasShape { get; private set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public ShapeData? Shape
+        {
+            get => _shape;
+            set { _shape = value; HasShape = true; }
+        }
         public required string? MosaicFile { get; set; }
         public string? ImageFile { get; set; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -803,6 +833,13 @@ internal static class EditorSessionStore
         public required string StartSize { get; init; }
         public required string EndSize { get; init; }
         public required string LineStyle { get; init; }
+    }
+
+    private sealed class ShapeData
+    {
+        public required string Kind { get; init; }
+        public required bool Filled { get; init; }
+        public required int Orientation { get; init; }
     }
 
     private sealed class PointData

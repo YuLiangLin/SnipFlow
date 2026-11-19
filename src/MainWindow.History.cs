@@ -1,4 +1,5 @@
 using Avalonia.Input;
+using SnipFlow.Editor;
 using SnipFlow.Services;
 
 namespace SnipFlow;
@@ -20,6 +21,7 @@ public partial class MainWindow
         };
         // Keep opening the delete menu from selecting and loading the underlying card.
         HistoryList.AddHandler(PointerPressedEvent, HistoryPreviewRightButtonDown, RoutingStrategies.Tunnel);
+        HistoryList.AddHandler(DoubleTappedEvent, HistoryDoubleTapped, RoutingStrategies.Bubble, handledEventsToo: true);
     }
 
     void RefreshHistory() => _ = RefreshHistoryAsync();
@@ -113,6 +115,18 @@ public partial class MainWindow
     {
         // Keep opening the delete menu from selecting and loading the underlying card.
         if (e.GetCurrentPoint(HistoryList).Properties.IsRightButtonPressed && e.Source is StyledElement { DataContext: HistoryItem }) e.Handled = true;
+    }
+
+    async void HistoryDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (!CanChangeHistory || selectingHistory || e.Source is not StyledElement source
+            || IsHistoryDragControl(source)
+            || HistoryItemContainer(source)?.DataContext is not HistoryItem item
+            || !CollageNavigation.ShouldOpenHistory(Editor.IsCollage, 2, item.IsRecording)) return;
+        ClearHistoryDragCandidate();
+        e.Handled = true;
+        if (item.IsRecording) await OpenVideoEditorAsync(item.Path);
+        else OpenImage(item.Path);
     }
 
     async void DeleteHistoryClick(object? sender, RoutedEventArgs e)

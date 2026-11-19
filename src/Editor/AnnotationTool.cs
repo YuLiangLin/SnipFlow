@@ -10,5 +10,6 @@ public enum AnnotationTool
     Highlight,
     Text,
     Mosaic,
-    Image
+    Image,
+    Shape
 }

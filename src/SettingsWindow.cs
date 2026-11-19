@@ -19,6 +19,7 @@ public sealed class SettingsWindow : DialogWindow
     readonly ComboBox theme = new() { Width = 184, MinHeight = 34, HorizontalAlignment = HorizontalAlignment.Right };
     readonly TextBlock themeNote = new();
     readonly CheckBox copy = new(), history = new(), startup = new(), autoSave = new(), autoCheck = new(), autoDownload = new();
+    readonly CheckBox preferRemoteDesktopHotkeys = new();
     readonly TextBox captureFolder = new() { IsReadOnly = true, MinHeight = 34, VerticalContentAlignment = VerticalAlignment.Center };
     readonly HotkeyInputBox shortcut = new(SettingsStore.Current.Hotkey);
     readonly TextBlock hotkeyStatus = new(), updateStatus = new(), updateDetail = new(), currentVersion = new(), latestVersion = new(), feedback = new();
@@ -183,6 +184,13 @@ public sealed class SettingsWindow : DialogWindow
         statusBody.Children.Add(desktopShortcut);
         pane.Children.Add(new Border { Background = ThemeService.Brush("Raised"), CornerRadius = new CornerRadius(9), Padding = new Thickness(16, 13, 16, 13), Child = statusBody });
         pane.Children.Add(BindText(new TextBlock { Foreground = ThemeService.Brush("Muted"), FontSize = 12, TextWrapping = TextWrapping.Wrap, LineHeight = 19, Margin = new Thickness(0, 16, 0, 0) }, "焦點在其他程式、最小化或隱藏至系統匣時也能截圖。"));
+        if (PlatformInfo.IsWindows)
+        {
+            AddDivider(pane);
+            AddToggleRow(pane, "遠端視窗優先使用截圖快捷鍵",
+                "Windows 遠端桌面、mRemoteNG 或 RealVNC Viewer 在前景時暫停本機快捷鍵，切回本機後自動恢復。",
+                preferRemoteDesktopHotkeys, SettingsStore.Current.PreferRemoteDesktopHotkeys);
+        }
         return pane;
     }
 
@@ -255,6 +263,9 @@ public sealed class SettingsWindow : DialogWindow
         BindOption(autoSave, settings => settings.AutoSaveCaptures, (settings, value) => settings.AutoSaveCaptures = value);
         BindOption(autoCheck, settings => settings.AutoCheckUpdates, (settings, value) => settings.AutoCheckUpdates = value);
         BindOption(autoDownload, settings => settings.AutoDownloadUpdates, (settings, value) => settings.AutoDownloadUpdates = value);
+        if (PlatformInfo.IsWindows)
+            BindOption(preferRemoteDesktopHotkeys, settings => settings.PreferRemoteDesktopHotkeys,
+                (settings, value) => settings.PreferRemoteDesktopHotkeys = value);
         startup.IsCheckedChanged += StartupChanged;
         theme.SelectionChanged += ThemeSelectionChanged;
         // TextChanged is raised asynchronously in Avalonia; a synchronous property change keeps the
@@ -331,7 +342,8 @@ public sealed class SettingsWindow : DialogWindow
     {
         if (synchronizingOptions || isClosed) return;
         SetFeedback(null);
-        var previous = SnapshotSettings(); var previousActiveKey = shell.ActiveHotkey;
+        var previous = SnapshotSettings();
+        var previousActiveKey = shell.ActiveHotkey ?? (shell.IsHotkeyPausedForRemoteDesktop ? previous.Hotkey : null);
         if (!HotkeyGesture.TryParse(candidate, out var gesture))
         {
             SynchronizeOptions(); SetFeedback("請使用至少兩個修飾鍵加字母／數字，或 F1–F11。"); return;
@@ -471,6 +483,7 @@ public sealed class SettingsWindow : DialogWindow
             autoCheck.IsEnabled = autoDownload.IsEnabled = !shell.Updates.IsManagedExternally;
             captureFolder.Text = settings.CaptureSaveDirectory; ToolTip.SetTip(captureFolder, captureFolder.Text);
             shortcut.Text = settings.Hotkey;
+            preferRemoteDesktopHotkeys.IsChecked = settings.PreferRemoteDesktopHotkeys;
         }
         finally { synchronizingOptions = false; }
     }
@@ -481,6 +494,7 @@ public sealed class SettingsWindow : DialogWindow
         AutoSaveCaptures = SettingsStore.Current.AutoSaveCaptures, CaptureSaveDirectory = SettingsStore.Current.CaptureSaveDirectory,
         KeepHistory = SettingsStore.Current.KeepHistory, StartWithWindows = SettingsStore.Current.StartWithWindows,
         Hotkey = SettingsStore.Current.Hotkey, AutoCheckUpdates = SettingsStore.Current.AutoCheckUpdates,
+        PreferRemoteDesktopHotkeys = SettingsStore.Current.PreferRemoteDesktopHotkeys,
         AutoDownloadUpdates = SettingsStore.Current.AutoDownloadUpdates, HistoryLimit = SettingsStore.Current.HistoryLimit,
         RecentColors = new List<string>(SettingsStore.Current.RecentColors)
     };
@@ -495,6 +509,7 @@ public sealed class SettingsWindow : DialogWindow
         SettingsStore.Current.KeepHistory = previous.KeepHistory;
         SettingsStore.Current.StartWithWindows = previous.StartWithWindows;
         SettingsStore.Current.Hotkey = previous.Hotkey;
+        SettingsStore.Current.PreferRemoteDesktopHotkeys = previous.PreferRemoteDesktopHotkeys;
         SettingsStore.Current.AutoCheckUpdates = previous.AutoCheckUpdates;
         SettingsStore.Current.AutoDownloadUpdates = previous.AutoDownloadUpdates;
         SettingsStore.Current.HistoryLimit = previous.HistoryLimit;
@@ -587,7 +602,8 @@ public sealed class SettingsWindow : DialogWindow
     {
         var active = shell.ActiveHotkeyDisplay is { } key ? I18n.F("目前啟用：{0}", key) : I18n.T("全域快捷鍵未啟用");
         var note = shell.HotkeyNote;
-        if (note.Length > 0) active += "\n" + note;
+        if (shell.IsHotkeyPausedForRemoteDesktop) active = note;
+        else if (note.Length > 0) active += "\n" + note;
         hotkeyStatus.Text = hotkeyFailure ? $"{shell.HotkeyError}\n{active}" : active;
         hotkeyStatus.Foreground = hotkeyFailure ? ThemeService.Brush("Error") : ThemeService.Brush("Ink");
         desktopShortcut.IsVisible = shell.CanRegisterDesktopShortcut;
